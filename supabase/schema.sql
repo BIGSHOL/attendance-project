@@ -128,18 +128,3 @@ CREATE POLICY "auth_insert_session_periods" ON session_periods FOR INSERT TO aut
 CREATE POLICY "auth_update_session_periods" ON session_periods FOR UPDATE TO authenticated USING (true);
 CREATE POLICY "auth_delete_session_periods" ON session_periods FOR DELETE TO authenticated USING (true);
 
--- 공휴일 (data.go.kr getHoliDeInfo 캐시)
--- 실제로 쉬는 국경일/공휴일/대체공휴일만 저장 (절기 제외)
-CREATE TABLE holidays (
-  date date PRIMARY KEY,
-  year int NOT NULL,
-  name text NOT NULL,
-  created_at timestamptz DEFAULT now()
-);
-CREATE INDEX idx_holidays_year ON holidays(year);
-
-ALTER TABLE holidays ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "auth_select_holidays" ON holidays FOR SELECT TO authenticated USING (true);
-CREATE POLICY "auth_insert_holidays" ON holidays FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "auth_update_holidays" ON holidays FOR UPDATE TO authenticated USING (true);
-CREATE POLICY "auth_delete_holidays" ON holidays FOR DELETE TO authenticated USING (true);

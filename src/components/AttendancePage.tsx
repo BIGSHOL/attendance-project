@@ -17,8 +17,10 @@ import { INITIAL_SETTLEMENT } from "@/types";
 import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPeriod } from "@/types";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useHolidays } from "@/hooks/useHolidays";
-import { expandSessionDates } from "@/lib/sessionUtils";
-import { calculateStats, calculateFinalSalary } from "@/lib/salary";
+import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
+import { expandSessionDatesContiguous } from "@/lib/sessionUtils";
+import { calculateStats, calculateFinalSalary, matchSalarySetting } from "@/lib/salary";
+import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
@@ -34,10 +36,10 @@ type SortMode = "class" | "name" | "day";
 
 export default function AttendancePage() {
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [selectedSubject, setSelectedSubject] = useState<string>("math");
-  const [selectedTeacherId, setSelectedTeacherId] = useState<string>("");
+  const [year, setYear] = useLocalStorage<number>("attendance.year", now.getFullYear());
+  const [month, setMonth] = useLocalStorage<number>("attendance.month", now.getMonth() + 1);
+  const [selectedSubject, setSelectedSubject] = useLocalStorage<string>("attendance.subject", "math");
+  const [selectedTeacherId, setSelectedTeacherId] = useLocalStorage<string>("attendance.teacherId", "");
 
   // 세션 모드
   const [viewMode, setViewMode] = useLocalStorage<AttendanceViewMode>("attendance.viewMode", "monthly");
@@ -122,9 +124,23 @@ export default function AttendancePage() {
   const selectedBlogRequired = isBlogRequired(selectedTeacherId);
 
   // 선택된 선생님의 해당 월 블로그 작성 여부 → 패널티 판정
-  const { hasPostForMonth } = useTeacherBlogPosts(selectedTeacherId, year, month);
+  const { hasPostForMonth, getPost } = useTeacherBlogPosts(selectedTeacherId, year, month);
   const blogPenalty =
     selectedBlogRequired && !hasPostForMonth(year, month);
+
+  // 블로그 작성 날짜 목록 (뱃지 표시용)
+  const blogDates = useMemo(() => {
+    const post = getPost(year, month);
+    if (!post || !Array.isArray(post.dates)) return [] as number[];
+    // "2026-04-05" → 5
+    return post.dates
+      .map((d) => {
+        const parts = d.split("-");
+        return parts.length === 3 ? parseInt(parts[2], 10) : NaN;
+      })
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b);
+  }, [getPost, year, month]);
 
   // 과목 목록 추출
   const subjects = useMemo(() => {
@@ -294,7 +310,66 @@ export default function AttendancePage() {
       });
   }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month, hideZeroAttendance]);
 
+  // 수납 데이터 (등록차수 계산용)
+  const { payments: monthPayments } = usePaymentsForMonth(year, month);
+
+  // 학생별 등록차수 계산: (담당 선생님 수납 합계) / (학생 단가)
+  // 사용자 정의: "학생과 담임선생님이 일치하는 행의 청구액" / "학생의 단가"
+  const termCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!selectedTeacher || monthPayments.length === 0) return map;
+
+    const teacherName = selectedTeacher.name;
+    const teacherEnglishName = selectedTeacher.englishName;
+    const teacherId = selectedTeacher.id;
+
+    for (const student of filteredStudents) {
+      const studentPayments = findStudentPayments(student, monthPayments);
+      // 담임 선생님 일치 필터
+      // payment.teacher_name 이 "이영현(Ellen)" 형식일 수 있어 substring 매칭
+      const teacherPayments = studentPayments.filter((p) => {
+        if (p.teacher_staff_id && p.teacher_staff_id === teacherId) return true;
+        const pt = p.teacher_name || "";
+        if (!pt) return false;
+        if (teacherName && pt.includes(teacherName)) return true;
+        if (teacherEnglishName && pt.includes(teacherEnglishName)) return true;
+        return false;
+      });
+      if (teacherPayments.length === 0) continue;
+
+      const totalCharge = teacherPayments.reduce((s, p) => s + (p.charge_amount || 0), 0);
+      if (totalCharge <= 0) continue;
+
+      const setting = matchSalarySetting(
+        student,
+        salaryConfig,
+        undefined,
+        tierOverrides[student.id]
+      );
+      const unitPrice = setting?.unitPrice || 0;
+      if (unitPrice <= 0) continue;
+
+      // 반올림 (원 단위 잔돈이 있을 수 있으므로)
+      const term = Math.round(totalCharge / unitPrice);
+      if (term > 0) map.set(student.id, term);
+    }
+    return map;
+  }, [filteredStudents, monthPayments, selectedTeacher, salaryConfig, tierOverrides, year, month]);
+
   const loading = staffLoading || studentsLoading || attendanceLoading;
+
+  // 학생별 이번 달 납부액 합계 (수납 → 정산 반영용)
+  const paidAmountByStudent = useMemo(() => {
+    const map = new Map<string, number>();
+    if (monthPayments.length === 0) return map;
+    for (const student of filteredStudents) {
+      const studentPayments = findStudentPayments(student, monthPayments);
+      if (studentPayments.length === 0) continue;
+      const total = studentPayments.reduce((s, p) => s + (p.paid_amount || 0), 0);
+      if (total > 0) map.set(student.id, total);
+    }
+    return map;
+  }, [filteredStudents, monthPayments]);
 
   // 통계
   const stats = useMemo(
@@ -312,9 +387,10 @@ export default function AttendancePage() {
         : "other",
       selectedTeacher?.name,
       blogPenalty,
-      tierOverrides
+      tierOverrides,
+      paidAmountByStudent
     ),
-    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides]
+    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent]
   );
 
   const finalSalary = useMemo(
@@ -471,6 +547,23 @@ export default function AttendancePage() {
           <span className="font-bold">-{leavingCount}</span>
           {prevMonthStudentCount > 0 && (
             <span className="text-xs opacity-70">({leavingRate.toFixed(1)}%)</span>
+          )}
+        </div>
+
+        {/* 블로그 작성 날짜 */}
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-sm bg-amber-50 text-amber-700 text-sm dark:bg-amber-950 dark:text-amber-300"
+          title={
+            blogDates.length > 0
+              ? `${year}년 ${month}월 블로그 작성: ${blogDates.map((d) => `${d}일`).join(", ")}`
+              : `${year}년 ${month}월 블로그 기록 없음`
+          }
+        >
+          <span className="font-semibold">블로그</span>
+          {blogDates.length > 0 ? (
+            <span className="font-bold">{blogDates.map((d) => `${d}일`).join(", ")}</span>
+          ) : (
+            <span className="text-xs opacity-70">기록 없음</span>
           )}
         </div>
 
@@ -729,6 +822,7 @@ export default function AttendancePage() {
             students={filteredStudents}
             year={year}
             month={month}
+            subject={selectedSubject}
             salaryConfig={salaryConfig}
             tierOverrides={tierOverrides}
             highlightWeekends={highlightWeekends}
@@ -736,13 +830,14 @@ export default function AttendancePage() {
             showSettlement={showSettlement}
             sortMode={sortMode}
             canCustomValue={isAdmin}
-            overrideDates={viewMode === "session" && selectedSession ? expandSessionDates(selectedSession) : undefined}
+            overrideDates={viewMode === "session" && selectedSession ? expandSessionDatesContiguous(selectedSession) : undefined}
             cellWidthPx={cellWidthPx}
             cellHeightPx={cellHeightPx}
             hiddenDateSet={hiddenDateSet}
             hiddenStudentSet={hiddenStudentSet}
             holidayDateSet={holidayDateSet}
             holidayNameMap={holidayNameMap}
+            termCountMap={termCountMap}
             onHideDate={hideDate}
             onHideStudent={hideStudent}
             onAttendanceChange={handleAttendanceChange}

@@ -10,6 +10,8 @@ import { useAllUserRoles } from "@/hooks/useAllUserRoles";
 import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
+import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
+import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import type { Teacher } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -34,6 +36,7 @@ export default function SettlementPage() {
   const { users: userRoles } = useAllUserRoles();
   const { hasPostForTeacher } = useAllBlogPosts(year, month);
   const { isBlogRequired } = useTeacherSettings();
+  const { payments: monthPayments, loading: paymentsLoading } = usePaymentsForMonth(year, month);
 
   // 선생님 id → 급여 유형 매핑 (user_roles 기반)
   const teacherSalaryTypeMap = useMemo(() => {
@@ -118,17 +121,24 @@ export default function SettlementPage() {
         }
       }
 
-      // 기본 급여 계산 (대상 출석만 반영)
+      // 기본 급여 계산 (대상 출석 + 해당 월 납부액 반영)
+      // monthPayments 는 이미 usePaymentsForMonth 가 해당 월로 필터링한 결과
       let baseSalary = 0;
       for (const student of teacherStudents) {
         const classUnits = studentUnitMap.get(student.id) || 0;
         if (classUnits > 0) {
           const settingItem = matchSalarySetting(student, effectiveConfig);
+          // 해당 학생의 이번 달 납부액 합계 (수납 없으면 null → 출석 기반 계산)
+          const studentPayments = findStudentPayments(student, monthPayments);
+          const paidAmount =
+            studentPayments.length > 0
+              ? studentPayments.reduce((s, p) => s + (p.paid_amount || 0), 0)
+              : null;
           baseSalary += calculateStudentSalary(
             settingItem,
             effectiveConfig.academyFee,
             classUnits,
-            null,
+            paidAmount,
             blogPenalty
           );
         }
@@ -155,7 +165,7 @@ export default function SettlementPage() {
         blogPenalty,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, teacherSalaryTypeMap, hasPostForTeacher, isBlogRequired]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, teacherSalaryTypeMap, hasPostForTeacher, isBlogRequired, monthPayments, year, month]);
 
   // 합계
   const totals = useMemo(() => {
@@ -170,7 +180,7 @@ export default function SettlementPage() {
     );
   }, [settlements]);
 
-  const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading;
+  const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
   const prevMonth = () => {
     if (month === 1) { setYear(year - 1); setMonth(12); }

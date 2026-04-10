@@ -184,7 +184,9 @@ export function calculateStats(
   teacherName?: string,
   blogPenalty: boolean = false,
   /** 시트 F열 동기화 결과 — student_id → salary_item_id */
-  tierOverrides?: Record<string, string>
+  tierOverrides?: Record<string, string>,
+  /** 학생 id → 해당 월 납부액 합계. 있으면 calculateStudentSalary에 전달되어 수납 cap 적용 */
+  paidAmountByStudent?: Map<string, number>
 ): {
   totalSalary: number;
   totalAttendance: number;
@@ -212,9 +214,16 @@ export function calculateStats(
     const settingItem = matchSalarySetting(student, salaryConfig, subjectHint, tierOverrideId);
     if (settingItem) {
       const baseRatio = getEffectiveRatio(settingItem, salaryConfig, teacherName);
-      const ratio = applyBlogPenalty(baseRatio, blogPenalty);
-      const classRate = calculateClassRate(settingItem, salaryConfig.academyFee, ratio);
-      totalSalary += Math.ceil(classUnits * classRate);
+      // teacherRatios 오버라이드가 있으면 블로그 패널티 포함해서 임시 settingItem 만들어서 계산
+      const effectiveSetting: SalarySettingItem = { ...settingItem, ratio: baseRatio };
+      const paidAmount = paidAmountByStudent?.get(student.id) ?? null;
+      totalSalary += calculateStudentSalary(
+        effectiveSetting,
+        salaryConfig.academyFee,
+        classUnits,
+        paidAmount,
+        blogPenalty
+      );
     }
   }
 

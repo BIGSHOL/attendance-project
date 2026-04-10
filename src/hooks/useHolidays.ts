@@ -1,49 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-
-interface HolidayItem {
-  date: string; // YYYY-MM-DD
-  name: string;
-}
+import { useMemo } from "react";
+import { getHolidaysForYear, type KoreanHoliday } from "@/lib/koreanHolidays";
 
 /**
- * 해당 연도의 공휴일을 가져온다.
- * /api/holidays 가 Supabase 캐시 → data.go.kr 순으로 동작
+ * 해당 연도의 한국 공휴일을 반환한다.
+ * 하드코딩 상수 기반 — ijw-calander 와 동일한 데이터를 사용.
+ * 네트워크 호출/캐시 없음, 동기 반환.
  */
 export function useHolidays(year: number) {
-  const [items, setItems] = useState<HolidayItem[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetch(`/api/holidays?year=${year}`)
-      .then(async (res) => {
-        if (!res.ok) return [] as HolidayItem[];
-        const body = await res.json();
-        return Array.isArray(body) ? (body as HolidayItem[]) : [];
-      })
-      .then((data) => {
-        if (!cancelled) setItems(data);
-      })
-      .catch(() => {
-        if (!cancelled) setItems([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [year]);
+  const items: KoreanHoliday[] = useMemo(() => getHolidaysForYear(year), [year]);
 
   const dateSet = useMemo(() => new Set(items.map((h) => h.date)), [items]);
+
   const nameMap = useMemo(() => {
     const m = new Map<string, string>();
     items.forEach((h) => m.set(h.date, h.name));
     return m;
   }, [items]);
 
-  return { items, dateSet, nameMap, loading };
+  return { items, dateSet, nameMap, loading: false };
 }

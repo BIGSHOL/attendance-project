@@ -29,6 +29,10 @@ interface Props {
   cellHeightPx: number;
   holidayDateSet?: Set<string>;
   holidayNameMap?: Map<string, string>;
+  /** 등록차수 — 해당 월 담임 청구액 ÷ 학생 단가 */
+  termCount?: number;
+  /** 과목별 단위: 영어=U(유닛), 그 외=T(타임) */
+  unit?: "U" | "T";
   onHideStudent?: (studentId: string) => void;
   onCellClick: (studentId: string, dateKey: string) => void;
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
@@ -49,6 +53,8 @@ export default function StudentRow({
   cellHeightPx,
   holidayDateSet,
   holidayNameMap,
+  termCount,
+  unit = "T",
   onHideStudent,
   onCellClick,
   onCellRightClick,
@@ -84,9 +90,13 @@ export default function StudentRow({
   const unitPrice = settingItem ? (settingItem.unitPrice || settingItem.baseTuition) : 0;
   const expectedBilling = scheduledCount * unitPrice;
 
-  // 정산액: 출석 × 단가
+  // 정산액: 출석 × 단가 — 단, 등록차수(termCount) 이상 출석해도 차수만큼만 정산
   const classRate = settingItem ? calculateClassRate(settingItem, salaryConfig.academyFee) : 0;
-  const settlementAmount = monthTotal * classRate;
+  const billableUnits =
+    typeof termCount === "number" && termCount > 0
+      ? Math.min(monthTotal, termCount)
+      : monthTotal;
+  const settlementAmount = billableUnits * classRate;
 
   // 학교+학년 포맷
   const schoolGrade = formatSchoolGrade(student.school, student.grade);
@@ -190,10 +200,39 @@ export default function StudentRow({
         </td>
       )}
 
-      {/* 출석 합계 */}
-      <td className={`sticky ${getStickyLeft(showExpectedBilling, showSettlement, "attendance")} z-10 bg-[#f0f4f8] w-[36px] px-1 py-1 text-center text-[13px] font-bold text-zinc-700 border-r border-zinc-300 dark:border-zinc-600`}>
-        {monthTotal || "-"}
+      {/* 등록차수 (담임 청구액 ÷ 단가) — 출석보다 먼저 */}
+      <td
+        className="sticky z-10 bg-[#faf5ff] w-[52px] px-1 py-1 text-center text-[13px] font-bold text-violet-700 border-r border-zinc-300 dark:border-zinc-600"
+        style={{ left: getStickyLeftPx(showExpectedBilling, showSettlement, "term") }}
+        title={termCount ? `등록차수 ${termCount.toFixed(1)}${unit}` : undefined}
+      >
+        {termCount ? `${termCount.toFixed(1)}${unit}` : "-"}
       </td>
+
+      {/* 출석 합계 — 등록 대비 비교 색상 */}
+      {(() => {
+        const hasTerm = typeof termCount === "number" && termCount > 0;
+        const isDeficit = hasTerm && monthTotal < termCount!;
+        const isExcess = hasTerm && monthTotal > termCount!;
+        const stateCls = isDeficit
+          ? "bg-red-500 text-white border-2 border-red-700"
+          : isExcess
+          ? "bg-sky-400 text-white"
+          : "bg-[#f0f4f8] text-zinc-700";
+        return (
+          <td
+            className={`sticky z-10 w-[52px] px-1 py-1 text-center text-[13px] font-bold border-r border-zinc-300 dark:border-zinc-600 ${stateCls}`}
+            style={{ left: getStickyLeftPx(showExpectedBilling, showSettlement, "attendance") }}
+            title={
+              hasTerm
+                ? `출석 ${monthTotal.toFixed(1)}${unit} / 등록 ${termCount!.toFixed(1)}${unit}`
+                : undefined
+            }
+          >
+            {monthTotal > 0 ? `${monthTotal.toFixed(1)}${unit}` : "-"}
+          </td>
+        );
+      })()}
 
       {/* 날짜별 셀 */}
       {dates.map((date, dateIdx) => {
@@ -361,9 +400,19 @@ function formatSchoolGrade(school?: string, grade?: string): string {
   return school || grade || "-";
 }
 
-function getStickyLeft(showExpected: boolean, showSettlement: boolean, col: "attendance"): string {
+/**
+ * Sticky left 픽셀 값 (등록차수 → 출석 순서)
+ * - term: 고정 컬럼 끝 바로 뒤 (base)
+ * - attendance: 등록 칸(52px) 뒤 (base + 52)
+ */
+function getStickyLeftPx(
+  showExpected: boolean,
+  showSettlement: boolean,
+  col: "attendance" | "term"
+): number {
   let base = 342;
   if (showExpected) base += 60;
   if (showSettlement) base += 60;
-  return `left-[${base}px]`;
+  if (col === "attendance") base += 52;
+  return base;
 }

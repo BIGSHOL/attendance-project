@@ -94,24 +94,30 @@ export default function StudentDetail({ studentId }: Props) {
       setLoading(true);
       const supabase = createClient();
 
-      // 1. 해당 학생의 모든 수납 (studentCode 우선, 결과 없으면 이름+학교 fallback)
+      // 1. 해당 학생의 모든 수납
+      // studentCode 매칭 + 이름 매칭을 합집합으로 수집.
+      // 학교 필터를 DB 쿼리에 strict 로 걸면 payment.school 이 null/다른 값일 때 누락됨
+      // → 학교 비교는 findStudentPayments(client) 의 관대한 로직에 맡긴다.
       if (student) {
-        let pData: PaymentLite[] = [];
+        const resultMap = new Map<string, PaymentLite>();
+
+        // 1-1. studentCode 매칭
         if (student.studentCode) {
           const res = await supabase
             .from("payments")
             .select("*")
             .eq("student_code", student.studentCode);
-          if (res.data) pData = res.data as PaymentLite[];
+          (res.data as PaymentLite[] | null)?.forEach((p) => resultMap.set(p.id, p));
         }
-        // 결과가 없으면 이름 + 학교로 재시도
-        if (pData.length === 0) {
-          let q = supabase.from("payments").select("*").eq("student_name", student.name);
-          if (student.school) q = q.eq("school", student.school);
-          const res = await q;
-          if (res.data) pData = res.data as PaymentLite[];
-        }
-        setPayments(pData);
+
+        // 1-2. 이름 매칭 (학교 필터 없음)
+        const resByName = await supabase
+          .from("payments")
+          .select("*")
+          .eq("student_name", student.name);
+        (resByName.data as PaymentLite[] | null)?.forEach((p) => resultMap.set(p.id, p));
+
+        setPayments(Array.from(resultMap.values()));
       }
 
       // 2. 해당 학생의 해당 월 출석

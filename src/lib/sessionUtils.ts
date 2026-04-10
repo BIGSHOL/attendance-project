@@ -32,6 +32,26 @@ export function expandSessionDates(session: SessionPeriod): Date[] {
 }
 
 /**
+ * 세션의 최소~최대 날짜 사이 모든 날짜 반환 (범위 사이 공백도 채움)
+ * 세션에 명시적으로 없더라도 토/일 등 주말까지 모두 포함
+ */
+export function expandSessionDatesContiguous(session: SessionPeriod): Date[] {
+  if (session.ranges.length === 0) return [];
+  const sorted = [...session.ranges].sort((a, b) =>
+    a.startDate.localeCompare(b.startDate)
+  );
+  const min = parseDateKey(sorted[0].startDate);
+  const max = parseDateKey(sorted[sorted.length - 1].endDate);
+  const result: Date[] = [];
+  const cursor = new Date(min);
+  while (cursor <= max) {
+    result.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+}
+
+/**
  * "YYYY-MM-DD" → Date (로컬 타임존)
  */
 export function parseDateKey(key: string): Date {

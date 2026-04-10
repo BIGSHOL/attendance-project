@@ -6,6 +6,7 @@ import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { formatDateKey, getDaysInMonth } from "@/lib/date";
 import { mergeOverlappingRanges, parseDateKey } from "@/lib/sessionUtils";
 import { toSubjectLabel } from "@/lib/labelMap";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 
 interface Props {
   isOpen: boolean;
@@ -18,33 +19,63 @@ interface Props {
 const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];
 
+// 월별 세션 색상 (1~12월)
+const MONTH_COLORS: Record<number, { bg: string; text: string }> = {
+  1: { bg: "bg-rose-500", text: "text-white" },
+  2: { bg: "bg-orange-500", text: "text-white" },
+  3: { bg: "bg-amber-500", text: "text-white" },
+  4: { bg: "bg-lime-500", text: "text-white" },
+  5: { bg: "bg-emerald-500", text: "text-white" },
+  6: { bg: "bg-teal-500", text: "text-white" },
+  7: { bg: "bg-cyan-500", text: "text-white" },
+  8: { bg: "bg-sky-500", text: "text-white" },
+  9: { bg: "bg-blue-500", text: "text-white" },
+  10: { bg: "bg-indigo-500", text: "text-white" },
+  11: { bg: "bg-violet-500", text: "text-white" },
+  12: { bg: "bg-fuchsia-500", text: "text-white" },
+};
+
 function MiniCalendar({
   year,
   month,
-  selectedRanges,
+  rangesByMonth,
   dragRange,
+  dragStartMonth,
   onMouseDown,
   onMouseEnter,
 }: {
   year: number;
   month: number;
-  selectedRanges: DateRange[];
+  rangesByMonth: Record<number, DateRange[]>;
   dragRange: { start: string; end: string } | null;
-  onMouseDown: (dateKey: string) => void;
+  dragStartMonth: number | null;
+  onMouseDown: (dateKey: string, sourceMonth: number) => void;
   onMouseEnter: (dateKey: string) => void;
 }) {
+  // 항상 6주(42칸) 고정 그리드 — 전월/차월 날짜 포함
   const days = useMemo(() => {
-    const all = getDaysInMonth(year, month);
-    const firstDay = new Date(year, month - 1, 1).getDay();
-    const result: (Date | null)[] = [];
-    for (let i = 0; i < firstDay; i++) result.push(null);
-    all.forEach((d) => result.push(d));
+    const firstOfMonth = new Date(year, month - 1, 1);
+    const startDow = firstOfMonth.getDay(); // 0(일)~6(토)
+    const gridStart = new Date(year, month - 1, 1 - startDow);
+    const result: { date: Date; inMonth: boolean }[] = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gridStart);
+      d.setDate(gridStart.getDate() + i);
+      result.push({ date: d, inMonth: d.getMonth() === month - 1 });
+    }
     return result;
   }, [year, month]);
 
-  const isSelected = useCallback(
-    (key: string) => selectedRanges.some((r) => key >= r.startDate && key <= r.endDate),
-    [selectedRanges]
+  // 날짜가 어느 월의 세션에 속하는지 찾기 (이 mini calendar의 month에 속하는 세션만)
+  const getMatchingMonth = useCallback(
+    (key: string): number | null => {
+      const ownRanges = rangesByMonth[month] || [];
+      if (ownRanges.some((r) => key >= r.startDate && key <= r.endDate)) {
+        return month;
+      }
+      return null;
+    },
+    [rangesByMonth, month]
   );
 
   const isInDrag = useCallback(
@@ -57,10 +88,14 @@ function MiniCalendar({
     [dragRange]
   );
 
+  const monthColor = MONTH_COLORS[month];
+
   return (
     <div className="border border-zinc-200 dark:border-zinc-700 rounded-sm p-2 bg-white dark:bg-zinc-800">
-      <div className="text-center text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
-        {month}월
+      <div className={`text-center text-xs font-bold mb-1 ${monthColor.text === "text-white" ? "text-zinc-700 dark:text-zinc-300" : ""}`}>
+        <span className={`inline-block px-1.5 py-0.5 rounded-sm ${monthColor.bg} ${monthColor.text}`}>
+          {month}월
+        </span>
       </div>
       <div className="grid grid-cols-7 gap-px mb-0.5">
         {DAY_NAMES.map((day, i) => (
@@ -75,25 +110,28 @@ function MiniCalendar({
         ))}
       </div>
       <div className="grid grid-cols-7 gap-px">
-        {days.map((date, idx) => {
-          if (!date) return <div key={`empty-${idx}`} className="h-5" />;
+        {days.map(({ date, inMonth }) => {
           const key = formatDateKey(date);
-          const selected = isSelected(key);
-          const inDrag = isInDrag(key);
+          const matchingMonth = getMatchingMonth(key);
+          // 드래그 중인 셀은 시작 월의 색으로 미리보기
+          const inDrag = isInDrag(key) && dragStartMonth === month;
+          const color = matchingMonth !== null ? MONTH_COLORS[matchingMonth] : null;
           return (
             <button
-              key={key}
+              key={`${month}-${key}`}
               onMouseDown={(e) => {
                 e.preventDefault();
-                onMouseDown(key);
+                onMouseDown(key, month);
               }}
               onMouseEnter={() => onMouseEnter(key)}
               className={`h-5 text-[10px] font-medium rounded-sm transition-colors ${
-                selected
-                  ? "bg-blue-500 text-white"
+                color
+                  ? `${color.bg} ${color.text}`
                   : inDrag
                   ? "bg-blue-200 text-blue-800"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                  : inMonth
+                  ? "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                  : "text-zinc-300 hover:bg-zinc-50 dark:text-zinc-600 dark:hover:bg-zinc-800/50"
               }`}
             >
               {date.getDate()}
@@ -147,70 +185,91 @@ export default function SessionSettingsModal({
     }
   };
 
-  // 월별 편집 상태
-  const [editingRanges, setEditingRanges] = useState<Record<number, DateRange[]>>({});
+  // 월별 편집 상태 — 연도/과목 조합별로 localStorage에 영속화
+  const [editingStore, setEditingStore] = useLocalStorage<
+    Record<string, Record<number, DateRange[]>>
+  >("sessionSettings.editing", {});
+  const storeKey = `${year}.${category}`;
+  const editingRanges = useMemo<Record<number, DateRange[]>>(
+    () => editingStore[storeKey] || {},
+    [editingStore, storeKey]
+  );
+  const setEditingRanges = useCallback(
+    (
+      updater:
+        | Record<number, DateRange[]>
+        | ((prev: Record<number, DateRange[]>) => Record<number, DateRange[]>)
+    ) => {
+      setEditingStore((prev) => {
+        const curr = prev[storeKey] || {};
+        const next = typeof updater === "function" ? updater(curr) : updater;
+        return { ...prev, [storeKey]: next };
+      });
+    },
+    [setEditingStore, storeKey]
+  );
   const prevKeyRef = useRef("");
 
-  // 세션 데이터 → 편집 상태로 동기화
+  // 세션 데이터 → 편집 상태로 동기화 (localStorage가 비어있을 때만)
   useEffect(() => {
-    const key = JSON.stringify(sessions.map((s) => ({ m: s.month, r: s.ranges })));
+    const key = `${storeKey}::${JSON.stringify(
+      sessions.map((s) => ({ m: s.month, r: s.ranges }))
+    )}`;
     if (key === prevKeyRef.current) return;
     prevKeyRef.current = key;
+
+    // 해당 year/category 의 localStorage 값이 이미 있으면 덮어쓰지 않음
+    if (Object.keys(editingStore[storeKey] || {}).length > 0) return;
 
     const map: Record<number, DateRange[]> = {};
     sessions.forEach((s) => {
       map[s.month] = s.ranges || [];
     });
     setEditingRanges(map);
-  }, [sessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, storeKey]);
 
   // 드래그
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState<string | null>(null);
   const [dragEnd, setDragEnd] = useState<string | null>(null);
+  // 드래그가 시작된 월 — 전체 범위가 이 월의 세션으로 저장됨
+  const [dragStartMonth, setDragStartMonth] = useState<number | null>(null);
 
   const dragRange = useMemo(() => {
     if (!dragging || !dragStart || !dragEnd) return null;
     return { start: dragStart, end: dragEnd };
   }, [dragging, dragStart, dragEnd]);
 
-  const handleMouseDown = (key: string) => {
+  const handleMouseDown = (key: string, sourceMonth: number) => {
     setDragging(true);
     setDragStart(key);
     setDragEnd(key);
+    setDragStartMonth(sourceMonth);
   };
   const handleMouseEnter = (key: string) => {
     if (dragging) setDragEnd(key);
   };
   const handleMouseUp = () => {
-    if (dragging && dragStart && dragEnd) {
+    if (dragging && dragStart && dragEnd && dragStartMonth !== null) {
       const lo = dragStart < dragEnd ? dragStart : dragEnd;
       const hi = dragStart < dragEnd ? dragEnd : dragStart;
 
-      // 월별로 분리해서 추가
-      const loMonth = parseInt(lo.slice(5, 7));
-      const hiMonth = parseInt(hi.slice(5, 7));
-
+      // 드래그 시작 월에 전체 범위를 통째로 저장 (쪼개지 않음)
       setEditingRanges((prev) => {
         const next = { ...prev };
-        for (let m = loMonth; m <= hiMonth; m++) {
-          const monthStart =
-            m === loMonth ? lo : `${year}-${String(m).padStart(2, "0")}-01`;
-          const lastDay = new Date(year, m, 0).getDate();
-          const monthEnd =
-            m === hiMonth ? hi : `${year}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-          const existing = next[m] || [];
-          next[m] = mergeOverlappingRanges([
-            ...existing,
-            { startDate: monthStart, endDate: monthEnd },
-          ]);
-        }
+        const existing = next[dragStartMonth] || [];
+        next[dragStartMonth] = mergeOverlappingRanges([
+          ...existing,
+          { startDate: lo, endDate: hi },
+        ]);
         return next;
       });
     }
     setDragging(false);
     setDragStart(null);
     setDragEnd(null);
+    setDragStartMonth(null);
   };
 
   const handleClearMonth = (month: number) => {
@@ -268,6 +327,7 @@ export default function SessionSettingsModal({
     () => MONTHS.filter((m) => (editingRanges[m] || []).length > 0),
     [editingRanges]
   );
+
 
   if (!isOpen) return null;
 
@@ -352,8 +412,9 @@ export default function SessionSettingsModal({
                 key={m}
                 year={year}
                 month={m}
-                selectedRanges={editingRanges[m] || []}
+                rangesByMonth={editingRanges}
                 dragRange={dragRange}
+                dragStartMonth={dragStartMonth}
                 onMouseDown={handleMouseDown}
                 onMouseEnter={handleMouseEnter}
               />

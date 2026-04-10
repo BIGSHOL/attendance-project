@@ -14,6 +14,8 @@ interface Props {
   students: Student[];
   year: number;
   month: number;
+  /** 선택된 과목 — 출석/등록 단위 결정 (영어=U, 그 외=T) */
+  subject?: string;
   salaryConfig: SalaryConfig;
   /** 시트 F열 동기화 결과 — student_id → salary_item_id */
   tierOverrides?: Record<string, string>;
@@ -30,6 +32,8 @@ interface Props {
   hiddenStudentSet: Set<string>;
   holidayDateSet?: Set<string>;
   holidayNameMap?: Map<string, string>;
+  /** 학생별 등록차수 (studentId → 회수) */
+  termCountMap?: Map<string, number>;
   onHideDate: (dateKey: string) => void;
   onHideStudent: (studentId: string) => void;
   onAttendanceChange: (studentId: string, dateKey: string, value: number | null) => void;
@@ -42,6 +46,7 @@ export default function AttendanceTable({
   students,
   year,
   month,
+  subject,
   salaryConfig,
   tierOverrides,
   highlightWeekends,
@@ -56,6 +61,7 @@ export default function AttendanceTable({
   hiddenStudentSet,
   holidayDateSet,
   holidayNameMap,
+  termCountMap,
   onHideDate,
   onHideStudent,
   onAttendanceChange,
@@ -67,9 +73,20 @@ export default function AttendanceTable({
     () => overrideDates && overrideDates.length > 0 ? overrideDates : getDaysInMonth(year, month),
     [overrideDates, year, month]
   );
+  // 세션 모드(overrideDates 있음)에서는 명시적 날짜이므로 주말 필터 미적용
+  const isSessionDriven = !!(overrideDates && overrideDates.length > 0);
   const dates = useMemo(
-    () => allDates.filter((d) => !hiddenDateSet.has(formatDateKey(d))),
-    [allDates, hiddenDateSet]
+    () =>
+      allDates.filter((d) => {
+        if (hiddenDateSet.has(formatDateKey(d))) return false;
+        // 월별 모드에서 토글 OFF면 토/일 열 제거
+        if (!isSessionDriven && !highlightWeekends) {
+          const day = d.getDay();
+          if (day === 0 || day === 6) return false;
+        }
+        return true;
+      }),
+    [allDates, hiddenDateSet, highlightWeekends, isSessionDriven]
   );
   const dateInfos = useMemo(() => dates.map(formatDateDisplay), [dates]);
 
@@ -168,7 +185,10 @@ export default function AttendanceTable({
   );
 
   // 고정 컬럼 수 계산
-  const fixedColCount = 4 + (showExpectedBilling ? 1 : 0) + (showSettlement ? 1 : 0) + 1; // #, 이름, 학교, 요일, [예정액], [정산액], 출석
+  const fixedColCount = 4 + (showExpectedBilling ? 1 : 0) + (showSettlement ? 1 : 0) + 2; // #, 이름, 학교, 요일, [예정액], [정산액], 출석, 등록
+
+  // 과목별 단위: 영어는 U(유닛), 나머지는 T(타임)
+  const unit: "U" | "T" = subject === "english" ? "U" : "T";
 
   if (visibleStudents.length === 0) {
     return (
@@ -213,6 +233,8 @@ export default function AttendanceTable({
           cellHeightPx={cellHeightPx}
           holidayDateSet={holidayDateSet}
           holidayNameMap={holidayNameMap}
+          termCount={termCountMap?.get(student.id)}
+          unit={unit}
           onHideStudent={onHideStudent}
           onCellClick={handleCellClick}
           onCellRightClick={handleCellRightClick}
@@ -274,6 +296,8 @@ export default function AttendanceTable({
               cellHeightPx={cellHeightPx}
               holidayDateSet={holidayDateSet}
               holidayNameMap={holidayNameMap}
+              termCount={termCountMap?.get(student.id)}
+              unit={unit}
               onHideStudent={onHideStudent}
               onCellClick={handleCellClick}
               onCellRightClick={handleCellRightClick}
@@ -311,7 +335,17 @@ export default function AttendanceTable({
                 정산액
               </th>
             )}
-            <th className={`sticky ${getAttendanceHeaderLeft(showExpectedBilling, showSettlement)} z-[40] bg-zinc-800 w-[36px] px-1 py-2 text-center text-[12px] border-r border-zinc-600`}>
+            <th
+              className="sticky z-[40] bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
+              style={{ left: getTermHeaderLeftPx(showExpectedBilling, showSettlement) }}
+              title="등록차수 = 해당 월 담임 청구액 ÷ 학생 단가"
+            >
+              등록
+            </th>
+            <th
+              className="sticky z-[40] bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
+              style={{ left: getAttendanceHeaderLeftPx(showExpectedBilling, showSettlement) }}
+            >
               출석
             </th>
             {dateInfos.map((info, i) => {
@@ -334,9 +368,11 @@ export default function AttendanceTable({
                 >
                   <div
                     className={`text-[11px] ${
-                      holidayName || info.isSunday
+                      holidayName
                         ? "text-red-300"
-                        : info.isSaturday
+                        : highlightWeekends && info.isSunday
+                        ? "text-red-300"
+                        : highlightWeekends && info.isSaturday
                         ? "text-blue-300"
                         : "text-zinc-400"
                     }`}
@@ -371,9 +407,15 @@ export default function AttendanceTable({
   );
 }
 
-function getAttendanceHeaderLeft(showExpected: boolean, showSettlement: boolean): string {
+function getTermHeaderLeftPx(showExpected: boolean, showSettlement: boolean): number {
+  // 등록이 먼저 (고정 컬럼 끝 바로 뒤)
   let base = 342;
   if (showExpected) base += 60;
   if (showSettlement) base += 60;
-  return `left-[${base}px]`;
+  return base;
+}
+
+function getAttendanceHeaderLeftPx(showExpected: boolean, showSettlement: boolean): number {
+  // 등록 칸(52px) 뒤
+  return getTermHeaderLeftPx(showExpected, showSettlement) + 52;
 }
