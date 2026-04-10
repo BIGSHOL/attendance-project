@@ -4,7 +4,14 @@ import type { Student, SalaryConfig } from "@/types";
 import { DAY_ORDER } from "@/types";
 import { formatDateKey } from "@/lib/date";
 import { matchSalarySetting, calculateClassRate, getBadgeStyle } from "@/lib/salary";
-import { isDateValidForStudent, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
+import {
+  isDateValidForStudent,
+  isNewInMonth,
+  isLeavingInMonth,
+  findTransferFromOnDate,
+  findTransferToToday,
+  type TransferInfo,
+} from "@/lib/studentFilter";
 
 interface Props {
   student: Student;
@@ -13,11 +20,15 @@ interface Props {
   year: number;
   month: number;
   salaryConfig: SalaryConfig;
+  /** 시트 F열 동기화 결과 — salary_item_id */
+  tierOverrideId?: string;
   highlightWeekends: boolean;
   showExpectedBilling: boolean;
   showSettlement: boolean;
   cellWidthPx: number;
   cellHeightPx: number;
+  holidayDateSet?: Set<string>;
+  holidayNameMap?: Map<string, string>;
   onHideStudent?: (studentId: string) => void;
   onCellClick: (studentId: string, dateKey: string) => void;
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
@@ -30,31 +41,40 @@ export default function StudentRow({
   year,
   month,
   salaryConfig,
+  tierOverrideId,
   highlightWeekends,
   showExpectedBilling,
   showSettlement,
   cellWidthPx,
   cellHeightPx,
+  holidayDateSet,
+  holidayNameMap,
   onHideStudent,
   onCellClick,
   onCellRightClick,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
+  // 퇴원 경계에서 같은 과목의 다른 활성 반이 있으면 반이동으로 간주
+  const transferToInfo: TransferInfo | null = isLeaving
+    ? findTransferToToday(student)
+    : null;
   const attendance = student.attendance || {};
   const memos = student.memos || {};
   const homework = student.homework || {};
   const cellColors = student.cellColors || {};
   const studentDays = student.days || [];
 
-  // 급여 설정 매칭
-  const settingItem = matchSalarySetting(student, salaryConfig);
+  // 급여 설정 매칭 (시트 F열 tier 오버라이드 최우선)
+  const settingItem = matchSalarySetting(student, salaryConfig, undefined, tierOverrideId);
 
-  // 월 출석 합계
-  const monthTotal = Object.values(attendance).reduce(
-    (sum, v) => sum + (v > 0 ? v : 0),
-    0
-  );
+  // 월 출석 합계 — 현재 보이는 날짜 + 재원기간 내에서만 집계
+  const monthTotal = dates.reduce((sum, d) => {
+    const key = formatDateKey(d);
+    if (!isDateValidForStudent(key, student)) return sum;
+    const v = attendance[key];
+    return sum + (v && v > 0 ? v : 0);
+  }, 0);
 
   // 예정액: 수업 요일 × 단가
   const scheduledCount = dates.filter((d) => {
@@ -87,13 +107,13 @@ export default function StudentRow({
             onHideStudent(student.id);
           }
         }}
-        className="sticky left-0 z-10 bg-inherit w-8 px-1 py-1 text-center text-[13px] text-zinc-400 cursor-context-menu"
+        className="sticky left-0 z-10 bg-inherit w-8 px-1 py-1 text-center text-[13px] text-zinc-400 cursor-context-menu border-r border-zinc-200 dark:border-zinc-700"
       >
         {index + 1}
       </td>
 
       {/* 이름 */}
-      <td className="sticky left-[32px] z-10 bg-inherit w-[90px] px-2 py-1 text-sm font-medium text-zinc-900 whitespace-nowrap">
+      <td className="sticky left-[32px] z-10 bg-inherit w-[90px] px-2 py-1 text-sm font-medium text-zinc-900 whitespace-nowrap border-r border-zinc-200 dark:border-zinc-700">
         <div className="flex items-center gap-1">
           <span>{student.name}</span>
           {isNew && (
@@ -116,12 +136,20 @@ export default function StudentRow({
       </td>
 
       {/* 학교/학년 + 급여설정 뱃지 */}
-      <td className="sticky left-[122px] z-10 bg-inherit w-[80px] px-1 py-1">
+      <td className="sticky left-[122px] z-10 bg-inherit w-[80px] px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
         <div className="text-[13px] text-zinc-500 leading-tight">{schoolGrade}</div>
         {settingItem && (
           <span
-            className="inline-block mt-0.5 rounded px-1 py-0 text-[11px] font-medium border"
+            className="inline-block mt-0.5 rounded px-1 py-0 text-[11px] font-semibold border"
             style={getBadgeStyle(settingItem.color)}
+            title={
+              `${settingItem.name}\n` +
+              `청구 단가: ${unitPrice.toLocaleString()}원\n` +
+              `1회당 선생님 몫: ${classRate.toLocaleString()}원` +
+              (settingItem.type === "percentage"
+                ? ` (비율 ${settingItem.ratio}%)`
+                : " (고정급)")
+            }
           >
             {settingItem.name}
           </span>
@@ -129,7 +157,7 @@ export default function StudentRow({
       </td>
 
       {/* 요일 */}
-      <td className="sticky left-[202px] z-10 bg-[#f8f9fa] w-[140px] px-1 py-1">
+      <td className="sticky left-[202px] z-10 bg-[#f8f9fa] w-[140px] px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
         <div className="flex flex-nowrap gap-0.5">
           {sortedDays.map((day) => (
             <span
@@ -150,20 +178,20 @@ export default function StudentRow({
 
       {/* 예정액 */}
       {showExpectedBilling && (
-        <td className="sticky left-[342px] z-10 bg-[#fefce8] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600">
+        <td className="sticky left-[342px] z-10 bg-[#fefce8] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
           {expectedBilling > 0 ? expectedBilling.toLocaleString() : "-"}
         </td>
       )}
 
       {/* 정산액 */}
       {showSettlement && (
-        <td className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-10 bg-[#eff6ff] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600`}>
+        <td className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-10 bg-[#eff6ff] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700`}>
           {settlementAmount > 0 ? settlementAmount.toLocaleString() : "-"}
         </td>
       )}
 
       {/* 출석 합계 */}
-      <td className={`sticky ${getStickyLeft(showExpectedBilling, showSettlement, "attendance")} z-10 bg-[#f0f4f8] w-[36px] px-1 py-1 text-center text-[13px] font-bold text-zinc-700`}>
+      <td className={`sticky ${getStickyLeft(showExpectedBilling, showSettlement, "attendance")} z-10 bg-[#f0f4f8] w-[36px] px-1 py-1 text-center text-[13px] font-bold text-zinc-700 border-r border-zinc-300 dark:border-zinc-600`}>
         {monthTotal || "-"}
       </td>
 
@@ -186,6 +214,8 @@ export default function StudentRow({
 
         // 재원 기간 유효성
         const isValid = isDateValidForStudent(dateKey, student);
+        // 공휴일 (실제 쉬는날만 — data.go.kr getHoliDeInfo)
+        const holidayName = holidayDateSet?.has(dateKey) ? holidayNameMap?.get(dateKey) : undefined;
         const prevDate = dates[dateIdx - 1];
         const nextDate = dates[dateIdx + 1];
         const prevKey = prevDate ? formatDateKey(prevDate) : "";
@@ -195,8 +225,13 @@ export default function StudentRow({
         // 퇴원: 이번 달 퇴원 학생 / 현재 칸은 빗금(무효) / 바로 이전 칸이 endDate
         const isEndBoundary =
           isLeaving && !isValid && prevKey === student.endDate;
+        // 첫수업 경계에서 이전 반이 있으면 "반이동 (from)" 으로 표시
+        const transferFromInfo: TransferInfo | null = isFirstClass
+          ? findTransferFromOnDate(student, nextKey)
+          : null;
 
         // 배경색 결정
+        // 우선순위: 재원 외 > 커스텀색 > 결석(빨강) > 공휴일(연한 빨강, 수업 없음) > 수업일(주황) > 주말 회색
         let bgColor = "";
         let stripePattern = false;
         if (!isValid) {
@@ -205,8 +240,10 @@ export default function StudentRow({
           bgColor = cellColor;
         } else if (value === 0) {
           bgColor = "#ef4444"; // 결석: 빨강
-        } else if (isScheduledDay && value === undefined) {
-          bgColor = "#fed7aa"; // 수업일인데 미체크: 주황
+        } else if (holidayName) {
+          bgColor = "#fecaca"; // 공휴일: 연한 빨강 (수업 없음)
+        } else if (isScheduledDay) {
+          bgColor = "#fed7aa"; // 수업일: 주황 (출석 기입 여부와 상관없이 항상 표시)
         } else if (highlightWeekends && (isSunday || isSaturday)) {
           bgColor = "#d1d5db"; // 주말 회색
         }
@@ -222,9 +259,14 @@ export default function StudentRow({
           ? { backgroundColor: bgColor }
           : undefined;
 
+        const cellTitle = [holidayName ? `🎉 ${holidayName}` : "", memos[dateKey] || ""]
+          .filter(Boolean)
+          .join(" | ");
+
         return (
           <td
             key={dateKey}
+            title={cellTitle || undefined}
             onClick={() => isValid && onCellClick(student.id, dateKey)}
             onContextMenu={(e) => isValid && onCellRightClick(e, student.id, dateKey)}
             className={`relative text-center select-none border-r border-b border-zinc-300 transition-colors ${
@@ -237,20 +279,38 @@ export default function StudentRow({
               height: cellHeightPx,
             }}
           >
-            {/* 첫수업 뱃지 */}
+            {/* 첫수업 / 반이동(from) 뱃지 */}
             {isFirstClass && (
               <span className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none overflow-hidden">
-                <span className="rounded-sm border border-amber-500 bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-300 px-0.5 text-[8px] font-black text-amber-900 shadow-[0_0_6px_rgba(251,191,36,0.9)] animate-pulse whitespace-nowrap tracking-[-0.05em] leading-tight">
-                  첫수업
-                </span>
+                {transferFromInfo ? (
+                  <span
+                    className="rounded-sm border border-violet-500 bg-violet-100 px-0.5 text-[8px] font-black text-violet-800 whitespace-nowrap tracking-[-0.05em] leading-tight animate-pulse"
+                    title={`반이동: ${transferFromInfo.teacher ? transferFromInfo.teacher + " 선생님 " : ""}${transferFromInfo.className} → ${student.group}`}
+                  >
+                    반이동
+                  </span>
+                ) : (
+                  <span className="rounded-sm border border-amber-500 bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-300 px-0.5 text-[8px] font-black text-amber-900 shadow-[0_0_6px_rgba(251,191,36,0.9)] animate-pulse whitespace-nowrap tracking-[-0.05em] leading-tight">
+                    첫수업
+                  </span>
+                )}
               </span>
             )}
-            {/* 퇴원 뱃지 */}
+            {/* 퇴원 / 반이동(to) 뱃지 */}
             {isEndBoundary && (
-              <span className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-                <span className="rounded-sm border border-gray-400 bg-gray-100 px-0.5 text-[10px] font-black text-gray-700 whitespace-nowrap">
-                  퇴원
-                </span>
+              <span className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none overflow-hidden">
+                {transferToInfo ? (
+                  <span
+                    className="rounded-sm border border-violet-500 bg-violet-100 px-0.5 text-[8px] font-black text-violet-800 whitespace-nowrap tracking-[-0.05em] leading-tight animate-pulse"
+                    title={`반이동: ${student.group} → ${transferToInfo.teacher ? transferToInfo.teacher + " 선생님 " : ""}${transferToInfo.className}`}
+                  >
+                    반이동
+                  </span>
+                ) : (
+                  <span className="rounded-sm border border-gray-400 bg-gray-100 px-0.5 text-[10px] font-black text-gray-700 whitespace-nowrap">
+                    퇴원
+                  </span>
+                )}
               </span>
             )}
 
@@ -272,16 +332,22 @@ export default function StudentRow({
               </span>
             )}
 
-            {/* 메모 표시 (우상 삼각형) */}
-            {isValid && hasMemo && (
-              <span
-                className="absolute top-0 right-0 w-0 h-0"
-                style={{
-                  borderLeft: "5px solid transparent",
-                  borderTop: "5px solid rgba(239,68,68,0.7)",
-                }}
-              />
-            )}
+            {/* 메모 표시 (포스트잇 모서리 접힘 스타일) */}
+            {isValid && hasMemo && (() => {
+              const foldSize = Math.round(Math.sqrt((cellWidthPx * cellHeightPx) / 5));
+              return (
+                <span
+                  className="absolute top-0 right-0 pointer-events-none"
+                  style={{
+                    width: foldSize,
+                    height: foldSize,
+                    background:
+                      "linear-gradient(225deg, #fbbf24 0%, #f59e0b 48%, rgba(0,0,0,0.25) 50%, transparent 51%)",
+                    filter: "drop-shadow(-0.5px 0.5px 1px rgba(0,0,0,0.25))",
+                  }}
+                />
+              );
+            })()}
           </td>
         );
       })}

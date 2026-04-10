@@ -7,8 +7,17 @@ import { useAttendanceData } from "@/hooks/useAttendanceData";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useAllUserRoles } from "@/hooks/useAllUserRoles";
-import { INITIAL_SALARY_CONFIG, INITIAL_SETTLEMENT } from "@/types";
-import type { SalaryConfig, MonthlySettlement, Student, Teacher } from "@/types";
+import { useTeacherBlogPosts } from "@/hooks/useTeacherBlogPosts";
+import { useTeacherSettings } from "@/hooks/useTeacherSettings";
+import { useTeacherSheets } from "@/hooks/useTeacherSheets";
+import { useSalaryConfig } from "@/hooks/useSalaryConfig";
+import { useStudentTierOverrides } from "@/hooks/useStudentTierOverrides";
+import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
+import { INITIAL_SETTLEMENT } from "@/types";
+import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPeriod } from "@/types";
+import { useSessionPeriods } from "@/hooks/useSessionPeriods";
+import { useHolidays } from "@/hooks/useHolidays";
+import { expandSessionDates } from "@/lib/sessionUtils";
 import { calculateStats, calculateFinalSalary } from "@/lib/salary";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
@@ -19,6 +28,7 @@ import { useHiddenCells } from "@/hooks/useHiddenCells";
 import AttendanceTable from "./attendance/AttendanceTable";
 import SettlementModal from "./attendance/SettlementModal";
 import SalarySettingsModal from "./attendance/SalarySettingsModal";
+import SessionSettingsModal from "./attendance/SessionSettingsModal";
 
 type SortMode = "class" | "name" | "day";
 
@@ -29,11 +39,37 @@ export default function AttendancePage() {
   const [selectedSubject, setSelectedSubject] = useState<string>("math");
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>("");
 
+  // 세션 모드
+  const [viewMode, setViewMode] = useLocalStorage<AttendanceViewMode>("attendance.viewMode", "monthly");
+  const [selectedSessionId, setSelectedSessionId] = useLocalStorage<string | null>(
+    "attendance.selectedSessionId",
+    null
+  );
+  const { sessions: sessionPeriods } = useSessionPeriods(year, selectedSubject);
+  const selectedSession = useMemo<SessionPeriod | null>(
+    () => sessionPeriods.find((s) => s.id === selectedSessionId) || null,
+    [sessionPeriods, selectedSessionId]
+  );
+  // 현재 month/category에 맞는 세션 자동 선택 (month 변경 시 자동 재선택)
+  useEffect(() => {
+    if (viewMode !== "session") return;
+    const match = sessionPeriods.find((s) => s.month === month);
+    if (match) {
+      if (match.id !== selectedSessionId) setSelectedSessionId(match.id);
+    } else {
+      if (selectedSessionId) setSelectedSessionId(null);
+    }
+  }, [viewMode, sessionPeriods, month, selectedSessionId, setSelectedSessionId]);
+
   // 표시 옵션
   const [sortMode, setSortMode] = useState<SortMode>("class");
   const [highlightWeekends, setHighlightWeekends] = useState(false);
   const [showExpectedBilling, setShowExpectedBilling] = useState(false);
   const [showSettlement, setShowSettlement] = useState(false);
+  const [hideZeroAttendance, setHideZeroAttendance] = useLocalStorage<boolean>(
+    "attendance.hideZeroAttendance",
+    true
+  );
 
   // 셀 크기 (localStorage 저장)
   const [cellWidth, setCellWidth] = useLocalStorage<CellSize>("attendance.cellWidth", "md");
@@ -54,10 +90,14 @@ export default function AttendancePage() {
   // 모달
   const [isSettlementOpen, setSettlementOpen] = useState(false);
   const [isSalarySettingsOpen, setSalarySettingsOpen] = useState(false);
+  const [isSessionSettingsOpen, setSessionSettingsOpen] = useState(false);
 
-  // 급여 설정
-  const [salaryConfig, setSalaryConfig] = useState<SalaryConfig>(INITIAL_SALARY_CONFIG);
+  // 급여 설정 (Supabase 영속화)
+  const { config: salaryConfig, save: saveSalaryConfig } = useSalaryConfig();
   const [settlement, setSettlement] = useState<MonthlySettlement>(INITIAL_SETTLEMENT);
+
+  // 공휴일 (data.go.kr getHoliDeInfo 캐시)
+  const { dateSet: holidayDateSet, nameMap: holidayNameMap } = useHolidays(year);
 
   // 데이터
   const { teachers, loading: staffLoading } = useStaff();
@@ -76,6 +116,15 @@ export default function AttendancePage() {
       days: u?.commission_days || [],
     };
   }, [userRoles, selectedTeacherId]);
+
+  // 블로그 의무 (staff_id 기반 teacher_settings)
+  const { isBlogRequired } = useTeacherSettings();
+  const selectedBlogRequired = isBlogRequired(selectedTeacherId);
+
+  // 선택된 선생님의 해당 월 블로그 작성 여부 → 패널티 판정
+  const { hasPostForMonth } = useTeacherBlogPosts(selectedTeacherId, year, month);
+  const blogPenalty =
+    selectedBlogRequired && !hasPostForMonth(year, month);
 
   // 과목 목록 추출
   const subjects = useMemo(() => {
@@ -122,6 +171,17 @@ export default function AttendancePage() {
     return map;
   }, [teachers, allStudents, isTeacherMatch]);
 
+  // 시트 동기화 상태 + F열 tier 오버라이드
+  const { sheets: teacherSheets, markSynced } = useTeacherSheets();
+  const { overrides: tierOverrides, refetch: refetchTierOverrides } =
+    useStudentTierOverrides(selectedTeacherId);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<TeacherSyncResult | null>(null);
+  const currentSheetUrl = useMemo(
+    () => teacherSheets.find((s) => s.teacher_id === selectedTeacherId)?.sheet_url || null,
+    [teacherSheets, selectedTeacherId]
+  );
+
   // 과목별 선생님 필터
   // - 선생님 계정: 매핑된 자기 자신만
   // - 관리자/마스터: 전체 (과목/담당학생 0/숨김 제외)
@@ -149,6 +209,19 @@ export default function AttendancePage() {
     }
   }, [visibleTeachers, selectedTeacherId]);
 
+  // 세션 모드일 때 출석 fetch 범위 = 세션 전체 기간 (교차 월 포함)
+  const attendanceRangeOverride = useMemo(() => {
+    if (viewMode !== "session" || !selectedSession) return null;
+    const sorted = [...selectedSession.ranges].sort((a, b) =>
+      a.startDate.localeCompare(b.startDate)
+    );
+    if (sorted.length === 0) return null;
+    return {
+      startDate: sorted[0].startDate,
+      endDate: sorted[sorted.length - 1].endDate,
+    };
+  }, [viewMode, selectedSession]);
+
   // Supabase 출석 데이터
   const {
     studentDataMap,
@@ -157,7 +230,8 @@ export default function AttendancePage() {
     updateMemo,
     updateCellColor,
     updateHomework,
-  } = useAttendanceData(selectedTeacherId, year, month);
+    refetch: refetchAttendance,
+  } = useAttendanceData(selectedTeacherId, year, month, attendanceRangeOverride);
 
   // 선생님 기반 학생 필터링 + Supabase 출석 데이터 머지
   const selectedTeacher = useMemo(
@@ -177,25 +251,48 @@ export default function AttendancePage() {
     filtered = filterStudentsByMonth(filtered, year, month);
 
     const dataMap = studentDataMap();
+    const ymPrefix = `${year}-${String(month).padStart(2, "0")}`;
 
-    return filtered.map((s): Student => {
-      const supaData = dataMap.get(s.id);
-      // 선택된 선생님 담당 enrollment의 className 사용
-      const teacherEnrollment = s.enrollments?.find((e) => isTeacherMatch(e, selectedTeacher));
-      // 해당 선생님 수업의 요일만 추출 (schedule "월 1" → "월")
-      const days = extractDaysForTeacher(s.enrollments, (e) => isTeacherMatch(e, selectedTeacher));
+    return filtered
+      .map((s): Student => {
+        const supaData = dataMap.get(s.id);
+        // 선택된 선생님 담당 enrollment의 className 사용
+        const teacherEnrollment = s.enrollments?.find((e) => isTeacherMatch(e, selectedTeacher));
+        // 해당 선생님 수업의 요일만 추출 (schedule "월 1" → "월")
+        const days = extractDaysForTeacher(s.enrollments, (e) => isTeacherMatch(e, selectedTeacher));
 
-      return {
-        ...s,
-        group: teacherEnrollment?.className || s.group || "미분류",
-        days,
-        attendance: supaData?.attendance ?? s.attendance ?? {},
-        memos: supaData?.memos ?? s.memos ?? {},
-        homework: supaData?.homework ?? s.homework ?? {},
-        cellColors: supaData?.cellColors ?? s.cellColors ?? {},
-      };
-    });
-  }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month]);
+        // 반이동/첫수업/퇴원 경계 판정을 per-teacher 단위로 하기 위해
+        // 해당 선생님 enrollment의 날짜로 오버라이드
+        const enrollStart = teacherEnrollment?.startDate || s.startDate;
+        const enrollEnd = teacherEnrollment?.endDate || s.endDate;
+
+        return {
+          ...s,
+          group: teacherEnrollment?.className || s.group || "미분류",
+          startDate: enrollStart,
+          endDate: enrollEnd,
+          days,
+          attendance: supaData?.attendance ?? s.attendance ?? {},
+          memos: supaData?.memos ?? s.memos ?? {},
+          homework: supaData?.homework ?? s.homework ?? {},
+          cellColors: supaData?.cellColors ?? s.cellColors ?? {},
+        };
+      })
+      .filter((s) => {
+        const monthAttendanceTotal = Object.entries(s.attendance || {}).reduce(
+          (sum, [key, v]) => sum + (key.startsWith(ymPrefix) && v > 0 ? v : 0),
+          0
+        );
+        // 토글: 이번 달 출석이 0이면 전부 숨김
+        if (hideZeroAttendance && monthAttendanceTotal === 0) return false;
+        // 토글 OFF이어도, 이번 달 신입/퇴원 뱃지 대상이면서 출석 0인 학생은 숨김
+        // (수업을 1회도 하지 않은 학생은 신입도 퇴원도 아니므로 노출 제외)
+        const isNew = isNewInMonth(s, year, month);
+        const isLeaving = isLeavingInMonth(s, year, month);
+        if (isNew || isLeaving) return monthAttendanceTotal > 0;
+        return true;
+      });
+  }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month, hideZeroAttendance]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading;
 
@@ -213,9 +310,11 @@ export default function AttendancePage() {
         : selectedSubject === "math" || selectedSubject === "highmath"
         ? "math"
         : "other",
-      selectedTeacher?.name
+      selectedTeacher?.name,
+      blogPenalty,
+      tierOverrides
     ),
-    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher]
+    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides]
   );
 
   const finalSalary = useMemo(
@@ -233,6 +332,32 @@ export default function AttendancePage() {
     return { newCount: n, leavingCount: l };
   }, [filteredStudents, year, month]);
 
+  // 지난 달 재원생 수 — 신입/퇴원 비율의 분모 (현재 월 기준이 아니라 이전 월 재원생 수 기준)
+  const prevMonthStudentCount = useMemo(() => {
+    if (!selectedTeacher) return 0;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevMon = month === 1 ? 12 : month - 1;
+    const mm = String(prevMon).padStart(2, "0");
+    const firstDay = `${prevYear}-${mm}-01`;
+    const lastDate = new Date(prevYear, prevMon, 0).getDate();
+    const lastDay = `${prevYear}-${mm}-${String(lastDate).padStart(2, "0")}`;
+
+    return allStudents.filter((s) => {
+      const e = s.enrollments?.find((en) => isTeacherMatch(en, selectedTeacher));
+      if (!e) return false;
+      const start = e.startDate || s.startDate || "";
+      const end = e.endDate || s.endDate || "";
+      // 지난 달 시작일 이후 입학 → 지난 달에는 재원 아님
+      if (start && start > lastDay) return false;
+      // 지난 달 시작일 이전 퇴원 → 지난 달에는 재원 아님
+      if (end && end < firstDay) return false;
+      return true;
+    }).length;
+  }, [allStudents, selectedTeacher, isTeacherMatch, year, month]);
+
+  const newRate = prevMonthStudentCount > 0 ? (newCount / prevMonthStudentCount) * 100 : 0;
+  const leavingRate = prevMonthStudentCount > 0 ? (leavingCount / prevMonthStudentCount) * 100 : 0;
+
   // 월 이동
   const prevMonth = () => {
     if (month === 1) { setYear(year - 1); setMonth(12); }
@@ -242,6 +367,33 @@ export default function AttendancePage() {
     if (month === 12) { setYear(year + 1); setMonth(1); }
     else setMonth(month + 1);
   };
+
+  // 현재 선택 월 + 선생님 기준 시트 동기화
+  const handleSyncSheet = useCallback(async () => {
+    if (syncing || !selectedTeacherId || !selectedTeacher || !currentSheetUrl) return;
+    const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await syncTeacherSheet(
+        selectedTeacherId,
+        selectedTeacher.name,
+        currentSheetUrl,
+        allStudents,
+        "2026-03",
+        exactMonth,
+        salaryConfig
+      );
+      setSyncResult(result);
+      if (result.success) {
+        await markSynced(selectedTeacherId);
+        // 동기화 결과 반영: 출석/메모 + tier 오버라이드 DB 재조회
+        await Promise.all([refetchAttendance(), refetchTierOverrides()]);
+      }
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncing, selectedTeacherId, selectedTeacher, currentSheetUrl, year, month, allStudents, markSynced, refetchAttendance, salaryConfig, refetchTierOverrides]);
 
   // Supabase 연동 핸들러
   const handleAttendanceChange = useCallback(
@@ -274,8 +426,8 @@ export default function AttendancePage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* 상단 통계 + 컨트롤 바 */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-x-auto flex-shrink-0">
+      {/* 상단 1행: 통계 + 주요 네비게이션 */}
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 bg-white dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
         {/* 급여 카드 */}
         <button
           onClick={() => setSettlementOpen(true)}
@@ -298,20 +450,89 @@ export default function AttendancePage() {
           <span className="font-bold">{stats.totalAttendance}</span>
         </div>
 
-        {/* 신입 */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-blue-50 text-blue-700 text-sm dark:bg-blue-950 dark:text-blue-300">
+        {/* 신입 (지난 달 재원생 대비 비율) */}
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-sm bg-blue-50 text-blue-700 text-sm dark:bg-blue-950 dark:text-blue-300"
+          title={`지난 달 재원생 ${prevMonthStudentCount}명 기준`}
+        >
           <span className="font-semibold">신입</span>
           <span className="font-bold">+{newCount}</span>
+          {prevMonthStudentCount > 0 && (
+            <span className="text-xs opacity-70">({newRate.toFixed(1)}%)</span>
+          )}
         </div>
 
-        {/* 퇴원 */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-red-50 text-red-700 text-sm dark:bg-red-950 dark:text-red-300">
+        {/* 퇴원 (지난 달 재원생 대비 비율) */}
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-sm bg-red-50 text-red-700 text-sm dark:bg-red-950 dark:text-red-300"
+          title={`지난 달 재원생 ${prevMonthStudentCount}명 기준`}
+        >
           <span className="font-semibold">퇴원</span>
           <span className="font-bold">-{leavingCount}</span>
+          {prevMonthStudentCount > 0 && (
+            <span className="text-xs opacity-70">({leavingRate.toFixed(1)}%)</span>
+          )}
         </div>
 
+        <div className="flex-1 min-w-[8px]" />
+
+        {/* 과목 선택 */}
+        <div className="flex rounded-sm bg-zinc-200 p-0.5 dark:bg-zinc-800">
+          {subjects.map((subj) => (
+            <button
+              key={subj}
+              onClick={() => setSelectedSubject(subj)}
+              className={`rounded px-3 py-1.5 text-sm font-medium ${
+                selectedSubject === subj
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                  : "text-zinc-600 dark:text-zinc-400"
+              }`}
+            >
+              {toSubjectLabel(subj)}
+            </button>
+          ))}
+        </div>
+
+        {/* 선생님 선택 */}
+        <select
+          value={selectedTeacherId}
+          onChange={(e) => setSelectedTeacherId(e.target.value)}
+          className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+        >
+          {visibleTeachers.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+          {visibleTeachers.length === 0 && (
+            <option value="" disabled>선생님 없음</option>
+          )}
+        </select>
+
+        {/* 시트 동기화 (관리자 이상만 + 시트 등록된 선생님만) */}
+        {isAdmin && currentSheetUrl && (
+          <button
+            onClick={handleSyncSheet}
+            disabled={syncing}
+            className="rounded-sm bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-zinc-300"
+            title={`${year}년 ${month}월 탭에서 출석/메모 동기화 (덮어쓰기)`}
+          >
+            {syncing ? "동기화 중..." : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 동기화`}
+          </button>
+        )}
+
+        {/* 월 이동 */}
+        <div className="flex items-center gap-1">
+          <button onClick={prevMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">◀</button>
+          <span className="px-3 py-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-100 min-w-[90px] text-center">
+            {year}년 {month}월
+          </span>
+          <button onClick={nextMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">▶</button>
+        </div>
+      </div>
+
+      {/* 상단 2행: 표시 옵션 */}
+      <div className="flex items-center gap-2 px-3 pb-2 pt-1 border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
         {/* 토글 */}
-        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer ml-2 dark:text-zinc-300">
+        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
           <input type="checkbox" checked={showExpectedBilling} onChange={(e) => setShowExpectedBilling(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
           예정액
         </label>
@@ -322,6 +543,10 @@ export default function AttendancePage() {
         <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
           <input type="checkbox" checked={highlightWeekends} onChange={(e) => setHighlightWeekends(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
           주말 회색
+        </label>
+        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
+          <input type="checkbox" checked={hideZeroAttendance} onChange={(e) => setHideZeroAttendance(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
+          0출석 숨김
         </label>
 
         {/* 날짜 셀 가로폭 */}
@@ -394,38 +619,49 @@ export default function AttendancePage() {
           </button>
         </div>
 
-        <div className="flex-1" />
+        <div className="flex-1 min-w-[8px]" />
 
-        {/* 과목 선택 */}
+        {/* 보기 모드 (월/세션) */}
         <div className="flex rounded-sm bg-zinc-200 p-0.5 dark:bg-zinc-800">
-          {subjects.map((subj) => (
-            <button
-              key={subj}
-              onClick={() => setSelectedSubject(subj)}
-              className={`rounded px-3 py-1.5 text-sm font-medium ${
-                selectedSubject === subj
-                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
-                  : "text-zinc-600 dark:text-zinc-400"
-              }`}
-            >
-              {toSubjectLabel(subj)}
-            </button>
-          ))}
+          <button
+            onClick={() => setViewMode("monthly")}
+            className={`rounded px-3 py-1.5 text-sm font-medium ${
+              viewMode === "monthly"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                : "text-zinc-600 dark:text-zinc-400"
+            }`}
+          >
+            월별
+          </button>
+          <button
+            onClick={() => setViewMode("session")}
+            className={`rounded px-3 py-1.5 text-sm font-medium ${
+              viewMode === "session"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                : "text-zinc-600 dark:text-zinc-400"
+            }`}
+          >
+            세션별
+          </button>
         </div>
 
-        {/* 선생님 선택 */}
-        <select
-          value={selectedTeacherId}
-          onChange={(e) => setSelectedTeacherId(e.target.value)}
-          className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-        >
-          {visibleTeachers.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-          {visibleTeachers.length === 0 && (
-            <option value="" disabled>선생님 없음</option>
-          )}
-        </select>
+        {/* 세션 없음 안내 (선택된 세션이 있으면 굳이 표시하지 않음) */}
+        {viewMode === "session" && !selectedSession && (
+          <span className="text-sm text-zinc-500 dark:text-zinc-400">
+            {toSubjectLabel(selectedSubject)} 세션 없음
+          </span>
+        )}
+
+        {/* 세션 설정 (관리자만) */}
+        {viewMode === "session" && isAdmin && (
+          <button
+            onClick={() => setSessionSettingsOpen(true)}
+            className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            title="세션 설정"
+          >
+            ⚙ 세션
+          </button>
+        )}
 
         {/* 설정 */}
         <button
@@ -434,16 +670,49 @@ export default function AttendancePage() {
         >
           ⚙ 설정
         </button>
-
-        {/* 월 이동 */}
-        <div className="flex items-center gap-1">
-          <button onClick={prevMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">◀</button>
-          <span className="px-3 py-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-100 min-w-[90px] text-center">
-            {year}년 {month}월
-          </span>
-          <button onClick={nextMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">▶</button>
-        </div>
       </div>
+
+      {/* 동기화 결과 토스트 */}
+      {syncResult && (
+        <div className="absolute top-16 right-3 z-40 max-w-md rounded-sm border border-zinc-300 bg-white p-3 text-xs shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">
+              {syncResult.teacherName} 동기화 결과
+            </span>
+            <button
+              onClick={() => setSyncResult(null)}
+              className="text-zinc-400 hover:text-zinc-600"
+            >
+              ✕
+            </button>
+          </div>
+          {syncResult.error && (
+            <div className="text-red-600 mb-1">❌ {syncResult.error}</div>
+          )}
+          {syncResult.months.map((m, i) => (
+            <div key={i} className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+              <span className="font-mono">{m.year}.{String(m.month).padStart(2, "0")}</span>
+              {m.error ? (
+                <span className="text-red-600">❌ {m.error}</span>
+              ) : (
+                <span>
+                  ✓ 매칭 {m.matched}/{m.total}
+                  {m.unmatched > 0 && <span className="text-amber-600"> (실패 {m.unmatched})</span>}
+                  {m.memoCount > 0 && <span className="text-zinc-500"> · 메모 {m.memoCount}개</span>}
+                  {(m.tierMatched > 0 || m.tierUnmatched > 0) && (
+                    <span className="text-zinc-500">
+                      {" · tier "}{m.tierMatched}
+                      {m.tierUnmatched > 0 && (
+                        <span className="text-amber-600"> (실패 {m.tierUnmatched})</span>
+                      )}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 출석 테이블 */}
       <div className="flex-1 min-h-0 overflow-auto" style={{ scrollbarGutter: "stable" }}>
@@ -461,14 +730,19 @@ export default function AttendancePage() {
             year={year}
             month={month}
             salaryConfig={salaryConfig}
+            tierOverrides={tierOverrides}
             highlightWeekends={highlightWeekends}
             showExpectedBilling={showExpectedBilling}
             showSettlement={showSettlement}
             sortMode={sortMode}
+            canCustomValue={isAdmin}
+            overrideDates={viewMode === "session" && selectedSession ? expandSessionDates(selectedSession) : undefined}
             cellWidthPx={cellWidthPx}
             cellHeightPx={cellHeightPx}
             hiddenDateSet={hiddenDateSet}
             hiddenStudentSet={hiddenStudentSet}
+            holidayDateSet={holidayDateSet}
+            holidayNameMap={holidayNameMap}
             onHideDate={hideDate}
             onHideStudent={hideStudent}
             onAttendanceChange={handleAttendanceChange}
@@ -495,7 +769,15 @@ export default function AttendancePage() {
         isOpen={isSalarySettingsOpen}
         onClose={() => setSalarySettingsOpen(false)}
         config={salaryConfig}
-        onSave={setSalaryConfig}
+        onSave={saveSalaryConfig}
+        readOnly={!isAdmin}
+      />
+      <SessionSettingsModal
+        isOpen={isSessionSettingsOpen}
+        onClose={() => setSessionSettingsOpen(false)}
+        year={year}
+        subjects={subjects}
+        initialSubject={selectedSubject}
       />
     </div>
   );

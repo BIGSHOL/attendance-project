@@ -9,17 +9,17 @@ export const CELL_SIZE_OPTIONS: { value: CellSize; label: string }[] = [
 ];
 
 export const CELL_WIDTH: Record<CellSize, number> = {
-  xs: 28,
-  sm: 34,
-  md: 40,
-  lg: 48,
-  xl: 60,
+  xs: 32,
+  sm: 40,
+  md: 50,
+  lg: 62,
+  xl: 76,
 };
 
 export const CELL_HEIGHT: Record<CellSize, number> = {
-  xs: 26,
-  sm: 32,
-  md: 36,
-  lg: 44,
-  xl: 54,
+  xs: 30,
+  sm: 38,
+  md: 46,
+  lg: 56,
+  xl: 66,
 };

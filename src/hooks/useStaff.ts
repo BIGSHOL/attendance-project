@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import type { Teacher } from "@/types";
 
 export function useStaff() {
@@ -10,21 +8,22 @@ export function useStaff() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(
-      collection(db, "staff"),
-      where("status", "==", "active")
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Teacher[];
-      setStaff(data);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/staff", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as Teacher[];
+        if (!cancelled) setStaff(data);
+      } catch (e) {
+        console.error("[useStaff]", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const teachers = staff.filter(

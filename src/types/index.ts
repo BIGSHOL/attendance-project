@@ -122,6 +122,35 @@ export interface Student {
 }
 
 // ==========================================
+// 세션 기간 타입 (ijw-calander 공유)
+// ==========================================
+
+/** 날짜 범위 (YYYY-MM-DD) */
+export interface DateRange {
+  startDate: string;
+  endDate: string;
+}
+
+/**
+ * 세션 기간 — 월별로 여러 날짜 범위로 정의되는 출석/수업 기간
+ * Firestore 컬렉션: `session_periods` (ijw-calander와 공유)
+ * 문서 ID 규칙: `{year}-{category}-{month}` 예) "2026-math-3"
+ */
+export interface SessionPeriod {
+  id: string;
+  year: number;
+  category: string;   // 과목 코드 — 현재 프로젝트의 subject 체계 사용 (math, english, korean 등)
+  month: number;      // 1~12 (세션이 속한 대표 월)
+  ranges: DateRange[];
+  sessions: number;   // 기본 수업 회수 (정산/시수 참고용)
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** 출석부 보기 모드 */
+export type AttendanceViewMode = "monthly" | "session";
+
+// ==========================================
 // 출석 기록 타입 (Supabase)
 // ==========================================
 

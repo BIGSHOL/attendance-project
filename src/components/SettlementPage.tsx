@@ -7,8 +7,10 @@ import { useAllAttendance } from "@/hooks/useAllAttendance";
 import { useMonthlySettlement } from "@/hooks/useMonthlySettlement";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { useAllUserRoles } from "@/hooks/useAllUserRoles";
-import { INITIAL_SALARY_CONFIG } from "@/types";
-import type { SalaryConfig, Teacher } from "@/types";
+import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
+import { useSalaryConfig } from "@/hooks/useSalaryConfig";
+import { useTeacherSettings } from "@/hooks/useTeacherSettings";
+import type { Teacher } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
   calculateStudentSalary,
@@ -22,7 +24,7 @@ export default function SettlementPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [salaryConfig] = useState<SalaryConfig>(INITIAL_SALARY_CONFIG);
+  const { config: salaryConfig } = useSalaryConfig();
 
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
@@ -30,8 +32,10 @@ export default function SettlementPage() {
   const { getByTeacher, loading: settlementLoading } = useMonthlySettlement(year, month);
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
+  const { hasPostForTeacher } = useAllBlogPosts(year, month);
+  const { isBlogRequired } = useTeacherSettings();
 
-  // 선생님 id → 급여 유형 매핑 (선생님/관리자 매핑 모두 포함)
+  // 선생님 id → 급여 유형 매핑 (user_roles 기반)
   const teacherSalaryTypeMap = useMemo(() => {
     const map = new Map<string, { type: SalaryType; days: string[] }>();
     userRoles.forEach((u) => {
@@ -86,10 +90,13 @@ export default function SettlementPage() {
         s.enrollments?.some((e) => isTeacherMatch(e, teacher))
       );
 
-      // 급여 유형
+      // 급여 유형 + 블로그 패널티
       const salaryTypeInfo = teacherSalaryTypeMap.get(teacher.id);
       const salaryType = salaryTypeInfo?.type || "commission";
       const commissionDays = salaryTypeInfo?.days || [];
+      const blogRequired = isBlogRequired(teacher.id);
+      // 블로그 의무인데 해당 월 작성 기록이 없으면 패널티 적용
+      const blogPenalty = blogRequired && !hasPostForTeacher(teacher.id);
 
       // 해당 선생님의 출석 레코드를 유형에 따라 필터링 후 학생별 합계
       const studentUnitMap = new Map<string, number>();
@@ -120,7 +127,9 @@ export default function SettlementPage() {
           baseSalary += calculateStudentSalary(
             settingItem,
             effectiveConfig.academyFee,
-            classUnits
+            classUnits,
+            null,
+            blogPenalty
           );
         }
       }
@@ -142,9 +151,11 @@ export default function SettlementPage() {
         settlement,
         salaryType,
         commissionDays,
+        blogRequired,
+        blogPenalty,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, teacherSalaryTypeMap]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, teacherSalaryTypeMap, hasPostForTeacher, isBlogRequired]);
 
   // 합계
   const totals = useMemo(() => {
@@ -213,8 +224,8 @@ export default function SettlementPage() {
       </div>
 
       {/* 선생님별 정산 표 */}
-      <div className="overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+      <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
               <th className="px-3 py-3 text-left font-medium text-zinc-500">#</th>
@@ -260,6 +271,16 @@ export default function SettlementPage() {
                     {s.salaryType === "mixed" && s.commissionDays.length > 0 && (
                       <div className="mt-0.5 text-[9px] text-zinc-400">
                         {s.commissionDays.join(",")}
+                      </div>
+                    )}
+                    {s.blogPenalty && (
+                      <div className="mt-0.5 inline-flex rounded-sm bg-red-100 px-1 py-0 text-[9px] font-bold text-red-700 dark:bg-red-900 dark:text-red-300">
+                        블로그 -2%
+                      </div>
+                    )}
+                    {s.blogRequired && !s.blogPenalty && (
+                      <div className="mt-0.5 inline-flex rounded-sm bg-emerald-100 px-1 py-0 text-[9px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                        블로그 ✓
                       </div>
                     )}
                   </td>

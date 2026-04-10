@@ -56,23 +56,37 @@ export function calculateClassRate(
 }
 
 /**
+ * 블로그 패널티 적용 비율 계산
+ * blog_required && 미작성 → ratio -2% (최소 0)
+ */
+export function applyBlogPenalty(ratio: number, blogPenalty: boolean): number {
+  if (!blogPenalty) return ratio;
+  return Math.max(0, ratio - 2);
+}
+
+/**
  * 학생 1명의 월 급여 계산
  * @param settingItem 적용할 급여 설정
  * @param academyFee 수수료율 (%)
  * @param classUnits 출석 횟수 (양수 합계)
  * @param paidAmount 학생 납입금 (없으면 출석 기반 계산)
+ * @param blogPenalty 블로그 패널티 적용 여부 (true 시 비율제 ratio -2%)
  */
 export function calculateStudentSalary(
   settingItem: SalarySettingItem | undefined,
   academyFee: number,
   classUnits: number,
-  paidAmount?: number | null
+  paidAmount?: number | null,
+  blogPenalty: boolean = false
 ): number {
   if (!settingItem || classUnits <= 0) return 0;
 
+  // 블로그 패널티 적용된 실질 비율
+  const effectiveRatio = applyBlogPenalty(settingItem.ratio, blogPenalty);
+
   // 납입금 없으면 출석 × 단가
   if (paidAmount === undefined || paidAmount === null) {
-    return Math.ceil(classUnits * calculateClassRate(settingItem, academyFee));
+    return Math.ceil(classUnits * calculateClassRate(settingItem, academyFee, effectiveRatio));
   }
 
   if (settingItem.type === "fixed") {
@@ -84,11 +98,11 @@ export function calculateStudentSalary(
     return settingItem.fixedRate * coveredSessions;
   }
 
-  // 비율제
+  // 비율제 (패널티 적용된 ratio 사용)
   const unitPrice = settingItem.baseTuition;
   const grossByAttendance = Math.floor(unitPrice * classUnits);
   const effectiveBase = Math.min(paidAmount, grossByAttendance);
-  return Math.ceil(effectiveBase * (1 - academyFee / 100) * (settingItem.ratio / 100));
+  return Math.ceil(effectiveBase * (1 - academyFee / 100) * (effectiveRatio / 100));
 }
 
 /**
@@ -134,10 +148,22 @@ export function calculateFinalSalary(
  * 뱃지 스타일 생성
  */
 export function getBadgeStyle(color: string): React.CSSProperties {
+  // 배경을 원색으로 채우고, 배경 명도에 따라 텍스트를 흰색/검정으로 자동 선택
+  const hex = color.replace("#", "");
+  const full =
+    hex.length === 3
+      ? hex.split("").map((c) => c + c).join("")
+      : hex.padEnd(6, "0").slice(0, 6);
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  // YIQ 명도 — 0~255, 128 이상이면 밝은 배경
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  const textColor = yiq >= 150 ? "#111827" : "#ffffff";
   return {
-    color,
-    backgroundColor: `${color}1a`, // 10% 투명도
-    borderColor: `${color}4d`,     // 30% 투명도
+    color: textColor,
+    backgroundColor: color,
+    borderColor: color,
     borderWidth: 1,
   };
 }
@@ -155,7 +181,10 @@ export function calculateStats(
   salaryType?: SalaryType,
   commissionDays?: string[],
   subjectHint?: SalarySubject,
-  teacherName?: string
+  teacherName?: string,
+  blogPenalty: boolean = false,
+  /** 시트 F열 동기화 결과 — student_id → salary_item_id */
+  tierOverrides?: Record<string, string>
 ): {
   totalSalary: number;
   totalAttendance: number;
@@ -179,9 +208,11 @@ export function calculateStats(
       }
     }
 
-    const settingItem = matchSalarySetting(student, salaryConfig, subjectHint);
+    const tierOverrideId = tierOverrides?.[student.id];
+    const settingItem = matchSalarySetting(student, salaryConfig, subjectHint, tierOverrideId);
     if (settingItem) {
-      const ratio = getEffectiveRatio(settingItem, salaryConfig, teacherName);
+      const baseRatio = getEffectiveRatio(settingItem, salaryConfig, teacherName);
+      const ratio = applyBlogPenalty(baseRatio, blogPenalty);
       const classRate = calculateClassRate(settingItem, salaryConfig.academyFee, ratio);
       totalSalary += Math.ceil(classUnits * classRate);
     }
@@ -219,14 +250,22 @@ export function subjectToSalarySubject(subject: string | undefined): SalarySubje
 
 /**
  * 학생에게 적용할 급여 설정 매칭
- * 1. salarySettingOverrides 오버라이드 우선
- * 2. subject + group으로 기본 항목 매칭
+ * 1. tierOverrideId (시트 F열 동기화) 최우선
+ * 2. salarySettingOverrides 오버라이드
+ * 3. subject + group으로 기본 항목 매칭
  */
 export function matchSalarySetting(
   student: Student,
   salaryConfig: SalaryConfig,
-  subjectHint?: SalarySubject
+  subjectHint?: SalarySubject,
+  tierOverrideId?: string
 ): SalarySettingItem | undefined {
+  // 시트 F열 tier 오버라이드 최우선
+  if (tierOverrideId) {
+    const found = salaryConfig.items.find((i) => i.id === tierOverrideId);
+    if (found) return found;
+  }
+
   // 오버라이드가 있으면 우선
   if (student.salarySettingOverrides && student.group) {
     const overrideId = student.salarySettingOverrides[student.group];

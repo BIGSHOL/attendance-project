@@ -3,9 +3,11 @@
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
+import { toSubjectLabel } from "@/lib/labelMap";
 import {
   parseAttendanceExcel,
   parseAttendanceFromArray,
+  normalizeSchoolName,
   type ParsedAttendance,
   type AttendanceEntry,
 } from "@/lib/parseAttendanceExcel";
@@ -20,6 +22,7 @@ export default function AttendanceImportPage() {
   const { students, loading: studentsLoading } = useStudents();
   const [parsed, setParsed] = useState<ParsedAttendance | null>(null);
   const [teacherId, setTeacherId] = useState<string | null>(null);
+  const [subjectFilter, setSubjectFilter] = useState<string>("all");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -80,7 +83,7 @@ export default function AttendanceImportPage() {
         setError(json.error || "시트 불러오기 실패");
         return;
       }
-      const result = parseAttendanceFromArray(json.values || []);
+      const result = parseAttendanceFromArray(json.values || [], json.notes || []);
       setParsed(result);
       setFileName(`📄 Google Sheets (${json.sheetName})`);
 
@@ -100,15 +103,32 @@ export default function AttendanceImportPage() {
     }
   };
 
-  // 학생 매칭
+  // 과목 목록
+  const allSubjects = useMemo(() => {
+    const set = new Set<string>();
+    teachers.forEach((t) => t.subjects?.forEach((s) => set.add(s)));
+    return Array.from(set).sort();
+  }, [teachers]);
+
+  // 과목별 필터링 + 가나다순 정렬된 선생님 목록
+  const filteredTeachers = useMemo(() => {
+    const list =
+      subjectFilter === "all"
+        ? teachers
+        : teachers.filter((t) => t.subjects?.includes(subjectFilter));
+    return [...list].sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  }, [teachers, subjectFilter]);
+
+  // 학생 매칭 (학교명 정규화 적용)
   const matchedEntries = useMemo<MatchedEntry[]>(() => {
     if (!parsed) return [];
     return parsed.entries.map((entry) => {
-      // 1차: 이름 + 학교 매칭
+      const entrySchool = normalizeSchoolName(entry.school || "");
+      // 1차: 이름 + 학교(정규화) 매칭
       const byNameSchool = students.find(
         (s) =>
           s.name === entry.studentName &&
-          (entry.school ? s.school === entry.school : true)
+          (entrySchool ? normalizeSchoolName(s.school || "") === entrySchool : true)
       );
       if (byNameSchool) {
         return { ...entry, studentId: byNameSchool.id, matchMethod: "이름+학교" };
@@ -146,9 +166,13 @@ export default function AttendanceImportPage() {
 
     setSaving(true);
     const records: Record<string, Record<string, number>> = {};
+    const memos: Record<string, Record<string, string>> = {};
     for (const e of matchedEntries) {
       if (!e.studentId) continue;
       records[e.studentId] = e.attendance;
+      if (e.memos && Object.keys(e.memos).length > 0) {
+        memos[e.studentId] = e.memos;
+      }
     }
 
     const res = await fetch("/api/attendance/import", {
@@ -159,6 +183,7 @@ export default function AttendanceImportPage() {
         year: parsed.year,
         month: parsed.month,
         records,
+        memos,
         overwrite: true,
       }),
     });
@@ -284,16 +309,37 @@ export default function AttendanceImportPage() {
             <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
               담당 선생님
             </div>
-            <select
-              value={teacherId || ""}
-              onChange={(e) => setTeacherId(e.target.value || null)}
-              className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            >
-              <option value="">선생님 선택</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={subjectFilter}
+                onChange={(e) => {
+                  setSubjectFilter(e.target.value);
+                  // 과목 변경 시, 현재 선택된 선생님이 해당 과목이 아니면 초기화
+                  if (e.target.value !== "all" && teacherId) {
+                    const t = teachers.find((tt) => tt.id === teacherId);
+                    if (!t?.subjects?.includes(e.target.value)) {
+                      setTeacherId(null);
+                    }
+                  }
+                }}
+                className="sm:w-36 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              >
+                <option value="all">전체 과목</option>
+                {allSubjects.map((s) => (
+                  <option key={s} value={s}>{toSubjectLabel(s)}</option>
+                ))}
+              </select>
+              <select
+                value={teacherId || ""}
+                onChange={(e) => setTeacherId(e.target.value || null)}
+                className="flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              >
+                <option value="">선생님 선택 ({filteredTeachers.length}명)</option>
+                {filteredTeachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
             {!teacherId && (
               <p className="mt-1 text-xs text-red-500">선생님을 선택해야 저장 가능합니다.</p>
             )}

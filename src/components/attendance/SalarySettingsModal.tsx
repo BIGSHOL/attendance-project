@@ -9,9 +9,10 @@ interface Props {
   onClose: () => void;
   config: SalaryConfig;
   onSave: (config: SalaryConfig) => void;
+  readOnly?: boolean;
 }
 
-export default function SalarySettingsModal({ isOpen, onClose, config, onSave }: Props) {
+export default function SalarySettingsModal({ isOpen, onClose, config, onSave, readOnly = false }: Props) {
   const [local, setLocal] = useState<SalaryConfig>(config);
 
   useEffect(() => {
@@ -72,20 +73,26 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
               value={local.academyFee}
               onChange={(e) => setLocal({ ...local, academyFee: Number(e.target.value) })}
               step="0.1"
-              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+              disabled={readOnly}
+              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
             />
           </div>
 
           {/* 과정별 설정 */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-zinc-500">과정별 정산 설정</h3>
-              <button
-                onClick={addItem}
-                className="rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-200"
-              >
-                + 추가
-              </button>
+              <h3 className="text-xs font-semibold text-zinc-500">
+                과정별 정산 설정
+                {readOnly && <span className="ml-2 text-[10px] text-zinc-400">(읽기 전용)</span>}
+              </h3>
+              {!readOnly && (
+                <button
+                  onClick={addItem}
+                  className="rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-200"
+                >
+                  + 추가
+                </button>
+              )}
             </div>
 
             {local.items.map((item, idx) => (
@@ -95,27 +102,32 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                     type="color"
                     value={item.color}
                     onChange={(e) => updateItem(idx, { color: e.target.value })}
-                    className="w-6 h-6 rounded cursor-pointer"
+                    disabled={readOnly}
+                    className="w-6 h-6 rounded cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                   />
                   <input
                     type="text"
                     value={item.name}
                     onChange={(e) => updateItem(idx, { name: e.target.value })}
-                    className="flex-1 rounded border border-zinc-300 px-2 py-1 text-sm font-medium dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+                    disabled={readOnly}
+                    className="flex-1 rounded border border-zinc-300 px-2 py-1 text-sm font-medium disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                   />
-                  <button
-                    onClick={() => removeItem(idx)}
-                    className="rounded p-1 text-xs text-red-400 hover:bg-red-50 hover:text-red-600"
-                  >
-                    삭제
-                  </button>
+                  {!readOnly && (
+                    <button
+                      onClick={() => removeItem(idx)}
+                      className="rounded p-1 text-xs text-red-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      삭제
+                    </button>
+                  )}
                 </div>
 
                 {/* 유형 선택 */}
                 <div className="flex gap-2 mb-2">
                   <button
-                    onClick={() => updateItem(idx, { type: "fixed" as SalaryType })}
-                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium ${
+                    onClick={() => !readOnly && updateItem(idx, { type: "fixed" as SalaryType })}
+                    disabled={readOnly}
+                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed ${
                       item.type === "fixed"
                         ? "bg-zinc-800 text-white"
                         : "bg-zinc-100 text-zinc-500"
@@ -124,8 +136,9 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                     고정급
                   </button>
                   <button
-                    onClick={() => updateItem(idx, { type: "percentage" as SalaryType })}
-                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium ${
+                    onClick={() => !readOnly && updateItem(idx, { type: "percentage" as SalaryType })}
+                    disabled={readOnly}
+                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed ${
                       item.type === "percentage"
                         ? "bg-zinc-800 text-white"
                         : "bg-zinc-100 text-zinc-500"
@@ -142,7 +155,8 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                       type="number"
                       value={item.fixedRate}
                       onChange={(e) => updateItem(idx, { fixedRate: Number(e.target.value) })}
-                      className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+                      disabled={readOnly}
+                      className="w-full rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                     />
                   </div>
                 ) : (
@@ -174,7 +188,8 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                     type="number"
                     value={item.unitPrice}
                     onChange={(e) => updateItem(idx, { unitPrice: Number(e.target.value) })}
-                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+                    disabled={readOnly}
+                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                   />
                 </div>
 
@@ -196,16 +211,18 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
               <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-2">블로그 포스팅</p>
               <div className="flex gap-2 mb-2">
                 <button
-                  onClick={() => setLocal({ ...local, incentives: { ...local.incentives, blogType: "fixed" } })}
-                  className={`flex-1 rounded px-2 py-1 text-xs ${
+                  onClick={() => !readOnly && setLocal({ ...local, incentives: { ...local.incentives, blogType: "fixed" } })}
+                  disabled={readOnly}
+                  className={`flex-1 rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed ${
                     local.incentives.blogType === "fixed" ? "bg-zinc-800 text-white" : "bg-zinc-100 text-zinc-500"
                   }`}
                 >
                   고정금
                 </button>
                 <button
-                  onClick={() => setLocal({ ...local, incentives: { ...local.incentives, blogType: "percentage" } })}
-                  className={`flex-1 rounded px-2 py-1 text-xs ${
+                  onClick={() => !readOnly && setLocal({ ...local, incentives: { ...local.incentives, blogType: "percentage" } })}
+                  disabled={readOnly}
+                  className={`flex-1 rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed ${
                     local.incentives.blogType === "percentage" ? "bg-zinc-800 text-white" : "bg-zinc-100 text-zinc-500"
                   }`}
                 >
@@ -241,7 +258,8 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                     type="number"
                     value={local.incentives.retentionAmount}
                     onChange={(e) => setLocal({ ...local, incentives: { ...local.incentives, retentionAmount: Number(e.target.value) } })}
-                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+                    disabled={readOnly}
+                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                   />
                 </div>
                 <div>
@@ -251,7 +269,8 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
                     value={local.incentives.retentionTargetRate}
                     onChange={(e) => setLocal({ ...local, incentives: { ...local.incentives, retentionTargetRate: Number(e.target.value) } })}
                     step="0.1"
-                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+                    disabled={readOnly}
+                    className="w-full rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 disabled:cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                   />
                 </div>
               </div>
@@ -262,11 +281,13 @@ export default function SalarySettingsModal({ isOpen, onClose, config, onSave }:
         {/* 하단 */}
         <div className="sticky bottom-0 flex justify-end gap-2 border-t border-zinc-200 bg-white px-5 py-3 dark:border-zinc-700 dark:bg-zinc-900">
           <button onClick={onClose} className="rounded-sm border border-zinc-300 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-            취소
+            {readOnly ? "닫기" : "취소"}
           </button>
-          <button onClick={handleSave} className="rounded-sm bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700">
-            저장
-          </button>
+          {!readOnly && (
+            <button onClick={handleSave} className="rounded-sm bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700">
+              저장
+            </button>
+          )}
         </div>
       </div>
     </div>

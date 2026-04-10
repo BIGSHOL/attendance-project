@@ -136,8 +136,8 @@ export default function UserManagement() {
         />
       </div>
 
-      <div className="overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+      <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
               <th className="px-4 py-3 text-left font-medium text-zinc-500">이메일</th>
@@ -285,6 +285,7 @@ export default function UserManagement() {
           <li>• <span className="font-medium">비율제</span>: 모든 출석이 급여에 반영됩니다.</li>
           <li>• <span className="font-medium">급여제</span>: 출석 체크는 하지만 급여에는 영향을 주지 않습니다.</li>
           <li>• <span className="font-medium">혼합</span>: 선택된 요일의 출석만 비율제로 계산됩니다.</li>
+          <li>• <span className="font-medium">블로그 작성 의무</span>는 선생님 상세 페이지에서 월별로 설정/입력할 수 있습니다.</li>
         </ul>
       </div>
     </div>

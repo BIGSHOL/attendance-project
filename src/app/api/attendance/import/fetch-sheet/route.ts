@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getSheetMetadata, getSheetValues, getServiceAccountEmail } from "@/lib/googleSheetsClient";
+import { getSheetMetadata, getSheetValuesWithNotes, getServiceAccountEmail } from "@/lib/googleSheetsClient";
 
 /**
  * Google Sheets URL → 2D 배열로 변환
@@ -55,10 +55,13 @@ export async function POST(request: NextRequest) {
       targetSheetName = sheets[0].properties.title;
     }
 
-    // 2. 셀 값 조회
-    const values = await getSheetValues(spreadsheetId, `${targetSheetName}!A1:AZ500`);
+    // 2. 셀 값 + 메모 조회
+    const { values, notes } = await getSheetValuesWithNotes(
+      spreadsheetId,
+      `${targetSheetName}!A1:AZ500`
+    );
 
-    return NextResponse.json({ values, sheetName: targetSheetName });
+    return NextResponse.json({ values, notes, sheetName: targetSheetName });
   } catch (e) {
     const msg = (e as Error).message;
     // 권한 오류 메시지 개선

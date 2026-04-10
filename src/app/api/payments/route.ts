@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { requireAdmin, requireAuth } from "@/lib/apiAuth";
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
+  const auth = await requireAdmin(supabase);
+  if (!auth.ok) return auth.response;
+
   const { rows, staffMap } = await request.json();
 
   if (!rows || !Array.isArray(rows) || rows.length === 0) {
@@ -52,23 +56,34 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
+  const auth = await requireAuth(supabase);
+  if (!auth.ok) return auth.response;
+
   const { searchParams } = new URL(request.url);
   const month = searchParams.get("month");
 
-  let query = supabase
-    .from("payments")
-    .select("*")
-    .order("student_name", { ascending: true })
-    .order("charge_amount", { ascending: false });
+  // PostgREST 기본 1,000건 제한 우회 (월별 수납이 1000건 초과 가능)
+  const pageSize = 1000;
+  let all: unknown[] = [];
+  let from = 0;
+  while (true) {
+    let q = supabase
+      .from("payments")
+      .select("*")
+      .order("student_name", { ascending: true })
+      .order("charge_amount", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (month) q = q.eq("billing_month", month);
 
-  if (month) {
-    query = query.eq("billing_month", month);
+    const { data, error } = await q;
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
 
-  const { data, error } = await query;
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json(data);
+  return NextResponse.json(all);
 }

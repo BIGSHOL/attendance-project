@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CELL_COLORS } from "@/types";
 
-type Mode = "menu" | "memo" | "color";
+type Mode = "menu" | "memo" | "color" | "custom";
 
 interface Props {
   x: number;
@@ -11,6 +11,7 @@ interface Props {
   currentValue?: number | null;
   currentMemo?: string;
   currentColor?: string;
+  canCustomValue?: boolean; // 관리자 이상만 커스텀 숫자 입력 가능
   onSelectValue: (value: number | null) => void;
   onSaveMemo: (memo: string) => void;
   onSelectColor: (color: string | null) => void;
@@ -31,8 +32,10 @@ const ATTENDANCE_VALUES = [
 export default function ContextMenu({
   x,
   y,
+  currentValue,
   currentMemo,
   currentColor,
+  canCustomValue,
   onSelectValue,
   onSaveMemo,
   onSelectColor,
@@ -40,11 +43,16 @@ export default function ContextMenu({
 }: Props) {
   const [mode, setMode] = useState<Mode>("menu");
   const [memo, setMemo] = useState(currentMemo || "");
+  const [customInput, setCustomInput] = useState(
+    currentValue !== null && currentValue !== undefined ? String(currentValue) : ""
+  );
   const menuRef = useRef<HTMLDivElement>(null);
   const memoRef = useRef<HTMLTextAreaElement>(null);
+  const customRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (mode === "memo") memoRef.current?.focus();
+    if (mode === "custom") customRef.current?.focus();
   }, [mode]);
 
   useEffect(() => {
@@ -87,6 +95,15 @@ export default function ContextMenu({
             ))}
           </div>
           <div className="border-t border-zinc-100 mt-1 pt-1 space-y-0.5">
+            {canCustomValue && (
+              <button
+                onClick={() => setMode("custom")}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              >
+                커스텀 값 입력
+                <span className="ml-1 text-[10px] text-zinc-400">(관리자)</span>
+              </button>
+            )}
             <button
               onClick={() => setMode("memo")}
               className="w-full rounded px-2 py-1.5 text-left text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -105,6 +122,54 @@ export default function ContextMenu({
                   style={{ backgroundColor: currentColor }}
                 />
               )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "custom" && (
+        <div className="p-2">
+          <p className="text-xs font-medium text-zinc-500 mb-1">커스텀 숫자 값</p>
+          <input
+            ref={customRef}
+            type="number"
+            step="0.1"
+            value={customInput}
+            onChange={(e) => setCustomInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const n = Number(customInput);
+                if (!isNaN(n) && customInput.trim() !== "") {
+                  onSelectValue(n);
+                  onClose();
+                }
+              }
+            }}
+            className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-200"
+            placeholder="예: 4, 0.25, 1.75 (Enter로 저장)"
+          />
+          <p className="mt-1 text-[10px] text-zinc-400">
+            기본 버튼에 없는 값도 입력 가능합니다
+          </p>
+          <div className="flex gap-1 mt-2">
+            <button
+              onClick={() => setMode("menu")}
+              className="flex-1 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-200"
+            >
+              뒤로
+            </button>
+            <button
+              onClick={() => {
+                const n = Number(customInput);
+                if (!isNaN(n) && customInput.trim() !== "") {
+                  onSelectValue(n);
+                  onClose();
+                }
+              }}
+              className="flex-1 rounded bg-blue-500 px-2 py-1 text-xs text-white hover:bg-blue-600"
+            >
+              저장
             </button>
           </div>
         </div>

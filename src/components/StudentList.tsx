@@ -87,7 +87,7 @@ export default function StudentList() {
         </span>
       </h2>
 
-      <div className="flex flex-wrap gap-3 mb-3">
+      <div className="flex gap-3 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
         <input
           type="text"
           placeholder="이름 검색"
@@ -107,7 +107,7 @@ export default function StudentList() {
       </div>
 
       {/* 과목 체크박스 필터 */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 overflow-x-auto [&>*]:flex-shrink-0">
         <button
           onClick={toggleAllSubjects}
           className="text-xs px-2 py-1 rounded border border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -133,8 +133,8 @@ export default function StudentList() {
         })}
       </div>
 
-      <div className="overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+      <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
               <th className="px-4 py-3 text-left font-medium text-zinc-500">#</th>

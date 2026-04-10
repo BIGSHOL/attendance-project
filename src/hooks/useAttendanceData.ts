@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useState, useCallback } from "react";
 
 export interface AttendanceRow {
   id: string;
@@ -15,180 +14,186 @@ export interface AttendanceRow {
   is_makeup: boolean;
 }
 
-export function useAttendanceData(teacherId: string, year: number, month: number) {
+interface UpsertPayload {
+  teacher_id: string;
+  student_id: string;
+  date: string;
+  hours?: number | null;
+  memo?: string;
+  cell_color?: string | null;
+  homework?: boolean;
+}
+
+async function patchAttendance(payload: UpsertPayload): Promise<AttendanceRow | null> {
+  const res = await fetch("/api/attendance", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data?.deleted) return null;
+  return data as AttendanceRow;
+}
+
+export function useAttendanceData(
+  teacherId: string,
+  year: number,
+  month: number,
+  /** 세션 모드 등에서 기간을 덮어쓰기 (YYYY-MM-DD) */
+  rangeOverride?: { startDate: string; endDate: string } | null
+) {
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
 
-  const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = `${year}-${String(month).padStart(2, "0")}-${new Date(year, month, 0).getDate()}`;
+  const overrideStart = rangeOverride?.startDate;
+  const overrideEnd = rangeOverride?.endDate;
 
-  // 월별 데이터 로드
-  const fetch = useCallback(async () => {
-    setLoading(true);
-    const query = supabase
-      .from("attendance")
-      .select("*")
-      .eq("teacher_id", teacherId)
-      .gte("date", startDate)
-      .lte("date", endDate);
-
-    const { data, error } = await query;
-    if (!error && data) {
-      setRecords(data as AttendanceRow[]);
-    }
-    setLoading(false);
-  }, [teacherId, startDate, endDate]);
-
-  useEffect(() => {
-    if (teacherId) {
-      fetch();
-    } else {
+  // 월별 or 범위별 데이터 로드
+  const fetchRecords = useCallback(async () => {
+    if (!teacherId) {
       setRecords([]);
       setLoading(false);
+      return;
     }
-  }, [teacherId, fetch]);
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ teacher_id: teacherId });
+      if (overrideStart && overrideEnd) {
+        params.set("startDate", overrideStart);
+        params.set("endDate", overrideEnd);
+      } else {
+        params.set("year", String(year));
+        params.set("month", String(month));
+      }
+      const res = await fetch(`/api/attendance?${params}`, { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as AttendanceRow[];
+        setRecords(data);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [teacherId, year, month, overrideStart, overrideEnd]);
 
-  // 출석 upsert (낙관적 UI)
-  const upsertAttendance = useCallback(
-    async (studentId: string, date: string, hours: number | null) => {
+  useEffect(() => {
+    fetchRecords();
+  }, [fetchRecords]);
+
+  // 공통 낙관적 업데이트 + 서버 upsert
+  const optimisticUpdate = useCallback(
+    async (
+      studentId: string,
+      date: string,
+      patch: Partial<Pick<AttendanceRow, "hours" | "memo" | "cell_color" | "homework">>,
+      payload: UpsertPayload
+    ) => {
       const existing = records.find(
         (r) => r.student_id === studentId && r.date === date
       );
 
-      if (hours === null) {
-        // 삭제
+      // 삭제 케이스 (hours === null + 필드 없음)
+      const isDelete =
+        payload.hours === null &&
+        payload.memo === undefined &&
+        payload.cell_color === undefined &&
+        payload.homework === undefined;
+
+      if (isDelete) {
         if (existing) {
           setRecords((prev) => prev.filter((r) => r.id !== existing.id));
-          await supabase.from("attendance").delete().eq("id", existing.id);
         }
+        await patchAttendance(payload);
         return;
       }
 
+      // 낙관적 UI
       if (existing) {
-        // 업데이트
         setRecords((prev) =>
-          prev.map((r) => (r.id === existing.id ? { ...r, hours } : r))
+          prev.map((r) => (r.id === existing.id ? { ...r, ...patch } : r))
         );
-        await supabase.from("attendance").update({ hours, updated_at: new Date().toISOString() }).eq("id", existing.id);
-      } else {
-        // 삽입
-        const newRow = {
-          teacher_id: teacherId,
-          student_id: studentId,
-          date,
-          hours,
-          memo: "",
-          cell_color: "",
-          homework: false,
-          is_makeup: false,
-        };
-        const { data, error } = await supabase
-          .from("attendance")
-          .insert(newRow)
-          .select()
-          .single();
+      }
 
-        if (!error && data) {
-          setRecords((prev) => [...prev, data as AttendanceRow]);
-        }
+      const row = await patchAttendance(payload);
+      if (row) {
+        setRecords((prev) => {
+          const idx = prev.findIndex((r) => r.id === row.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = row;
+            return next;
+          }
+          return [...prev, row];
+        });
       }
     },
-    [records, teacherId]
+    [records]
   );
 
-  // 메모 업데이트
+  const upsertAttendance = useCallback(
+    (studentId: string, date: string, hours: number | null) =>
+      optimisticUpdate(
+        studentId,
+        date,
+        { hours: hours ?? 0 },
+        { teacher_id: teacherId, student_id: studentId, date, hours }
+      ),
+    [optimisticUpdate, teacherId]
+  );
+
   const updateMemo = useCallback(
-    async (studentId: string, date: string, memo: string) => {
-      const existing = records.find(
-        (r) => r.student_id === studentId && r.date === date
-      );
-
-      if (existing) {
-        setRecords((prev) =>
-          prev.map((r) => (r.id === existing.id ? { ...r, memo } : r))
-        );
-        await supabase.from("attendance").update({ memo, updated_at: new Date().toISOString() }).eq("id", existing.id);
-      } else {
-        // 출석 없어도 메모만 생성
-        const { data, error } = await supabase
-          .from("attendance")
-          .insert({ teacher_id: teacherId, student_id: studentId, date, hours: 0, memo, cell_color: "", homework: false, is_makeup: false })
-          .select()
-          .single();
-        if (!error && data) {
-          setRecords((prev) => [...prev, data as AttendanceRow]);
-        }
-      }
-    },
-    [records, teacherId]
+    (studentId: string, date: string, memo: string) =>
+      optimisticUpdate(
+        studentId,
+        date,
+        { memo },
+        { teacher_id: teacherId, student_id: studentId, date, memo }
+      ),
+    [optimisticUpdate, teacherId]
   );
 
-  // 셀 색상 업데이트
   const updateCellColor = useCallback(
-    async (studentId: string, date: string, cellColor: string | null) => {
-      const existing = records.find(
-        (r) => r.student_id === studentId && r.date === date
-      );
-
-      if (existing) {
-        setRecords((prev) =>
-          prev.map((r) => (r.id === existing.id ? { ...r, cell_color: cellColor || "" } : r))
-        );
-        await supabase.from("attendance").update({ cell_color: cellColor || "", updated_at: new Date().toISOString() }).eq("id", existing.id);
-      } else if (cellColor) {
-        const { data, error } = await supabase
-          .from("attendance")
-          .insert({ teacher_id: teacherId, student_id: studentId, date, hours: 0, memo: "", cell_color: cellColor, homework: false, is_makeup: false })
-          .select()
-          .single();
-        if (!error && data) {
-          setRecords((prev) => [...prev, data as AttendanceRow]);
-        }
-      }
-    },
-    [records, teacherId]
+    (studentId: string, date: string, cellColor: string | null) =>
+      optimisticUpdate(
+        studentId,
+        date,
+        { cell_color: cellColor || "" },
+        { teacher_id: teacherId, student_id: studentId, date, cell_color: cellColor }
+      ),
+    [optimisticUpdate, teacherId]
   );
 
-  // 숙제 업데이트
   const updateHomework = useCallback(
-    async (studentId: string, date: string, homework: boolean) => {
-      const existing = records.find(
-        (r) => r.student_id === studentId && r.date === date
-      );
-
-      if (existing) {
-        setRecords((prev) =>
-          prev.map((r) => (r.id === existing.id ? { ...r, homework } : r))
-        );
-        await supabase.from("attendance").update({ homework, updated_at: new Date().toISOString() }).eq("id", existing.id);
-      } else {
-        const { data, error } = await supabase
-          .from("attendance")
-          .insert({ teacher_id: teacherId, student_id: studentId, date, hours: 0, memo: "", cell_color: "", homework, is_makeup: false })
-          .select()
-          .single();
-        if (!error && data) {
-          setRecords((prev) => [...prev, data as AttendanceRow]);
-        }
-      }
-    },
-    [records, teacherId]
+    (studentId: string, date: string, homework: boolean) =>
+      optimisticUpdate(
+        studentId,
+        date,
+        { homework },
+        { teacher_id: teacherId, student_id: studentId, date, homework }
+      ),
+    [optimisticUpdate, teacherId]
   );
 
   // records → 학생별 attendance/memo/color/homework 맵으로 변환
   const studentDataMap = useCallback(() => {
-    const map = new Map<string, {
-      attendance: Record<string, number>;
-      memos: Record<string, string>;
-      cellColors: Record<string, string>;
-      homework: Record<string, boolean>;
-    }>();
+    const map = new Map<
+      string,
+      {
+        attendance: Record<string, number>;
+        memos: Record<string, string>;
+        cellColors: Record<string, string>;
+        homework: Record<string, boolean>;
+      }
+    >();
 
     for (const r of records) {
       if (!map.has(r.student_id)) {
-        map.set(r.student_id, { attendance: {}, memos: {}, cellColors: {}, homework: {} });
+        map.set(r.student_id, {
+          attendance: {},
+          memos: {},
+          cellColors: {},
+          homework: {},
+        });
       }
       const d = map.get(r.student_id)!;
       if (r.hours > 0 || r.hours === 0) d.attendance[r.date] = r.hours;
@@ -208,6 +213,6 @@ export function useAttendanceData(teacherId: string, year: number, month: number
     updateMemo,
     updateCellColor,
     updateHomework,
-    refetch: fetch,
+    refetch: fetchRecords,
   };
 }

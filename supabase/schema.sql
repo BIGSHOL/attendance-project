@@ -50,6 +50,20 @@ CREATE TABLE monthly_settlements (
   UNIQUE (teacher_id, year, month)
 );
 
+-- 5-1. 세션 기간 (과목+월별 수업 기간)
+CREATE TABLE session_periods (
+  id text PRIMARY KEY,          -- "2026-math-3" 형식
+  year int NOT NULL,
+  category text NOT NULL,       -- 과목 코드 (math, english, korean 등)
+  month int NOT NULL CHECK (month BETWEEN 1 AND 12),
+  ranges jsonb NOT NULL DEFAULT '[]'::jsonb,  -- [{"startDate":"2026-03-06","endDate":"2026-03-20"}]
+  sessions int NOT NULL DEFAULT 12,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_session_periods_year_category ON session_periods (year, category);
+
 -- 6. 수납내역
 CREATE TABLE payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -107,3 +121,25 @@ CREATE POLICY "auth_select_payments" ON payments FOR SELECT TO authenticated USI
 CREATE POLICY "auth_insert_payments" ON payments FOR INSERT TO authenticated WITH CHECK (true);
 CREATE POLICY "auth_update_payments" ON payments FOR UPDATE TO authenticated USING (true);
 CREATE POLICY "auth_delete_payments" ON payments FOR DELETE TO authenticated USING (true);
+
+ALTER TABLE session_periods ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "auth_select_session_periods" ON session_periods FOR SELECT TO authenticated USING (true);
+CREATE POLICY "auth_insert_session_periods" ON session_periods FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "auth_update_session_periods" ON session_periods FOR UPDATE TO authenticated USING (true);
+CREATE POLICY "auth_delete_session_periods" ON session_periods FOR DELETE TO authenticated USING (true);
+
+-- 공휴일 (data.go.kr getHoliDeInfo 캐시)
+-- 실제로 쉬는 국경일/공휴일/대체공휴일만 저장 (절기 제외)
+CREATE TABLE holidays (
+  date date PRIMARY KEY,
+  year int NOT NULL,
+  name text NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX idx_holidays_year ON holidays(year);
+
+ALTER TABLE holidays ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "auth_select_holidays" ON holidays FOR SELECT TO authenticated USING (true);
+CREATE POLICY "auth_insert_holidays" ON holidays FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "auth_update_holidays" ON holidays FOR UPDATE TO authenticated USING (true);
+CREATE POLICY "auth_delete_holidays" ON holidays FOR DELETE TO authenticated USING (true);

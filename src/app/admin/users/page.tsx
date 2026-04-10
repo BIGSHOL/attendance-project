@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import Header from "@/components/Header";
 import Nav from "@/components/Nav";
 import AuthGuard from "@/components/AuthGuard";
 import UserManagement from "@/components/UserManagement";
@@ -11,10 +10,9 @@ export default async function AdminUsersPage() {
   if (!user) redirect("/login");
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
-      <Header email={user.email || ""} />
-      <Nav />
-      <main className="flex-1 p-6">
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+      <Nav email={user.email || ""} />
+      <main className="flex-1 min-h-0 overflow-auto p-6">
         <AuthGuard requireMaster>
           <UserManagement />
         </AuthGuard>

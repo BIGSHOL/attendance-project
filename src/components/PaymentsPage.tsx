@@ -302,7 +302,7 @@ export default function PaymentsPage() {
 
         {pendingRows && (
           <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-            <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
               <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {pendingRows.length}건 파싱 완료 — 납부월 선택:
               </span>
@@ -338,7 +338,7 @@ export default function PaymentsPage() {
         {monthSummaries.length > 0 && (
           <div className="mt-8">
             <h3 className="text-sm font-medium text-zinc-500 mb-3">등록된 수납 내역</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {monthSummaries.map((s) => (
                 <button
                   key={s.month}
@@ -398,7 +398,7 @@ export default function PaymentsPage() {
 
       {pendingRows && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-          <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               {pendingRows.length}건 파싱 완료 — 납부월 선택:
             </span>
@@ -451,7 +451,7 @@ export default function PaymentsPage() {
       </div>
 
       {/* 검색 */}
-      <div className="mt-4 flex flex-wrap gap-3">
+      <div className="mt-4 flex gap-3 overflow-x-auto [&>*]:flex-shrink-0">
         <input
           type="text"
           placeholder="학생 / 수납명 검색"
@@ -477,7 +477,7 @@ export default function PaymentsPage() {
         {loading ? (
           <div className="p-8 text-center text-sm text-zinc-400">불러오는 중...</div>
         ) : (
-          <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+          <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
             <thead>
               <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
                 <th className="px-3 py-2 text-left font-medium text-zinc-500">#</th>

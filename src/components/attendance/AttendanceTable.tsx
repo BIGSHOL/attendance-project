@@ -15,14 +15,21 @@ interface Props {
   year: number;
   month: number;
   salaryConfig: SalaryConfig;
+  /** 시트 F열 동기화 결과 — student_id → salary_item_id */
+  tierOverrides?: Record<string, string>;
   highlightWeekends: boolean;
   showExpectedBilling: boolean;
   showSettlement: boolean;
   sortMode: SortMode;
+  canCustomValue?: boolean;
+  /** 세션 모드 등에서 날짜 범위를 외부에서 지정할 때 사용 */
+  overrideDates?: Date[];
   cellWidthPx: number;
   cellHeightPx: number;
   hiddenDateSet: Set<string>;
   hiddenStudentSet: Set<string>;
+  holidayDateSet?: Set<string>;
+  holidayNameMap?: Map<string, string>;
   onHideDate: (dateKey: string) => void;
   onHideStudent: (studentId: string) => void;
   onAttendanceChange: (studentId: string, dateKey: string, value: number | null) => void;
@@ -36,14 +43,19 @@ export default function AttendanceTable({
   year,
   month,
   salaryConfig,
+  tierOverrides,
   highlightWeekends,
   showExpectedBilling,
   showSettlement,
   sortMode,
+  canCustomValue,
+  overrideDates,
   cellWidthPx,
   cellHeightPx,
   hiddenDateSet,
   hiddenStudentSet,
+  holidayDateSet,
+  holidayNameMap,
   onHideDate,
   onHideStudent,
   onAttendanceChange,
@@ -51,7 +63,10 @@ export default function AttendanceTable({
   onCellColorChange,
   onHomeworkChange,
 }: Props) {
-  const allDates = useMemo(() => getDaysInMonth(year, month), [year, month]);
+  const allDates = useMemo(
+    () => overrideDates && overrideDates.length > 0 ? overrideDates : getDaysInMonth(year, month),
+    [overrideDates, year, month]
+  );
   const dates = useMemo(
     () => allDates.filter((d) => !hiddenDateSet.has(formatDateKey(d))),
     [allDates, hiddenDateSet]
@@ -190,11 +205,14 @@ export default function AttendanceTable({
           year={year}
           month={month}
           salaryConfig={salaryConfig}
+          tierOverrideId={tierOverrides?.[student.id]}
           highlightWeekends={highlightWeekends}
           showExpectedBilling={showExpectedBilling}
           showSettlement={showSettlement}
           cellWidthPx={cellWidthPx}
           cellHeightPx={cellHeightPx}
+          holidayDateSet={holidayDateSet}
+          holidayNameMap={holidayNameMap}
           onHideStudent={onHideStudent}
           onCellClick={handleCellClick}
           onCellRightClick={handleCellRightClick}
@@ -248,11 +266,14 @@ export default function AttendanceTable({
               year={year}
               month={month}
               salaryConfig={salaryConfig}
+              tierOverrideId={tierOverrides?.[student.id]}
               highlightWeekends={highlightWeekends}
               showExpectedBilling={showExpectedBilling}
               showSettlement={showSettlement}
               cellWidthPx={cellWidthPx}
               cellHeightPx={cellHeightPx}
+              holidayDateSet={holidayDateSet}
+              holidayNameMap={holidayNameMap}
               onHideStudent={onHideStudent}
               onCellClick={handleCellClick}
               onCellRightClick={handleCellRightClick}
@@ -272,18 +293,21 @@ export default function AttendanceTable({
 
   return (
     <>
-      <table className="text-sm border-collapse border-separate border-spacing-0 table-fixed">
+      <table
+        className="text-sm border-separate border-spacing-0 table-fixed [&_tbody_td]:border-b [&_tbody_td]:border-zinc-200 dark:[&_tbody_td]:border-zinc-700"
+        style={{ width: "max-content" }}
+      >
         <thead className="sticky top-0 z-[30]">
           <tr className="bg-zinc-800 text-white shadow-md">
-            <th className="sticky left-0 z-[40] bg-zinc-800 w-8 px-1 py-2 text-center text-[12px]">#</th>
-            <th className="sticky left-[32px] z-[40] bg-zinc-800 w-[90px] px-2 py-2 text-left text-[12px]">이름</th>
-            <th className="sticky left-[122px] z-[40] bg-zinc-800 w-[80px] px-1 py-2 text-left text-[12px]">학교</th>
-            <th className="sticky left-[202px] z-[40] bg-zinc-800 w-[140px] px-1 py-2 text-center text-[12px]">요일</th>
+            <th className="sticky left-0 z-[40] bg-zinc-800 w-8 px-1 py-2 text-center text-[12px] border-r border-zinc-600">#</th>
+            <th className="sticky left-[32px] z-[40] bg-zinc-800 w-[90px] px-2 py-2 text-left text-[12px] border-r border-zinc-600">이름</th>
+            <th className="sticky left-[122px] z-[40] bg-zinc-800 w-[80px] px-1 py-2 text-left text-[12px] border-r border-zinc-600">학교</th>
+            <th className="sticky left-[202px] z-[40] bg-zinc-800 w-[140px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">요일</th>
             {showExpectedBilling && (
-              <th className="sticky left-[342px] z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px]">예정액</th>
+              <th className="sticky left-[342px] z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">예정액</th>
             )}
             {showSettlement && (
-              <th className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px]`}>
+              <th className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600`}>
                 정산액
               </th>
             )}
@@ -292,10 +316,12 @@ export default function AttendanceTable({
             </th>
             {dateInfos.map((info, i) => {
               const dateKey = formatDateKey(dates[i]);
+              const holidayName = holidayNameMap?.get(dateKey);
               return (
                 <th
                   key={i}
                   style={{ width: cellWidthPx, minWidth: cellWidthPx }}
+                  title={holidayName ? `🎉 ${holidayName}` : undefined}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     if (confirm(`${info.date}일 열을 숨기시겠습니까?`)) {
@@ -303,12 +329,12 @@ export default function AttendanceTable({
                     }
                   }}
                   className={`px-0 py-1 text-center cursor-context-menu border-r border-zinc-600 ${
-                    info.isToday ? "bg-blue-600" : ""
+                    info.isToday ? "bg-blue-600" : holidayName ? "bg-red-900/60" : ""
                   }`}
                 >
                   <div
                     className={`text-[11px] ${
-                      info.isSunday
+                      holidayName || info.isSunday
                         ? "text-red-300"
                         : info.isSaturday
                         ? "text-blue-300"
@@ -334,6 +360,7 @@ export default function AttendanceTable({
           currentValue={contextStudent.attendance?.[contextMenu.dateKey]}
           currentMemo={contextStudent.memos?.[contextMenu.dateKey]}
           currentColor={contextStudent.cellColors?.[contextMenu.dateKey]}
+          canCustomValue={canCustomValue}
           onSelectValue={(v) => onAttendanceChange(contextMenu.studentId, contextMenu.dateKey, v)}
           onSaveMemo={(m) => onMemoChange(contextMenu.studentId, contextMenu.dateKey, m)}
           onSelectColor={(c) => onCellColorChange(contextMenu.studentId, contextMenu.dateKey, c)}

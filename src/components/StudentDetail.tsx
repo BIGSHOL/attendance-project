@@ -2,14 +2,12 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { doc, getDoc, collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { createClient } from "@/lib/supabase/client";
 import { useStudents } from "@/hooks/useStudents";
 import { useStaff } from "@/hooks/useStaff";
 import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
 import { toSubjectLabel } from "@/lib/labelMap";
-import type { Student, Enrollment } from "@/types";
+import type { Student } from "@/types";
 
 interface AttendanceRow {
   id: string;
@@ -62,38 +60,22 @@ export default function StudentDetail({ studentId }: Props) {
       return;
     }
 
-    // 2차: 훅에 없으면 Firestore에서 직접 로드
+    // 2차: 훅에 없으면 API로 직접 로드
     const loadStudent = async () => {
       setStudentLoading(true);
       setStudentError(null);
       try {
-        console.log("[StudentDetail] Direct load:", studentId);
-        const snap = await getDoc(doc(db, "students", studentId));
-        console.log("[StudentDetail] Exists:", snap.exists());
-        if (!snap.exists()) {
+        const res = await fetch(`/api/students/${encodeURIComponent(studentId)}`, {
+          cache: "no-store",
+        });
+        if (res.status === 404) {
           setStudentError(`학생 문서를 찾을 수 없습니다. (id: ${studentId})`);
           setStudent(null);
+        } else if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
         } else {
-          const data = snap.data() as Omit<Student, "id">;
-          const enrollSnap = await getDocs(
-            collection(db, "students", studentId, "enrollments")
-          );
-          const enrollments: Enrollment[] = enrollSnap.docs.map((eDoc) => {
-            const d = eDoc.data();
-            return {
-              subject: d.subject || "",
-              classId: d.classId || "",
-              className: d.className || "",
-              staffId: d.staffId || "",
-              teacher: d.teacher || "",
-              days: d.days || [],
-              schedule: d.schedule || [],
-              startDate: d.startDate || "",
-              endDate: d.endDate || "",
-              onHold: d.onHold || false,
-            };
-          });
-          setStudent({ id: studentId, ...data, enrollments });
+          const data = (await res.json()) as Student;
+          setStudent(data);
         }
       } catch (e) {
         console.error("[StudentDetail] Error:", e);
@@ -249,7 +231,7 @@ export default function StudentDetail({ studentId }: Props) {
       </div>
 
       {/* 요약 카드 */}
-      <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="mt-6 grid grid-cols-4 gap-4">
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">총 출석 시수</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
@@ -318,7 +300,7 @@ export default function StudentDetail({ studentId }: Props) {
           ) : monthPayments.length === 0 ? (
             <div className="p-4 text-sm text-zinc-400">수납 내역이 없습니다.</div>
           ) : (
-            <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+            <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
                   <th className="px-3 py-2 text-left font-medium text-zinc-500">수납명</th>

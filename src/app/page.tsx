@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import Header from "@/components/Header";
 import Nav from "@/components/Nav";
 import AuthGuard from "@/components/AuthGuard";
 import AttendancePage from "@/components/AttendancePage";
@@ -14,9 +13,8 @@ export default async function Home() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
-      <Header email={user.email || ""} />
-      <Nav />
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+      <Nav email={user.email || ""} />
       <main className="flex-1 flex flex-col min-h-0">
         <AuthGuard>
           <AttendancePage />

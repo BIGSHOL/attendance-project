@@ -32,43 +32,49 @@ body {
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(161, 161, 170, 0.4) transparent;
+  scrollbar-color: rgba(82, 82, 91, 0.85) rgba(228, 228, 231, 0.5);
 }
 
 /* WebKit (Chrome/Edge/Safari) */
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
 }
 
 *::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(228, 228, 231, 0.5);
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(161, 161, 170, 0.4);
-  border-radius: 4px;
+  background-color: rgba(82, 82, 91, 0.85);
+  border-radius: 6px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(113, 113, 122, 0.6);
+  background-color: rgba(39, 39, 42, 0.95);
   background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-corner {
-  background: transparent;
+  background: rgba(228, 228, 231, 0.5);
 }
 
 @media (prefers-color-scheme: dark) {
   * {
-    scrollbar-color: rgba(82, 82, 91, 0.5) transparent;
+    scrollbar-color: rgba(161, 161, 170, 0.85) rgba(39, 39, 42, 0.5);
+  }
+  *::-webkit-scrollbar-track {
+    background: rgba(39, 39, 42, 0.5);
   }
   *::-webkit-scrollbar-thumb {
-    background-color: rgba(82, 82, 91, 0.5);
+    background-color: rgba(161, 161, 170, 0.85);
   }
   *::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(113, 113, 122, 0.7);
+    background-color: rgba(212, 212, 216, 0.95);
+  }
+  *::-webkit-scrollbar-corner {
+    background: rgba(39, 39, 42, 0.5);
   }
 }

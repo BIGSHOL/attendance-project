@@ -12,7 +12,11 @@ const baseNavItems = [
   { href: "/settlement", label: "정산", icon: "💰" },
 ];
 
-export default function Nav() {
+interface NavProps {
+  email?: string;
+}
+
+export default function Nav({ email }: NavProps) {
   const pathname = usePathname();
   const { isMaster, isAdmin } = useUserRole();
 
@@ -23,28 +27,43 @@ export default function Nav() {
   ];
 
   return (
-    <nav className="flex items-center gap-1 border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900">
-      {navItems.map((item) => {
-        const isActive =
-          item.href === "/"
-            ? pathname === "/"
-            : pathname.startsWith(item.href);
+    <nav className="flex items-center border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-center gap-0.5 rounded-sm border border-zinc-200 bg-zinc-100 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
+        {navItems.map((item) => {
+          const isActive =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(item.href);
 
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              isActive
-                ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
-                : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
-            }`}
-          >
-            <span>{item.icon}</span>
-            {item.label}
-          </Link>
-        );
-      })}
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs font-bold transition-all ${
+                isActive
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:bg-white/60 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700/60 dark:hover:text-zinc-200"
+              }`}
+            >
+              <span>{item.icon}</span>
+              {item.label}
+            </Link>
+          );
+        })}
+      </div>
+      {email && (
+        <div className="ml-auto flex items-center gap-3 pr-1">
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">{email}</span>
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="rounded-sm border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              로그아웃
+            </button>
+          </form>
+        </div>
+      )}
     </nav>
   );
 }

@@ -20,29 +20,29 @@ export default function GroupHeader({
   colSpan,
 }: Props) {
   return (
-    <tr className="bg-slate-100 dark:bg-zinc-800">
+    <tr
+      onClick={onToggleCollapse}
+      className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 cursor-pointer select-none"
+    >
       <td colSpan={colSpan} className="px-2 py-1.5">
         <div className="flex items-center gap-2">
-          <button
-            onClick={onToggleCollapse}
-            className="flex items-center gap-1.5 text-sm font-semibold text-zinc-700 hover:text-zinc-900 dark:text-zinc-300"
-          >
+          <div className="flex items-center gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
             <span className="text-[12px]">{isCollapsed ? "▶" : "▼"}</span>
             <span>{isCollapsed ? "📁" : "📂"}</span>
             <span>{groupName || "미분류"}</span>
             <span className="font-normal text-zinc-400">({studentCount}명)</span>
-          </button>
+          </div>
 
           {onMoveUp && onMoveDown && (
             <div className="flex gap-0.5 ml-auto">
               <button
-                onClick={onMoveUp}
+                onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
                 className="rounded px-1 py-0.5 text-[12px] text-zinc-400 hover:bg-zinc-200 hover:text-zinc-600"
               >
                 ▲
               </button>
               <button
-                onClick={onMoveDown}
+                onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
                 className="rounded px-1 py-0.5 text-[12px] text-zinc-400 hover:bg-zinc-200 hover:text-zinc-600"
               >
                 ▼

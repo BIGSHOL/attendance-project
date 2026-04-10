@@ -16,6 +16,7 @@ export interface UserRoleData {
   staff_name: string | null;
   salary_type: SalaryType;
   commission_days: string[];  // ["월", "화", ...]
+  blog_required: boolean;     // 블로그 작성 의무 여부 (미작성 시 -2% 패널티)
   approved_at: string | null;
   approved_by: string | null;
   created_at: string;

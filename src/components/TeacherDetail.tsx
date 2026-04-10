@@ -5,7 +5,13 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
+import { useUserRole } from "@/hooks/useUserRole";
+import { useTeacherSheets } from "@/hooks/useTeacherSheets";
+import { useSalaryConfig } from "@/hooks/useSalaryConfig";
+import { useTeacherBlogPosts } from "@/hooks/useTeacherBlogPosts";
+import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { toSubjectLabel } from "@/lib/labelMap";
+import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import type { PaymentLite } from "@/lib/studentPaymentMatcher";
 
 interface AttendanceRow {
@@ -39,10 +45,59 @@ function shiftMonth(m: string, delta: number): string {
 export default function TeacherDetail({ teacherId }: Props) {
   const { staff, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
+  const { isMaster, isAdmin } = useUserRole();
+  const { sheets, upsertSheet, deleteSheet, markSynced } = useTeacherSheets();
+  const { config: salaryConfig } = useSalaryConfig();
+
+  // 블로그 의무 설정 (staff_id 기반, 계정 매핑과 무관)
+  const { isBlogRequired, setBlogRequired, saving: blogRequiredSaving } =
+    useTeacherSettings(teacherId);
+  const blogRequired = isBlogRequired(teacherId);
+
+  const handleToggleBlogRequired = () =>
+    setBlogRequired(teacherId, !blogRequired);
+
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
+  const [blogDatesInput, setBlogDatesInput] = useState<string>("");
+  const [blogNoteInput, setBlogNoteInput] = useState<string>("");
+
+  // 선택된 월의 연/월 파싱
+  const blogYear = parseInt(selectedMonth.slice(0, 4));
+  const blogMonth = parseInt(selectedMonth.slice(4));
+  const { getPost, savePost } = useTeacherBlogPosts(teacherId, blogYear, blogMonth);
+  const currentBlogPost = getPost(blogYear, blogMonth);
+
+  // selectedMonth 변경 시 blog 기록 불러오기
+  useEffect(() => {
+    if (currentBlogPost) {
+      setBlogDatesInput((currentBlogPost.dates || []).join(", "));
+      setBlogNoteInput(currentBlogPost.note || "");
+    } else {
+      setBlogDatesInput("");
+      setBlogNoteInput("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth, currentBlogPost?.id]);
+
+  const handleBlogSave = async () => {
+    const dates = blogDatesInput
+      .split(/[,\s]+/)
+      .map((d) => d.trim())
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    await savePost(teacherId, blogYear, blogMonth, dates, blogNoteInput);
+  };
   const [payments, setPayments] = useState<PaymentLite[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // 시트 URL 편집 상태
+  const currentSheet = useMemo(
+    () => sheets.find((s) => s.teacher_id === teacherId),
+    [sheets, teacherId]
+  );
+  const [sheetUrlDraft, setSheetUrlDraft] = useState("");
+  const [editingSheet, setEditingSheet] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<TeacherSyncResult | null>(null);
 
   const teacher = useMemo(
     () => staff.find((s) => s.id === teacherId),
@@ -191,29 +246,272 @@ export default function TeacherDetail({ teacherId }: Props) {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))}
-            className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            aria-label="이전 달"
-          >
-            ◀
-          </button>
-          <span className="min-w-[110px] text-center text-sm font-bold text-zinc-900 dark:text-zinc-100">
-            {formatMonth(selectedMonth)}
-          </span>
-          <button
-            onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))}
-            className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            aria-label="다음 달"
-          >
-            ▶
-          </button>
+        <div className="flex items-center gap-2">
+          {/* 블로그 의무 토글 (관리자 이상) */}
+          {isAdmin && (
+            <button
+              onClick={handleToggleBlogRequired}
+              disabled={blogRequiredSaving}
+              className={`rounded-sm border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                blogRequired
+                  ? "border-blue-500 bg-blue-500 text-white hover:bg-blue-600"
+                  : "border-zinc-300 bg-white text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+              }`}
+              title={
+                blogRequired
+                  ? "블로그 작성 의무 ON (미작성 시 -2% 차감)"
+                  : "블로그 작성 의무 OFF"
+              }
+            >
+              📝 블로그 의무 {blogRequired ? "ON" : "OFF"}
+            </button>
+          )}
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))}
+              className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="이전 달"
+            >
+              ◀
+            </button>
+            <span className="min-w-[110px] text-center text-sm font-bold text-zinc-900 dark:text-zinc-100">
+              {formatMonth(selectedMonth)}
+            </span>
+            <button
+              onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))}
+              className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="다음 달"
+            >
+              ▶
+            </button>
+          </div>
         </div>
       </div>
 
+      {/* Google Sheets 연동 (마스터만) */}
+      {isMaster && (
+        <div className="mt-6 rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              📄 Google Sheets 출석부
+            </h3>
+            {currentSheet?.last_synced_at && (
+              <span className="text-xs text-zinc-400">
+                마지막 동기화: {new Date(currentSheet.last_synced_at).toLocaleString("ko-KR")}
+              </span>
+            )}
+          </div>
+
+          {editingSheet || !currentSheet ? (
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={sheetUrlDraft}
+                onChange={(e) => setSheetUrlDraft(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                className="flex-1 rounded-sm border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <button
+                onClick={async () => {
+                  if (!sheetUrlDraft.trim()) return;
+                  await upsertSheet(teacherId, sheetUrlDraft.trim());
+                  setEditingSheet(false);
+                  setSheetUrlDraft("");
+                }}
+                disabled={!sheetUrlDraft.trim()}
+                className="rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-zinc-300"
+              >
+                저장
+              </button>
+              {currentSheet && (
+                <button
+                  onClick={() => { setEditingSheet(false); setSheetUrlDraft(""); }}
+                  className="rounded-sm border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  취소
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <a
+                href={currentSheet.sheet_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 truncate text-sm text-blue-600 hover:underline dark:text-blue-400"
+              >
+                {currentSheet.sheet_url}
+              </a>
+              <button
+                onClick={async () => {
+                  if (!currentSheet || syncing) return;
+                  // 선택된 월(YYYYMM) → YYYY-MM 형식으로 변환
+                  const exactMonth = `${selectedMonth.slice(0, 4)}-${selectedMonth.slice(4, 6)}`;
+                  setSyncing(true);
+                  setSyncResult(null);
+                  try {
+                    const result = await syncTeacherSheet(
+                      teacherId,
+                      teacher.name,
+                      currentSheet.sheet_url,
+                      students,
+                      "2026-03",
+                      exactMonth,
+                      salaryConfig
+                    );
+                    setSyncResult(result);
+                    if (result.success) await markSynced(teacherId);
+                  } finally {
+                    setSyncing(false);
+                  }
+                }}
+                disabled={syncing}
+                className="rounded-sm bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-zinc-300"
+                title={`${formatMonth(selectedMonth)} 탭만 동기화`}
+              >
+                {syncing ? "..." : `${formatMonth(selectedMonth)} 동기화`}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!currentSheet || syncing) return;
+                  if (!confirm("2026-03 이후 모든 월별 탭을 동기화합니다. 계속하시겠습니까?")) return;
+                  setSyncing(true);
+                  setSyncResult(null);
+                  try {
+                    const result = await syncTeacherSheet(
+                      teacherId,
+                      teacher.name,
+                      currentSheet.sheet_url,
+                      students,
+                      "2026-03",
+                      undefined,
+                      salaryConfig
+                    );
+                    setSyncResult(result);
+                    if (result.success) await markSynced(teacherId);
+                  } finally {
+                    setSyncing(false);
+                  }
+                }}
+                disabled={syncing}
+                className="rounded-sm border border-emerald-600 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:border-zinc-300 disabled:text-zinc-300"
+                title="2026-03 이후 모든 월별 탭 동기화"
+              >
+                전체
+              </button>
+              <button
+                onClick={() => {
+                  setSheetUrlDraft(currentSheet.sheet_url);
+                  setEditingSheet(true);
+                }}
+                className="rounded-sm border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                수정
+              </button>
+              <button
+                onClick={async () => {
+                  if (!confirm("시트 연결을 삭제하시겠습니까?")) return;
+                  await deleteSheet(teacherId);
+                }}
+                className="rounded-sm border border-red-200 px-3 py-2 text-sm text-red-500 hover:bg-red-50"
+              >
+                삭제
+              </button>
+            </div>
+          )}
+
+          {/* 동기화 결과 */}
+          {syncResult && (
+            <div className="mt-3 rounded-sm border border-zinc-200 bg-zinc-50 p-3 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              {syncResult.error && (
+                <div className="text-red-600 mb-1">❌ {syncResult.error}</div>
+              )}
+              {syncResult.months.length > 0 && (
+                <div className="space-y-1">
+                  <div className="font-medium text-zinc-700 dark:text-zinc-300">
+                    처리 결과 ({syncResult.months.length}개 월)
+                  </div>
+                  {syncResult.months.map((m, i) => (
+                    <div key={i} className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                      <span className="font-mono">{m.year}.{String(m.month).padStart(2, "0")}</span>
+                      {m.error ? (
+                        <span className="text-red-600">❌ {m.error}</span>
+                      ) : (
+                        <span>
+                          ✓ 매칭 {m.matched}/{m.total}
+                          {m.unmatched > 0 && <span className="text-amber-600"> (실패 {m.unmatched})</span>}
+                          {m.memoCount > 0 && <span className="text-zinc-500"> · 메모 {m.memoCount}개</span>}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 블로그 작성 기록 (blog_required 선생님만) */}
+      {blogRequired && (
+        <div className="mt-6 border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-300">
+              📝 {formatMonth(selectedMonth)} 블로그 작성 기록
+            </h3>
+            {currentBlogPost && currentBlogPost.dates.length > 0 ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                작성 {currentBlogPost.dates.length}건
+              </span>
+            ) : (
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900 dark:text-red-300">
+                미작성 (-2% 패널티)
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            <div>
+              <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">
+                작성 날짜 (YYYY-MM-DD, 쉼표 또는 공백으로 여러 개 입력)
+              </label>
+              <input
+                type="text"
+                value={blogDatesInput}
+                onChange={(e) => setBlogDatesInput(e.target.value)}
+                placeholder="예: 2026-04-05, 2026-04-15"
+                className="w-full rounded-sm border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">
+                메모 (선택)
+              </label>
+              <input
+                type="text"
+                value={blogNoteInput}
+                onChange={(e) => setBlogNoteInput(e.target.value)}
+                placeholder="예: 4월 신입생 환영 포스팅"
+                className="w-full rounded-sm border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-zinc-500">
+                ※ 해당 월 블로그 미작성 시 정산 비율에서 -2% 차감됩니다.
+              </p>
+              <button
+                onClick={handleBlogSave}
+                className="rounded-sm bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 요약 */}
-      <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="mt-6 grid grid-cols-4 gap-4">
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">담당 학생</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
@@ -251,7 +549,7 @@ export default function TeacherDetail({ teacherId }: Props) {
           ) : studentRows.length === 0 ? (
             <div className="p-4 text-sm text-zinc-400">데이터가 없습니다.</div>
           ) : (
-            <table className="w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300">
+            <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
                   <th className="px-3 py-2 text-left font-medium text-zinc-500">#</th>
