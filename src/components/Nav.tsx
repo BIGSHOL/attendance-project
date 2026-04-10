@@ -14,10 +14,11 @@ const baseNavItems = [
 
 export default function Nav() {
   const pathname = usePathname();
-  const { isMaster } = useUserRole();
+  const { isMaster, isAdmin } = useUserRole();
 
   const navItems = [
     ...baseNavItems,
+    ...(isAdmin ? [{ href: "/attendance-import", label: "출석부 업로드", icon: "📥" }] : []),
     ...(isMaster ? [{ href: "/admin/users", label: "사용자 관리", icon: "👤" }] : []),
   ];
 

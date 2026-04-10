@@ -18,11 +18,11 @@ export default function TeacherList() {
   const { isHidden, toggleHidden } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
 
-  // 선생님 ID → 매핑된 구글 이메일
+  // 선생님 ID → 매핑된 구글 이메일 (선생님/관리자 매핑 모두 포함)
   const staffEmailMap = useMemo(() => {
     const map: Record<string, string> = {};
     userRoles.forEach((u) => {
-      if (u.role === "teacher" && u.staff_id) {
+      if ((u.role === "teacher" || u.role === "admin") && u.staff_id) {
         map[u.staff_id] = u.email;
       }
     });

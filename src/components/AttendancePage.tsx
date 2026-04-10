@@ -66,9 +66,11 @@ export default function AttendancePage() {
   const { userRole, isAdmin, isTeacher } = useUserRole();
   const { users: userRoles } = useAllUserRoles();
 
-  // 선택된 선생님의 급여 유형
+  // 선택된 선생님의 급여 유형 (선생님/관리자 매핑 모두 포함)
   const selectedTeacherSalaryInfo = useMemo(() => {
-    const u = userRoles.find((ur) => ur.role === "teacher" && ur.staff_id === selectedTeacherId);
+    const u = userRoles.find(
+      (ur) => (ur.role === "teacher" || ur.role === "admin") && ur.staff_id === selectedTeacherId
+    );
     return {
       type: u?.salary_type || "commission" as const,
       days: u?.commission_days || [],

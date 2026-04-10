@@ -67,10 +67,12 @@ export default function UserManagement() {
     staffId?: string,
     staffName?: string
   ) => {
+    // 승인 대기로 돌아갈 때만 매핑 초기화, 관리자/선생님은 매핑 유지
+    const preserveMapping = newRole === "teacher" || newRole === "admin";
     await updateUser(userId, {
       role: newRole,
-      staff_id: newRole === "teacher" ? staffId || null : null,
-      staff_name: newRole === "teacher" ? staffName || null : null,
+      staff_id: preserveMapping ? staffId || null : null,
+      staff_name: preserveMapping ? staffName || null : null,
       approved_at: newRole !== "pending" ? new Date().toISOString() : null,
     });
   };
@@ -149,6 +151,7 @@ export default function UserManagement() {
             {paged.map((u) => {
               const isSaving = saving === u.id;
               const isTeacher = u.role === "teacher";
+              const canMap = u.role === "teacher" || u.role === "admin";
               return (
                 <tr
                   key={u.id}
@@ -181,17 +184,17 @@ export default function UserManagement() {
 
                   {/* 선생님 매핑 */}
                   <td className="px-4 py-3">
-                    {isTeacher ? (
+                    {canMap ? (
                       <select
                         value={u.staff_id || ""}
                         onChange={(e) => {
                           const t = teachers.find((tt) => tt.id === e.target.value);
-                          handleRoleChange(u.id, "teacher", t?.id, t?.name);
+                          handleRoleChange(u.id, u.role, t?.id, t?.name);
                         }}
                         disabled={isSaving}
                         className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
                       >
-                        <option value="">선택하세요</option>
+                        <option value="">선택 안 함</option>
                         {teachers.map((t) => (
                           <option key={t.id} value={t.id}>
                             {t.name}
@@ -206,7 +209,7 @@ export default function UserManagement() {
 
                   {/* 급여 유형 */}
                   <td className="px-4 py-3">
-                    {isTeacher ? (
+                    {canMap && u.staff_id ? (
                       <div className="flex flex-col gap-1">
                         <select
                           value={u.salary_type || "commission"}

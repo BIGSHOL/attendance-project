@@ -31,11 +31,11 @@ export default function SettlementPage() {
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
 
-  // 선생님 id → 급여 유형 매핑
+  // 선생님 id → 급여 유형 매핑 (선생님/관리자 매핑 모두 포함)
   const teacherSalaryTypeMap = useMemo(() => {
     const map = new Map<string, { type: SalaryType; days: string[] }>();
     userRoles.forEach((u) => {
-      if (u.role === "teacher" && u.staff_id) {
+      if ((u.role === "teacher" || u.role === "admin") && u.staff_id) {
         map.set(u.staff_id, {
           type: u.salary_type || "commission",
           days: u.commission_days || [],
