@@ -23,7 +23,14 @@ export async function GET(request: NextRequest) {
       .eq("staff_id", staffId)
       .maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json(data || { staff_id: staffId, blog_required: false });
+    return NextResponse.json(
+      data || {
+        staff_id: staffId,
+        blog_required: false,
+        salary_type: "commission",
+        commission_days: [],
+      }
+    );
   }
 
   const { data, error } = await supabase.from("teacher_settings").select("*");
@@ -33,7 +40,8 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/teacher-settings
- * body: { staff_id, blog_required }
+ * body: { staff_id, blog_required?, salary_type?, commission_days? }
+ * - 전달된 필드만 부분 업데이트 (기존 값 유지)
  * 관리자 이상만
  */
 export async function POST(request: NextRequest) {
@@ -42,22 +50,40 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const body = await request.json();
-  const { staff_id, blog_required } = body || {};
+  const { staff_id, blog_required, salary_type, commission_days } = body || {};
 
   if (!staff_id) {
     return NextResponse.json({ error: "staff_id 필수" }, { status: 400 });
   }
+  if (salary_type && !["commission", "fixed", "mixed"].includes(salary_type)) {
+    return NextResponse.json({ error: "잘못된 salary_type" }, { status: 400 });
+  }
+
+  // 기존 row 조회 후 partial merge
+  const { data: existing } = await supabase
+    .from("teacher_settings")
+    .select("*")
+    .eq("staff_id", staff_id)
+    .maybeSingle();
+
+  const merged = {
+    staff_id,
+    blog_required:
+      blog_required !== undefined ? !!blog_required : !!existing?.blog_required,
+    salary_type:
+      salary_type !== undefined
+        ? salary_type
+        : existing?.salary_type || "commission",
+    commission_days:
+      commission_days !== undefined
+        ? commission_days
+        : existing?.commission_days || [],
+    updated_at: new Date().toISOString(),
+  };
 
   const { data, error } = await supabase
     .from("teacher_settings")
-    .upsert(
-      {
-        staff_id,
-        blog_required: !!blog_required,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "staff_id" }
-    )
+    .upsert(merged, { onConflict: "staff_id" })
     .select()
     .single();
 

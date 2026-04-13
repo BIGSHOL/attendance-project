@@ -19,7 +19,7 @@ export function useAllAttendance(year: number, month: number) {
     setLoading(true);
     const { data, error } = await supabaseRef.current
       .from("attendance")
-      .select("*")
+      .select("id, teacher_id, student_id, date, hours, memo, cell_color, homework, is_makeup")
       .gte("date", startDate)
       .lte("date", endDate);
 

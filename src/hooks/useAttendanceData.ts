@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 
 export interface AttendanceRow {
   id: string;
@@ -45,6 +45,11 @@ export function useAttendanceData(
 ) {
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // optimisticUpdate 내부에서 최신 records 를 참조하되 useCallback 의존성은 비움
+  const recordsRef = useRef<AttendanceRow[]>([]);
+  useEffect(() => {
+    recordsRef.current = records;
+  }, [records]);
 
   const overrideStart = rangeOverride?.startDate;
   const overrideEnd = rangeOverride?.endDate;
@@ -88,7 +93,7 @@ export function useAttendanceData(
       patch: Partial<Pick<AttendanceRow, "hours" | "memo" | "cell_color" | "homework">>,
       payload: UpsertPayload
     ) => {
-      const existing = records.find(
+      const existing = recordsRef.current.find(
         (r) => r.student_id === studentId && r.date === date
       );
 
@@ -127,7 +132,7 @@ export function useAttendanceData(
         });
       }
     },
-    [records]
+    []
   );
 
   const upsertAttendance = useCallback(
@@ -174,8 +179,8 @@ export function useAttendanceData(
     [optimisticUpdate, teacherId]
   );
 
-  // records → 학생별 attendance/memo/color/homework 맵으로 변환
-  const studentDataMap = useCallback(() => {
+  // records → 학생별 attendance/memo/color/homework 맵으로 변환 (메모이즈된 값)
+  const studentDataMap = useMemo(() => {
     const map = new Map<
       string,
       {
@@ -187,15 +192,11 @@ export function useAttendanceData(
     >();
 
     for (const r of records) {
-      if (!map.has(r.student_id)) {
-        map.set(r.student_id, {
-          attendance: {},
-          memos: {},
-          cellColors: {},
-          homework: {},
-        });
+      let d = map.get(r.student_id);
+      if (!d) {
+        d = { attendance: {}, memos: {}, cellColors: {}, homework: {} };
+        map.set(r.student_id, d);
       }
-      const d = map.get(r.student_id)!;
       if (r.hours > 0 || r.hours === 0) d.attendance[r.date] = r.hours;
       if (r.memo) d.memos[r.date] = r.memo;
       if (r.cell_color) d.cellColors[r.date] = r.cell_color;

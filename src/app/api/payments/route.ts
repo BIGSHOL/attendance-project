@@ -61,6 +61,9 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const month = searchParams.get("month");
+  // months=a,b,c 로 여러 billing_month 포맷을 한 번에 필터링 (IN)
+  const monthsCsv = searchParams.get("months");
+  const monthsList = monthsCsv ? monthsCsv.split(",").map((s) => s.trim()).filter(Boolean) : null;
 
   // PostgREST 기본 1,000건 제한 우회 (월별 수납이 1000건 초과 가능)
   const pageSize = 1000;
@@ -73,7 +76,8 @@ export async function GET(request: NextRequest) {
       .order("student_name", { ascending: true })
       .order("charge_amount", { ascending: false })
       .range(from, from + pageSize - 1);
-    if (month) q = q.eq("billing_month", month);
+    if (monthsList && monthsList.length > 0) q = q.in("billing_month", monthsList);
+    else if (month) q = q.eq("billing_month", month);
 
     const { data, error } = await q;
     if (error) {

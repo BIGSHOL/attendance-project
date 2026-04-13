@@ -24,14 +24,17 @@ export function useLocalStorage<T>(key: string, defaultValue: T) {
     setHydrated(true);
   }, [key]);
 
-  // 변경 시 저장 — hydrated 이후부터
+  // 변경 시 저장 — hydrated 이후부터, debounce 로 연속 입력 시 쓰기 묶음
   useEffect(() => {
     if (!hydrated) return;
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // 무시
-    }
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch {
+        // 무시
+      }
+    }, 150);
+    return () => clearTimeout(t);
   }, [key, value, hydrated]);
 
   return [value, setValue] as const;

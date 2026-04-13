@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, Fragment } from "react";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
 import { useAllAttendance } from "@/hooks/useAllAttendance";
@@ -11,14 +11,17 @@ import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
-import type { Teacher } from "@/types";
+import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
   calculateStudentSalary,
   matchSalarySetting,
   calculateFinalSalary,
   isAttendanceCountable,
+  subjectToSalarySubject,
 } from "@/lib/salary";
 import { toSubjectLabel } from "@/lib/labelMap";
 
@@ -26,6 +29,9 @@ export default function SettlementPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [tab, setTab] = useLocalStorage<"settlement" | "hours">("settlement.tab", "settlement");
+  const [hoursSubjectFilter, setHoursSubjectFilter] = useLocalStorage<string[]>("settlement.hoursSubjects", []);
+  const [hoursSearch, setHoursSearch] = useLocalStorage<string>("settlement.hoursSearch", "");
   const { config: salaryConfig } = useSalaryConfig();
 
   const { teachers, loading: staffLoading } = useStaff();
@@ -35,11 +41,13 @@ export default function SettlementPage() {
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
   const { hasPostForTeacher } = useAllBlogPosts(year, month);
-  const { isBlogRequired } = useTeacherSettings();
+  const { isBlogRequired, getSalary } = useTeacherSettings();
   const { payments: monthPayments, loading: paymentsLoading } = usePaymentsForMonth(year, month);
+  const { overrides: tierOverrides } = useAllTierOverrides();
 
-  // 선생님 id → 급여 유형 매핑 (user_roles 기반)
-  const teacherSalaryTypeMap = useMemo(() => {
+  // 선생님 id → 급여 유형 매핑
+  // 우선순위: teacher_settings(staff_id) → user_roles fallback → 기본 commission
+  const userRoleSalaryMap = useMemo(() => {
     const map = new Map<string, { type: SalaryType; days: string[] }>();
     userRoles.forEach((u) => {
       if ((u.role === "teacher" || u.role === "admin") && u.staff_id) {
@@ -52,6 +60,16 @@ export default function SettlementPage() {
     return map;
   }, [userRoles]);
 
+  const resolveSalary = useCallback(
+    (teacherId: string): { type: SalaryType; days: string[] } =>
+      getSalary(teacherId) ||
+      userRoleSalaryMap.get(teacherId) || {
+        type: "commission" as SalaryType,
+        days: [],
+      },
+    [getSalary, userRoleSalaryMap]
+  );
+
   // 선생님 매칭 함수
   const isTeacherMatch = (
     enrollment: { staffId?: string; teacher?: string },
@@ -59,13 +77,22 @@ export default function SettlementPage() {
   ) => {
     const sid = enrollment.staffId || "";
     const tname = enrollment.teacher || "";
+    // enrollment 식별자가 하나도 없으면 매칭 불가 (빈 문자열끼리 매칭되는 버그 방지)
+    if (!sid && !tname) return false;
     return (
-      sid === teacher.id ||
-      sid === teacher.name ||
-      sid === teacher.englishName ||
-      tname === teacher.name ||
-      tname === teacher.englishName
+      (!!sid && (sid === teacher.id || sid === teacher.name || (!!teacher.englishName && sid === teacher.englishName))) ||
+      (!!tname && (tname === teacher.name || (!!teacher.englishName && tname === teacher.englishName)))
     );
+  };
+
+  // 선택된 월에 enrollment 가 활성(재원)인지 판정
+  // startDate <= 월 마지막날 && (endDate 없음 || endDate >= 월 첫날)
+  const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(month).padStart(2, "0")}-${new Date(year, month, 0).getDate()}`;
+  const isActiveInMonth = (e: { startDate?: string; endDate?: string }) => {
+    if (e.startDate && e.startDate > monthEnd) return false;
+    if (e.endDate && e.endDate < monthStart) return false;
+    return true;
   };
 
   // 표시할 선생님 (숨김 제외, 담당학생 0 제외, 과목 없음 제외)
@@ -74,13 +101,14 @@ export default function SettlementPage() {
       if (!t.subjects || t.subjects.length === 0) return false;
       if (hiddenTeacherIds.has(t.id)) return false;
       const studentCount = students.filter((s) =>
-        s.enrollments?.some((e) => isTeacherMatch(e, t))
+        s.enrollments?.some((e) => isTeacherMatch(e, t) && isActiveInMonth(e))
       ).length;
       return studentCount > 0;
     });
-  }, [teachers, students, hiddenTeacherIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teachers, students, hiddenTeacherIds, year, month]);
 
-  // 선생님별 정산 계산
+  // 선생님별 정산 계산 (+ 과목별 breakdown)
   const settlements = useMemo(() => {
     return visibleTeachers.map((teacher) => {
       const settlement = getByTeacher(teacher.id);
@@ -88,21 +116,31 @@ export default function SettlementPage() {
         ? settlement.salaryConfig
         : salaryConfig;
 
-      // 담당 학생 목록
+      // 담당 학생 목록 (해당 월 기준 재원 중인 학생만) + 해당 학생의 과목 집합
       const teacherStudents = students.filter((s) =>
-        s.enrollments?.some((e) => isTeacherMatch(e, teacher))
+        s.enrollments?.some((e) => isTeacherMatch(e, teacher) && isActiveInMonth(e))
       );
+      // 학생 id → subjects (이 선생님이 해당 학생에게 가르치는 과목들)
+      const studentSubjects = new Map<string, Set<string>>();
+      for (const s of teacherStudents) {
+        const subs = new Set<string>();
+        for (const e of s.enrollments || []) {
+          if (isTeacherMatch(e, teacher) && isActiveInMonth(e)) {
+            subs.add(e.subject || "기타");
+          }
+        }
+        studentSubjects.set(s.id, subs);
+      }
 
-      // 급여 유형 + 블로그 패널티
-      const salaryTypeInfo = teacherSalaryTypeMap.get(teacher.id);
-      const salaryType = salaryTypeInfo?.type || "commission";
-      const commissionDays = salaryTypeInfo?.days || [];
+      const salaryInfo = resolveSalary(teacher.id);
+      const salaryType = salaryInfo.type;
+      const commissionDays = salaryInfo.days;
       const blogRequired = isBlogRequired(teacher.id);
-      // 블로그 의무인데 해당 월 작성 기록이 없으면 패널티 적용
       const blogPenalty = blogRequired && !hasPostForTeacher(teacher.id);
 
-      // 해당 선생님의 출석 레코드를 유형에 따라 필터링 후 학생별 합계
+      // 학생별 시수 (전체/countable)
       const studentUnitMap = new Map<string, number>();
+      const studentTotalMap = new Map<string, number>();
       let totalAttendance = 0;
       let countableAttendance = 0;
 
@@ -110,31 +148,53 @@ export default function SettlementPage() {
         if (r.teacher_id !== teacher.id) continue;
         if (r.hours <= 0) continue;
         totalAttendance += r.hours;
-
-        // 급여 유형에 따라 계산 대상 여부 판단
+        studentTotalMap.set(r.student_id, (studentTotalMap.get(r.student_id) || 0) + r.hours);
         if (isAttendanceCountable(r.date, salaryType, commissionDays)) {
           countableAttendance += r.hours;
-          studentUnitMap.set(
-            r.student_id,
-            (studentUnitMap.get(r.student_id) || 0) + r.hours
-          );
+          studentUnitMap.set(r.student_id, (studentUnitMap.get(r.student_id) || 0) + r.hours);
         }
       }
 
-      // 기본 급여 계산 (대상 출석 + 해당 월 납부액 반영)
-      // monthPayments 는 이미 usePaymentsForMonth 가 해당 월로 필터링한 결과
+      // 과목별 집계
+      const subjectAgg = new Map<string, {
+        subject: string;
+        studentCount: number;
+        totalAttendance: number;
+        countableAttendance: number;
+        baseSalary: number;
+      }>();
+      const ensureSub = (sub: string) => {
+        if (!subjectAgg.has(sub)) {
+          subjectAgg.set(sub, {
+            subject: sub,
+            studentCount: 0,
+            totalAttendance: 0,
+            countableAttendance: 0,
+            baseSalary: 0,
+          });
+        }
+        return subjectAgg.get(sub)!;
+      };
+
       let baseSalary = 0;
       for (const student of teacherStudents) {
+        const subs = Array.from(studentSubjects.get(student.id) || []);
+        if (subs.length === 0) continue;
         const classUnits = studentUnitMap.get(student.id) || 0;
+        const totalUnits = studentTotalMap.get(student.id) || 0;
+
+        // 여러 과목이면 시수/급여를 균등 분배
+        const share = 1 / subs.length;
+        const studentPayments = findStudentPayments(student, monthPayments);
+
+        let studentBase = 0;
         if (classUnits > 0) {
-          const settingItem = matchSalarySetting(student, effectiveConfig);
-          // 해당 학생의 이번 달 납부액 합계 (수납 없으면 null → 출석 기반 계산)
-          const studentPayments = findStudentPayments(student, monthPayments);
+          const settingItem = matchSalarySetting(student, effectiveConfig, undefined, tierOverrides[`${teacher.id}|${student.id}`]);
           const paidAmount =
             studentPayments.length > 0
-              ? studentPayments.reduce((s, p) => s + (p.paid_amount || 0), 0)
+              ? studentPayments.reduce((a, p) => a + (p.charge_amount || 0), 0)
               : null;
-          baseSalary += calculateStudentSalary(
+          studentBase = calculateStudentSalary(
             settingItem,
             effectiveConfig.academyFee,
             classUnits,
@@ -142,9 +202,27 @@ export default function SettlementPage() {
             blogPenalty
           );
         }
+        baseSalary += studentBase;
+
+        for (const sub of subs) {
+          const row = ensureSub(sub);
+          row.studentCount += share;
+          row.totalAttendance += totalUnits * share;
+          row.countableAttendance += classUnits * share;
+          row.baseSalary += studentBase * share;
+        }
       }
 
-      // 최종 급여
+      const subjects = Array.from(subjectAgg.values())
+        .map((x) => ({
+          ...x,
+          studentCount: Math.round(x.studentCount * 10) / 10,
+          totalAttendance: Math.round(x.totalAttendance * 10) / 10,
+          countableAttendance: Math.round(x.countableAttendance * 10) / 10,
+          baseSalary: Math.round(x.baseSalary),
+        }))
+        .sort((a, b) => b.baseSalary - a.baseSalary);
+
       const finalSalary = calculateFinalSalary(
         baseSalary,
         effectiveConfig.incentives,
@@ -163,9 +241,10 @@ export default function SettlementPage() {
         commissionDays,
         blogRequired,
         blogPenalty,
+        subjects,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, teacherSalaryTypeMap, hasPostForTeacher, isBlogRequired, monthPayments, year, month]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month]);
 
   // 합계
   const totals = useMemo(() => {
@@ -179,6 +258,161 @@ export default function SettlementPage() {
       { studentCount: 0, totalAttendance: 0, baseSalary: 0, finalSalary: 0 }
     );
   }, [settlements]);
+
+  // 학생별 시수 검증: 과목별로 납부액 vs 실제 수강 시수 × 기준단가
+  const studentChecks = useMemo(() => {
+    const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+
+    // 선생님 id → teacher 객체 (staff_id/이름 매칭용)
+    const teacherById = new Map<string, Teacher>();
+    for (const t of teachers) teacherById.set(t.id, t);
+
+    // (studentId, teacherId) → hours
+    const hoursByStudentTeacher = new Map<string, number>();
+    for (const r of attendanceRecords) {
+      if (r.hours <= 0) continue;
+      if (!r.date.startsWith(monthStr)) continue;
+      const key = `${r.student_id}|${r.teacher_id}`;
+      hoursByStudentTeacher.set(key, (hoursByStudentTeacher.get(key) || 0) + r.hours);
+    }
+
+    const rows: Array<{
+      student: Student;
+      subject: string;
+      teacherNames: string;
+      units: number;
+      paid: number;
+      unitPrice: number;
+      expectedSessions: number;
+      diffSessions: number;
+      diffAmount: number;
+      hasPayment: boolean;
+      teacherBreakdown: Array<{
+        teacherName: string;
+        units: number;
+        paid: number;
+      }>;
+    }> = [];
+
+    for (const s of students) {
+      const activeEnrollments = (s.enrollments || []).filter(isActiveInMonth);
+      if (activeEnrollments.length === 0) {
+        // 출석도 없고 enrollment도 없으면 skip. 단, 수납만 있는 경우는 "기타"로 한 번 표시
+        const payList = findStudentPayments(s, monthPayments);
+        if (payList.length === 0) continue;
+        const paid = payList.reduce((a, p) => a + (p.charge_amount || 0), 0);
+        rows.push({
+          student: s,
+          subject: "미등록",
+          teacherNames: "-",
+          units: 0,
+          paid,
+          unitPrice: 0,
+          expectedSessions: 0,
+          diffSessions: 0,
+          diffAmount: paid,
+          hasPayment: true,
+          teacherBreakdown: [],
+        });
+        continue;
+      }
+
+      // 과목별로 enrollment 묶기
+      const bySubject = new Map<string, typeof activeEnrollments>();
+      for (const e of activeEnrollments) {
+        const sub = e.subject || "기타";
+        if (!bySubject.has(sub)) bySubject.set(sub, []);
+        bySubject.get(sub)!.push(e);
+      }
+
+      const allPayments = findStudentPayments(s, monthPayments);
+
+      for (const [subject, enrolls] of bySubject) {
+        // 해당 과목의 선생님들
+        const teacherIds = new Set<string>();
+        const teacherNames = new Set<string>();
+        for (const e of enrolls) {
+          let tid: string | undefined;
+          if (e.staffId && teacherById.has(e.staffId)) {
+            tid = e.staffId;
+          } else {
+            // 이름으로 매칭
+            const found = teachers.find(
+              (t) =>
+                t.name === e.teacher ||
+                t.englishName === e.teacher ||
+                t.name === e.staffId ||
+                t.englishName === e.staffId
+            );
+            if (found) tid = found.id;
+          }
+          if (tid) {
+            teacherIds.add(tid);
+            const t = teacherById.get(tid);
+            if (t) teacherNames.add(t.name);
+          } else if (e.teacher) {
+            teacherNames.add(e.teacher);
+          }
+        }
+
+        // 선생님별 시수/수납 breakdown
+        const teacherBreakdown: Array<{ teacherName: string; units: number; paid: number }> = [];
+        let units = 0;
+        for (const tid of teacherIds) {
+          const tUnits = hoursByStudentTeacher.get(`${s.id}|${tid}`) || 0;
+          const tPaid = allPayments
+            .filter((p) => p.teacher_staff_id === tid)
+            .reduce((a, p) => a + (p.charge_amount || 0), 0);
+          units += tUnits;
+          teacherBreakdown.push({
+            teacherName: teacherById.get(tid)?.name || tid,
+            units: tUnits,
+            paid: tPaid,
+          });
+        }
+
+        // 해당 과목 선생님의 수납만 합산 (teacher_staff_id 기준)
+        const subjectPayments = allPayments.filter(
+          (p) => p.teacher_staff_id && teacherIds.has(p.teacher_staff_id)
+        );
+        // teacher_staff_id 가 없으면 (레거시) 과목 분리 불가 → 폴백으로 모든 수납을 첫 과목에만 반영
+        const paid = subjectPayments.reduce((a, p) => a + (p.charge_amount || 0), 0);
+
+        // 과목의 선생님 중 첫 번째로 발견되는 tier 오버라이드 사용
+        let tierOverrideId: string | undefined;
+        for (const tid of teacherIds) {
+          const ov = tierOverrides[`${tid}|${s.id}`];
+          if (ov) { tierOverrideId = ov; break; }
+        }
+        const setting = matchSalarySetting(s, salaryConfig, subjectToSalarySubject(subject), tierOverrideId);
+        const unitPrice = setting?.baseTuition || 0;
+        const expectedSessions = unitPrice > 0 ? paid / unitPrice : 0;
+        const diffSessions = expectedSessions - units;
+        const diffAmount = paid - units * unitPrice;
+
+        // 시수도 0이고 수납도 0이면 skip
+        if (units === 0 && subjectPayments.length === 0) continue;
+
+        rows.push({
+          student: s,
+          subject,
+          teacherNames: Array.from(teacherNames).join(", ") || "-",
+          units,
+          paid,
+          unitPrice,
+          expectedSessions,
+          diffSessions,
+          diffAmount,
+          hasPayment: subjectPayments.length > 0,
+          teacherBreakdown,
+        });
+      }
+    }
+
+    // 차이가 있는 항목 우선 정렬 (절대값 큰 순)
+    rows.sort((a, b) => Math.abs(b.diffSessions) - Math.abs(a.diffSessions));
+    return rows;
+  }, [students, teachers, attendanceRecords, monthPayments, salaryConfig, tierOverrides, year, month]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
@@ -225,6 +459,33 @@ export default function SettlementPage() {
         </div>
       </div>
 
+      {/* 내부 탭 */}
+      <div className="mb-3 flex items-center gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        <button
+          onClick={() => setTab("settlement")}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+            tab === "settlement"
+              ? "border-blue-500 text-blue-600 dark:text-blue-400"
+              : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          }`}
+        >
+          월별 정산
+        </button>
+        <button
+          onClick={() => setTab("hours")}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+            tab === "hours"
+              ? "border-blue-500 text-blue-600 dark:text-blue-400"
+              : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          }`}
+        >
+          시수 검증
+          <span className="ml-1 text-xs text-zinc-400">({studentChecks.length})</span>
+        </button>
+      </div>
+
+      {tab === "settlement" && (
+      <>
       {/* 전체 합계 카드 */}
       <div className="grid grid-cols-4 gap-3 mb-4">
         <StatCard label="선생님" value={`${settlements.length}명`} />
@@ -254,9 +515,9 @@ export default function SettlementPage() {
             {settlements.map((s, idx) => {
               const incentiveTotal = s.finalSalary - s.baseSalary;
               return (
+                <Fragment key={s.teacher.id}>
                 <tr
-                  key={s.teacher.id}
-                  className="border-b border-zinc-300 last:border-0 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/30"
+                  className="border-b border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/30"
                 >
                   <td className="px-3 py-3 text-zinc-400">{idx + 1}</td>
                   <td className="px-3 py-3 font-medium text-zinc-900 dark:text-zinc-100">
@@ -328,6 +589,29 @@ export default function SettlementPage() {
                     )}
                   </td>
                 </tr>
+                {s.subjects.length > 1 && s.subjects.map((sub) => (
+                  <tr
+                    key={sub.subject}
+                    className="border-b border-zinc-100 bg-zinc-50/40 text-xs text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/40"
+                  >
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1 pl-6 text-zinc-500">└ 과목별</td>
+                    <td className="px-3 py-1">{toSubjectLabel(sub.subject)}</td>
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1 text-right">{sub.studentCount}명</td>
+                    <td className="px-3 py-1 text-right">
+                      {s.salaryType === "mixed"
+                        ? `${sub.countableAttendance} / ${sub.totalAttendance}`
+                        : sub.totalAttendance}
+                    </td>
+                    <td className="px-3 py-1 text-right">{sub.baseSalary.toLocaleString()}원</td>
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1" />
+                  </tr>
+                ))}
+                <tr className="h-0"><td colSpan={10} className="border-b border-zinc-300 dark:border-zinc-700 p-0" /></tr>
+                </Fragment>
               );
             })}
 
@@ -364,6 +648,177 @@ export default function SettlementPage() {
           </div>
         )}
       </div>
+      </>
+      )}
+
+      {tab === "hours" && (
+      <div>
+        <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-1">
+          학생별 시수 검증
+          <span className="ml-2 text-sm font-normal text-zinc-500">
+            청구액 ÷ 기준단가 vs 실제 출석시수
+          </span>
+        </h3>
+        <p className="text-xs text-zinc-500 mb-2">
+          + 는 청구 대비 수업이 남은 상태, − 는 청구 대비 수업을 더 들은 상태입니다.
+        </p>
+        {(() => {
+          const allSubjects = Array.from(new Set(studentChecks.map((r) => r.subject)));
+          return (
+            <div className="flex flex-wrap items-center gap-1 mb-2">
+              <input
+                type="text"
+                placeholder="학생 이름 검색"
+                value={hoursSearch}
+                onChange={(e) => setHoursSearch(e.target.value)}
+                className="rounded-sm border border-zinc-300 px-2 py-1 text-xs mr-2 w-40 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <span className="text-xs text-zinc-500 mr-1">과목:</span>
+              <button
+                onClick={() => setHoursSubjectFilter([])}
+                className={`px-2 py-1 text-xs rounded-sm border ${
+                  hoursSubjectFilter.length === 0
+                    ? "bg-blue-500 text-white border-blue-500"
+                    : "border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                전체
+              </button>
+              {allSubjects.map((sub) => {
+                const active = hoursSubjectFilter.includes(sub);
+                return (
+                  <button
+                    key={sub}
+                    onClick={() =>
+                      setHoursSubjectFilter(
+                        active ? hoursSubjectFilter.filter((x) => x !== sub) : [...hoursSubjectFilter, sub]
+                      )
+                    }
+                    className={`px-2 py-1 text-xs rounded-sm border ${
+                      active
+                        ? "bg-blue-500 text-white border-blue-500"
+                        : "border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {toSubjectLabel(sub)}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
+        <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
+                <th className="px-3 py-3 text-left font-medium text-zinc-500">#</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500">학생</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500">과목</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500">선생님</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">기준단가</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">청구액</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">예상시수</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">실제시수</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">차이 (회)</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500">차이 (원)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {studentChecks
+                .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
+                .filter((r) => !hoursSearch.trim() || r.student.name.toLowerCase().includes(hoursSearch.trim().toLowerCase()))
+                .map((r, idx) => {
+                const noPrice = r.unitPrice <= 0;
+                const noPay = !r.hasPayment;
+                const diffAbs = Math.abs(r.diffSessions);
+                const isWarn = !noPrice && !noPay && diffAbs >= 1;
+                const isOk = !noPrice && !noPay && diffAbs < 0.5;
+                const sessionColor = noPrice || noPay
+                  ? "text-zinc-400"
+                  : r.diffSessions > 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : r.diffSessions < 0
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-zinc-500";
+                return (
+                  <Fragment key={`${r.student.id}|${r.subject}`}>
+                  <tr
+                    className={`border-b border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/30 ${
+                      isWarn ? "bg-amber-50/40 dark:bg-amber-950/10" : ""
+                    }`}
+                  >
+                    <td className="px-3 py-2 text-zinc-400">{idx + 1}</td>
+                    <td className="px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">
+                      {r.student.name}
+                      {r.student.school && (
+                        <span className="ml-1 text-xs text-zinc-400">({r.student.school})</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-zinc-500">{toSubjectLabel(r.subject)}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-500">{r.teacherNames || "-"}</td>
+                    <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
+                      {r.unitPrice > 0 ? `${r.unitPrice.toLocaleString()}원` : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-zinc-700 dark:text-zinc-300">
+                      {r.hasPayment ? `${r.paid.toLocaleString()}원` : <span className="text-zinc-400">청구 없음</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
+                      {noPrice || noPay ? "-" : r.expectedSessions.toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
+                      {r.units}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-bold ${sessionColor}`}>
+                      {noPrice || noPay
+                        ? "-"
+                        : r.diffSessions > 0
+                        ? `+${r.diffSessions.toFixed(1)}`
+                        : r.diffSessions.toFixed(1)}
+                      {isOk && <span className="ml-1 text-[10px] font-normal text-emerald-500">✓</span>}
+                    </td>
+                    <td className={`px-3 py-2 text-right text-xs ${sessionColor}`}>
+                      {noPrice || noPay
+                        ? "-"
+                        : r.diffAmount > 0
+                        ? `+${r.diffAmount.toLocaleString()}원`
+                        : `${r.diffAmount.toLocaleString()}원`}
+                    </td>
+                  </tr>
+                  {r.teacherBreakdown.length > 1 &&
+                    r.teacherBreakdown.map((tb, tIdx) => (
+                      <tr
+                        key={tIdx}
+                        className="border-b border-zinc-100 bg-zinc-50/40 text-[11px] text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/40"
+                      >
+                        <td className="px-3 py-1" />
+                        <td className="px-3 py-1" />
+                        <td className="px-3 py-1" />
+                        <td className="px-3 py-1 pl-5 text-zinc-500">└ {tb.teacherName}</td>
+                        <td className="px-3 py-1" />
+                        <td className="px-3 py-1 text-right">
+                          {tb.paid > 0 ? `${tb.paid.toLocaleString()}원` : "-"}
+                        </td>
+                        <td className="px-3 py-1 text-right">
+                          {r.unitPrice > 0 && tb.paid > 0 ? (tb.paid / r.unitPrice).toFixed(1) : "-"}
+                        </td>
+                        <td className="px-3 py-1 text-right">{tb.units}</td>
+                        <td className="px-3 py-1" />
+                        <td className="px-3 py-1" />
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+          {studentChecks.length === 0 && (
+            <div className="flex items-center justify-center h-24 text-zinc-400 text-sm">
+              검증할 학생 데이터가 없습니다.
+            </div>
+          )}
+        </div>
+      </div>
+      )}
     </div>
   );
 }

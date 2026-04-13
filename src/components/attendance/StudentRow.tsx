@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { Student, SalaryConfig } from "@/types";
 import { DAY_ORDER } from "@/types";
 import { formatDateKey } from "@/lib/date";
@@ -38,7 +39,7 @@ interface Props {
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
 }
 
-export default function StudentRow({
+function StudentRowImpl({
   student,
   index,
   dates,
@@ -393,6 +394,9 @@ export default function StudentRow({
     </tr>
   );
 }
+
+const StudentRow = memo(StudentRowImpl);
+export default StudentRow;
 
 function formatSchoolGrade(school?: string, grade?: string): string {
   if (!school && !grade) return "-";

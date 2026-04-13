@@ -49,36 +49,29 @@ export default function ColumnFilter({
     return uniqueValues.filter((v) => v.toLowerCase().includes(q));
   }, [uniqueValues, search]);
 
-  const allSelected = selected.size === 0 || selected.size === uniqueValues.length;
-  const hasFilter = selected.size > 0 && selected.size < uniqueValues.length;
+  const NONE_SENTINEL = "\0__NONE__\0";
+  const isCleared = selected.size === 1 && selected.has(NONE_SENTINEL);
+  const hasFilter = isCleared || (selected.size > 0 && selected.size < uniqueValues.length);
 
-  const toggleAll = () => {
-    if (allSelected) {
-      // 전체 해제는 하지 않음 (의미 없음) — 대신 전체 선택 상태로 리셋
-      onChange(new Set());
-    } else {
-      onChange(new Set());
-    }
-  };
+  const selectAll = () => onChange(new Set());
+  const clearAll = () => onChange(new Set([NONE_SENTINEL]));
 
   const toggleValue = (v: string) => {
-    const next = new Set(selected.size === 0 ? uniqueValues : selected);
-    if (next.has(v)) {
-      next.delete(v);
-      // 전부 해제되면 전체 선택으로
-      if (next.size === 0) {
-        onChange(new Set());
+    const base = isCleared ? new Set<string>() : selected.size === 0 ? new Set(uniqueValues) : new Set(selected);
+    if (base.has(v)) {
+      base.delete(v);
+      if (base.size === 0) {
+        onChange(new Set([NONE_SENTINEL]));
         return;
       }
     } else {
-      next.add(v);
-      // 전부 선택되면 필터 해제
-      if (next.size === uniqueValues.length) {
+      base.add(v);
+      if (base.size === uniqueValues.length) {
         onChange(new Set());
         return;
       }
     }
-    onChange(next);
+    onChange(base);
   };
 
   return (
@@ -115,14 +108,23 @@ export default function ColumnFilter({
           {/* 값별 필터링 */}
           <div className="p-2">
             <div className="flex items-center justify-between mb-2">
-              <button
-                onClick={toggleAll}
-                className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400"
-              >
-                {allSelected ? `${uniqueValues.length}개 모두 선택` : "전체 선택"} · 지우기
-              </button>
+              <div className="text-xs space-x-2">
+                <button
+                  onClick={selectAll}
+                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                >
+                  전체 선택
+                </button>
+                <span className="text-zinc-300 dark:text-zinc-600">·</span>
+                <button
+                  onClick={clearAll}
+                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                >
+                  선택 해제
+                </button>
+              </div>
               <span className="text-xs text-zinc-400">
-                {hasFilter ? `${selected.size}` : uniqueValues.length}개 표시 중
+                {isCleared ? 0 : hasFilter ? selected.size : uniqueValues.length}개 표시 중
               </span>
             </div>
             <input

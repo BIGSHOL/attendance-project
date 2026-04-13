@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 interface Props {
   groupName: string;
   studentCount: number;
@@ -10,7 +12,7 @@ interface Props {
   colSpan: number;
 }
 
-export default function GroupHeader({
+function GroupHeaderImpl({
   groupName,
   studentCount,
   isCollapsed,
@@ -54,3 +56,6 @@ export default function GroupHeader({
     </tr>
   );
 }
+
+const GroupHeader = memo(GroupHeaderImpl);
+export default GroupHeader;

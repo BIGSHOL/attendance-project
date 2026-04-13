@@ -12,14 +12,13 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const teacherId = new URL(request.url).searchParams.get("teacher_id");
-  if (!teacherId) {
-    return NextResponse.json({ error: "teacher_id 필수" }, { status: 400 });
-  }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("student_tier_overrides")
-    .select("student_id, salary_item_id, tier_name")
-    .eq("teacher_id", teacherId);
+    .select("student_id, salary_item_id, tier_name, teacher_id");
+  if (teacherId) query = query.eq("teacher_id", teacherId);
+
+  const { data, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data || []);

@@ -4,8 +4,11 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
+import { useYearlyAttendance } from "@/hooks/useYearlyAttendance";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { useAllUserRoles } from "@/hooks/useAllUserRoles";
+import { useTeacherSettings } from "@/hooks/useTeacherSettings";
+import type { SalaryType } from "@/hooks/useUserRole";
 import { useTeacherSheets } from "@/hooks/useTeacherSheets";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -57,6 +60,12 @@ Kristine\t1k4UmMIeBtrzYn67yA3AhRgW8kE3v9pwUmoGEC_OYjJ0
 export default function TeacherList() {
   const { teachers, loading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
+  const [selectedYear, setSelectedYear] = useLocalStorage<number>(
+    "teacherList.year",
+    new Date().getFullYear()
+  );
+  const { activeStudentsByTeacher, loading: attendanceLoading } =
+    useYearlyAttendance(selectedYear);
   const { isHidden, toggleHidden } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
   const { isMaster } = useUserRole();
@@ -81,6 +90,30 @@ export default function TeacherList() {
     });
     return map;
   }, [userRoles]);
+
+  // 선생님 급여 유형 설정 (teacher_settings 기반, 미매핑 선생님도 설정 가능)
+  const { getSalary, setSalaryType, saving: savingSalary } = useTeacherSettings();
+
+  // 선생님 ID → 급여 유형 + 요일
+  // 우선순위: teacher_settings → user_roles (레거시 fallback) → 기본 commission
+  const userRolesSalaryMap = useMemo(() => {
+    const map: Record<string, { type: SalaryType; days: string[] }> = {};
+    userRoles.forEach((u) => {
+      if ((u.role === "teacher" || u.role === "admin") && u.staff_id) {
+        map[u.staff_id] = {
+          type: u.salary_type || "commission",
+          days: u.commission_days || [],
+        };
+      }
+    });
+    return map;
+  }, [userRoles]);
+
+  const resolveSalary = (teacherId: string): { type: SalaryType; days: string[] } =>
+    getSalary(teacherId) ||
+    userRolesSalaryMap[teacherId] || { type: "commission", days: [] };
+
+  const [salaryEditingId, setSalaryEditingId] = useState<string | null>(null);
 
   // 선생님 ID → 시트 URL
   const sheetMap = useMemo(() => {
@@ -205,24 +238,42 @@ export default function TeacherList() {
   const [search, setSearch] = useLocalStorage<string>("teacherList.search", "");
   const [checkedSubjects, setCheckedSubjects] = useLocalStorageSet("teacherList.subjects");
 
-  // 선생님별 담당 학생 수 (staffId가 이름/영어이름/ID로 저장됨)
-  const studentCountMap = useMemo(() => {
-    const map: Record<string, number> = {};
+  // 선생님별 연도별 누적 통계:
+  //  - active  : 해당 연도에 시수(hours>0) 1회 이상 기록된 distinct 학생 수 (재원/관리학생)
+  //  - newcomers: 해당 선생님 enrollment.startDate 가 선택 연도인 학생 (distinct)
+  //  - leavers  : 해당 선생님 enrollment.endDate   가 선택 연도인 학생 (distinct)
+  const yearStr = String(selectedYear);
+  const isTeacherMatch = (
+    e: { staffId?: string; teacher?: string },
+    t: { id: string; name: string; englishName?: string }
+  ) => {
+    const sid = e.staffId || "";
+    const tname = e.teacher || "";
+    return (
+      sid === t.id || sid === t.name || sid === t.englishName ||
+      tname === t.name || tname === t.englishName
+    );
+  };
+
+  const yearStatsMap = useMemo(() => {
+    const map: Record<string, { active: number; newcomers: number; leavers: number }> = {};
     for (const t of teachers) {
-      const count = students.filter((s) =>
-        s.enrollments?.some((e) => {
-          const sid = e.staffId || "";
-          const tname = e.teacher || "";
-          return (
-            sid === t.id || sid === t.name || sid === t.englishName ||
-            tname === t.name || tname === t.englishName
-          );
-        })
-      ).length;
-      map[t.id] = count;
+      const active = activeStudentsByTeacher.get(t.id)?.size || 0;
+
+      const newSet = new Set<string>();
+      const leaveSet = new Set<string>();
+      for (const s of students) {
+        if (!s.enrollments) continue;
+        for (const e of s.enrollments) {
+          if (!isTeacherMatch(e, t)) continue;
+          if (e.startDate && e.startDate.startsWith(yearStr)) newSet.add(s.id);
+          if (e.endDate && e.endDate.startsWith(yearStr)) leaveSet.add(s.id);
+        }
+      }
+      map[t.id] = { active, newcomers: newSet.size, leavers: leaveSet.size };
     }
     return map;
-  }, [teachers, students]);
+  }, [teachers, students, activeStudentsByTeacher, yearStr]);
 
   const allSubjects = useMemo(() => {
     const set = new Set<string>();
@@ -253,6 +304,32 @@ export default function TeacherList() {
     setPage(1);
   };
 
+  // 미생성(숨김 처리된) 선생님 숨기기 토글
+  const [hideUnlisted, setHideUnlisted] = useLocalStorage<boolean>(
+    "teacherList.hideUnlisted",
+    false
+  );
+
+  // 정렬 상태
+  type SortKey =
+    | "name" | "role" | "subject" | "email" | "salary"
+    | "active" | "newcomers" | "leavers" | "status";
+  const [sortKey, setSortKey] = useLocalStorage<SortKey | "">("teacherList.sortKey", "");
+  const [sortDir, setSortDir] = useLocalStorage<"asc" | "desc">("teacherList.sortDir", "asc");
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+    setPage(1);
+  };
+
+  const sortIndicator = (key: SortKey) =>
+    sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : "";
+
   const filtered = useMemo(() => {
     let list = teachers;
     if (search.trim()) {
@@ -262,8 +339,34 @@ export default function TeacherList() {
     if (effectiveChecked.size < allSubjects.length) {
       list = list.filter((t) => t.subjects?.some((s) => effectiveChecked.has(s)));
     }
+    if (hideUnlisted) {
+      list = list.filter((t) => !isHidden(t.id));
+    }
+
+    if (sortKey) {
+      const dir = sortDir === "asc" ? 1 : -1;
+      const stats = (id: string) => yearStatsMap[id] || { active: 0, newcomers: 0, leavers: 0 };
+      const subjStr = (t: typeof teachers[number]) => (t.subjects || []).join(",");
+      const cmp = (a: typeof teachers[number], b: typeof teachers[number]): number => {
+        switch (sortKey) {
+          case "name": return a.name.localeCompare(b.name, "ko") * dir;
+          case "role": return (a.role || "").localeCompare(b.role || "", "ko") * dir;
+          case "subject": return subjStr(a).localeCompare(subjStr(b), "ko") * dir;
+          case "email": return (staffEmailMap[a.id] || "").localeCompare(staffEmailMap[b.id] || "") * dir;
+          case "salary": return resolveSalary(a.id).type.localeCompare(resolveSalary(b.id).type) * dir;
+          case "active": return (stats(a.id).active - stats(b.id).active) * dir;
+          case "newcomers": return (stats(a.id).newcomers - stats(b.id).newcomers) * dir;
+          case "leavers": return (stats(a.id).leavers - stats(b.id).leavers) * dir;
+          case "status": return ((isHidden(a.id) ? 1 : 0) - (isHidden(b.id) ? 1 : 0)) * dir;
+          default: return 0;
+        }
+      };
+      list = [...list].sort(cmp);
+    }
+
     return list;
-  }, [teachers, search, effectiveChecked, allSubjects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teachers, search, effectiveChecked, allSubjects, hideUnlisted, isHidden, sortKey, sortDir, yearStatsMap, staffEmailMap, userRolesSalaryMap, getSalary]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paged = useMemo(
@@ -274,7 +377,7 @@ export default function TeacherList() {
   // 필터 변경 시 첫 페이지로 이동
   const handleSearch = (v: string) => { setSearch(v); setPage(1); };
 
-  if (loading || studentsLoading) {
+  if (loading || studentsLoading || attendanceLoading) {
     return <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">불러오는 중...</div>;
   }
 
@@ -287,14 +390,33 @@ export default function TeacherList() {
             ({filtered.length}명)
           </span>
         </h2>
-        {isMaster && (
-          <button
-            onClick={() => { setBulkOpen(true); setBulkResult(null); }}
-            className="rounded-sm border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📄 시트 일괄 등록
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setSelectedYear(selectedYear - 1)}
+              className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              ◀
+            </button>
+            <span className="px-3 py-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-100 min-w-[64px] text-center">
+              {selectedYear}년
+            </span>
+            <button
+              onClick={() => setSelectedYear(selectedYear + 1)}
+              className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              ▶
+            </button>
+          </div>
+          {isMaster && (
+            <button
+              onClick={() => { setBulkOpen(true); setBulkResult(null); }}
+              className="rounded-sm border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              📄 시트 일괄 등록
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-3 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
@@ -307,7 +429,7 @@ export default function TeacherList() {
         />
       </div>
 
-      {/* 과목 체크박스 필터 */}
+      {/* 과목 체크박스 필터 + 미생성 숨기기 토글 */}
       <div className="flex items-center gap-2 mb-4 overflow-x-auto [&>*]:flex-shrink-0">
         <button
           onClick={toggleAllSubjects}
@@ -332,22 +454,70 @@ export default function TeacherList() {
             </button>
           );
         })}
+
+        <div className="mx-2 h-5 w-px bg-zinc-200 dark:bg-zinc-700" />
+
+        <button
+          onClick={() => { setHideUnlisted(!hideUnlisted); setPage(1); }}
+          className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+            hideUnlisted
+              ? "bg-amber-100 border-amber-400 text-amber-700 dark:bg-amber-900 dark:border-amber-600 dark:text-amber-300"
+              : "bg-white border-zinc-300 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
+          }`}
+          title="출석부가 미생성(숨김) 상태인 선생님 숨기기"
+        >
+          <span className="mr-1">{hideUnlisted ? "☑" : "☐"}</span>
+          미생성 숨기기
+        </button>
       </div>
 
       <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
           <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
+            <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50 [&_th.sortable]:cursor-pointer [&_th.sortable]:select-none [&_th.sortable:hover]:bg-zinc-100 dark:[&_th.sortable:hover]:bg-zinc-700/50">
               <th className="px-4 py-3 text-left font-medium text-zinc-500">#</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">이름</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">역할</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">과목</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">구글 계정</th>
-              <th className="px-4 py-3 text-center font-medium text-zinc-500">담당학생</th>
+              <th className="sortable px-4 py-3 text-left font-medium text-zinc-500" onClick={() => handleSort("name")}>
+                이름{sortIndicator("name")}
+              </th>
+              <th className="sortable px-4 py-3 text-left font-medium text-zinc-500" onClick={() => handleSort("role")}>
+                역할{sortIndicator("role")}
+              </th>
+              <th className="sortable px-4 py-3 text-left font-medium text-zinc-500" onClick={() => handleSort("subject")}>
+                과목{sortIndicator("subject")}
+              </th>
+              <th className="sortable px-4 py-3 text-left font-medium text-zinc-500" onClick={() => handleSort("email")}>
+                구글 계정{sortIndicator("email")}
+              </th>
+              <th className="sortable px-4 py-3 text-center font-medium text-zinc-500" onClick={() => handleSort("salary")}>
+                급여유형{sortIndicator("salary")}
+              </th>
+              <th
+                className="sortable px-4 py-3 text-center font-medium text-zinc-500"
+                title={`${selectedYear}년에 시수 1회 이상 기록된 학생 수 (중복 제외)`}
+                onClick={() => handleSort("active")}
+              >
+                재원{sortIndicator("active")}
+              </th>
+              <th
+                className="sortable px-4 py-3 text-center font-medium text-emerald-600"
+                title={`${selectedYear}년 시작일 기준 신규 등록`}
+                onClick={() => handleSort("newcomers")}
+              >
+                신입{sortIndicator("newcomers")}
+              </th>
+              <th
+                className="sortable px-4 py-3 text-center font-medium text-rose-600"
+                title={`${selectedYear}년 종료일 기준 퇴원`}
+                onClick={() => handleSort("leavers")}
+              >
+                퇴원{sortIndicator("leavers")}
+              </th>
               {isMaster && (
                 <th className="px-4 py-3 text-left font-medium text-zinc-500">시트</th>
               )}
-              <th className="px-4 py-3 text-center font-medium text-zinc-500">출석부</th>
+              <th className="sortable px-4 py-3 text-center font-medium text-zinc-500" onClick={() => handleSort("status")}>
+                출석부{sortIndicator("status")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -379,8 +549,75 @@ export default function TeacherList() {
                       <span className="text-zinc-300">미매핑</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-center text-zinc-600 dark:text-zinc-400">
-                    {studentCountMap[teacher.id] || 0}명
+                  <td className="px-4 py-3 text-center">
+                    {(() => {
+                      const s = resolveSalary(teacher.id);
+                      const label =
+                        s.type === "commission" ? "프리랜서" :
+                        s.type === "fixed" ? "급여제" : "혼합";
+                      const cls =
+                        s.type === "commission"
+                          ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 hover:bg-blue-100"
+                          : s.type === "fixed"
+                          ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 hover:bg-zinc-200"
+                          : "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300 hover:bg-purple-100";
+                      const isEditing = salaryEditingId === teacher.id;
+                      return isEditing ? (
+                        <div className="inline-flex items-center gap-1">
+                          {(["commission", "fixed", "mixed"] as SalaryType[]).map((t) => (
+                            <button
+                              key={t}
+                              disabled={!!savingSalary}
+                              onClick={async () => {
+                                await setSalaryType(teacher.id, t, s.days);
+                                setSalaryEditingId(null);
+                              }}
+                              className={`rounded-sm px-1.5 py-0.5 text-[11px] font-medium border ${
+                                s.type === t
+                                  ? "border-blue-500 bg-blue-100 text-blue-800"
+                                  : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+                              }`}
+                            >
+                              {t === "commission" ? "프리랜서" : t === "fixed" ? "급여제" : "혼합"}
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => setSalaryEditingId(null)}
+                            className="text-[11px] text-zinc-400 hover:text-zinc-600 px-1"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setSalaryEditingId(teacher.id)}
+                          className={`inline-flex rounded-sm px-2 py-0.5 text-[11px] font-medium cursor-pointer ${cls}`}
+                          title={
+                            s.type === "mixed" && s.days.length > 0
+                              ? `비율제 요일: ${s.days.join(",")} — 클릭해서 변경`
+                              : "클릭해서 변경"
+                          }
+                        >
+                          {label}
+                          {s.type === "mixed" && s.days.length > 0 && (
+                            <span className="ml-1 text-[9px] text-zinc-400">({s.days.join(",")})</span>
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </td>
+                  <td className="px-4 py-3 text-center font-medium text-zinc-700 dark:text-zinc-200">
+                    {yearStatsMap[teacher.id]?.active || 0}
+                  </td>
+                  <td className="px-4 py-3 text-center text-emerald-600 dark:text-emerald-400">
+                    {yearStatsMap[teacher.id]?.newcomers
+                      ? `+${yearStatsMap[teacher.id].newcomers}`
+                      : "-"}
+                  </td>
+                  <td className="px-4 py-3 text-center text-rose-600 dark:text-rose-400">
+                    {yearStatsMap[teacher.id]?.leavers
+                      ? `-${yearStatsMap[teacher.id].leavers}`
+                      : "-"}
                   </td>
                   {isMaster && (
                     <td className="px-4 py-3 text-xs">

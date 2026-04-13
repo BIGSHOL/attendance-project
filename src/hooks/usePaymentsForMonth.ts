@@ -34,30 +34,31 @@ export function usePaymentsForMonth(year: number, month: number) {
 
     const mm = String(month).padStart(2, "0");
     const yyyy = String(year);
+    // 4가지 포맷을 한 번의 IN 쿼리로 처리 (이전엔 순차 RTT 4회)
     const candidates = [`${yyyy}${mm}`, `${yyyy}-${mm}`, `${yyyy}/${mm}`, `${yyyy}.${mm}`];
 
     (async () => {
-      for (const candidate of candidates) {
-        try {
-          const res = await fetch(`/api/payments?month=${encodeURIComponent(candidate)}`);
-          if (!res.ok) continue;
+      try {
+        const res = await fetch(
+          `/api/payments?months=${encodeURIComponent(candidates.join(","))}`
+        );
+        if (res.ok) {
           const body = await res.json();
-          if (Array.isArray(body) && body.length > 0) {
-            if (!cancelled) setPayments(body as PaymentLite[]);
+          if (!cancelled && Array.isArray(body)) {
+            setPayments(body as PaymentLite[]);
             return;
           }
-        } catch {
-          // 다음 포맷 시도
         }
+      } catch {
+        // fallthrough to fallback
       }
 
-      // 최종 fallback: 월 필터 없이 전체 가져와서 클라이언트 필터링
-      // (billing_month 가 예상 외의 포맷일 때를 위한 보험)
+      // fallback: 전체 로드 후 클라 필터
       try {
         const res = await fetch(`/api/payments`);
         if (res.ok) {
           const all = await res.json();
-          if (Array.isArray(all) && all.length > 0) {
+          if (Array.isArray(all)) {
             const filtered = (all as PaymentLite[]).filter((p) =>
               billingMonthMatches(p.billing_month, year, month)
             );

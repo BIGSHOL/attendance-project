@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import type { Student, SalaryConfig } from "@/types";
 import { DAY_LABELS } from "@/types";
 import { formatDateKey, formatDateDisplay, getDaysInMonth } from "@/lib/date";
@@ -159,21 +159,26 @@ export default function AttendanceTable({
   );
 
   // 셀 클릭: 토글 (미체크 → 1 → 0 → 초기화)
-  const handleCellClick = useCallback(
-    (studentId: string, dateKey: string) => {
-      const student = students.find((s) => s.id === studentId);
-      const currentValue = student?.attendance?.[dateKey];
+  // students / onAttendanceChange 가 매 출석 변경 시 새 참조가 되므로
+  // 콜백 자체는 ref 기반으로 안정화하여 StudentRow memo 가 효과를 보도록 함
+  const studentsRef = useRef(students);
+  const onAttendanceChangeRef = useRef(onAttendanceChange);
+  useEffect(() => {
+    studentsRef.current = students;
+    onAttendanceChangeRef.current = onAttendanceChange;
+  });
+  const handleCellClick = useCallback((studentId: string, dateKey: string) => {
+    const student = studentsRef.current.find((s) => s.id === studentId);
+    const currentValue = student?.attendance?.[dateKey];
 
-      if (currentValue === undefined || currentValue === null) {
-        onAttendanceChange(studentId, dateKey, 1);
-      } else if (currentValue > 0) {
-        onAttendanceChange(studentId, dateKey, 0);
-      } else {
-        onAttendanceChange(studentId, dateKey, null);
-      }
-    },
-    [students, onAttendanceChange]
-  );
+    if (currentValue === undefined || currentValue === null) {
+      onAttendanceChangeRef.current(studentId, dateKey, 1);
+    } else if (currentValue > 0) {
+      onAttendanceChangeRef.current(studentId, dateKey, 0);
+    } else {
+      onAttendanceChangeRef.current(studentId, dateKey, null);
+    }
+  }, []);
 
   // 우클릭: 컨텍스트 메뉴
   const handleCellRightClick = useCallback(

@@ -28,9 +28,12 @@ import { CELL_SIZE_OPTIONS, CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
 import AttendanceTable from "./attendance/AttendanceTable";
-import SettlementModal from "./attendance/SettlementModal";
-import SalarySettingsModal from "./attendance/SalarySettingsModal";
-import SessionSettingsModal from "./attendance/SessionSettingsModal";
+import dynamic from "next/dynamic";
+
+// 큰 모달들은 초기 번들에서 분리 — 열릴 때 로드
+const SettlementModal = dynamic(() => import("./attendance/SettlementModal"), { ssr: false });
+const SalarySettingsModal = dynamic(() => import("./attendance/SalarySettingsModal"), { ssr: false });
+const SessionSettingsModal = dynamic(() => import("./attendance/SessionSettingsModal"), { ssr: false });
 
 type SortMode = "class" | "name" | "day";
 
@@ -70,7 +73,7 @@ export default function AttendancePage() {
   const [showSettlement, setShowSettlement] = useState(false);
   const [hideZeroAttendance, setHideZeroAttendance] = useLocalStorage<boolean>(
     "attendance.hideZeroAttendance",
-    true
+    false
   );
 
   // 셀 크기 (localStorage 저장)
@@ -108,19 +111,22 @@ export default function AttendancePage() {
   const { userRole, isAdmin, isTeacher } = useUserRole();
   const { users: userRoles } = useAllUserRoles();
 
-  // 선택된 선생님의 급여 유형 (선생님/관리자 매핑 모두 포함)
+  // 블로그 의무 + 급여 유형 (staff_id 기반 teacher_settings 우선)
+  const { isBlogRequired, getSalary } = useTeacherSettings();
+
+  // 선택된 선생님의 급여 유형
+  // 우선순위: teacher_settings → user_roles fallback → 기본 commission
   const selectedTeacherSalaryInfo = useMemo(() => {
+    const fromSettings = getSalary(selectedTeacherId);
+    if (fromSettings) return fromSettings;
     const u = userRoles.find(
       (ur) => (ur.role === "teacher" || ur.role === "admin") && ur.staff_id === selectedTeacherId
     );
     return {
-      type: u?.salary_type || "commission" as const,
+      type: u?.salary_type || ("commission" as const),
       days: u?.commission_days || [],
     };
-  }, [userRoles, selectedTeacherId]);
-
-  // 블로그 의무 (staff_id 기반 teacher_settings)
-  const { isBlogRequired } = useTeacherSettings();
+  }, [getSalary, userRoles, selectedTeacherId]);
   const selectedBlogRequired = isBlogRequired(selectedTeacherId);
 
   // 선택된 선생님의 해당 월 블로그 작성 여부 → 패널티 판정
@@ -176,16 +182,51 @@ export default function AttendancePage() {
   );
 
   // 선생님 담당 학생 수 계산
+  // 키(id/name/englishName) → teacher[] 역인덱스를 만들고 enrollment 당 한 번만 탐색
+  // (student × teacher 중첩 루프 → O(students × enrollments) 로 축소)
   const teacherStudentCount = useMemo(() => {
-    const map = new Map<string, number>();
+    const keyToTeachers = new Map<string, Teacher[]>();
+    const pushKey = (k: string | undefined, t: Teacher) => {
+      if (!k) return;
+      const arr = keyToTeachers.get(k);
+      if (arr) arr.push(t);
+      else keyToTeachers.set(k, [t]);
+    };
     for (const t of teachers) {
-      const count = allStudents.filter((s) =>
-        s.enrollments?.some((e) => isTeacherMatch(e, t))
-      ).length;
-      map.set(t.id, count);
+      pushKey(t.id, t);
+      pushKey(t.name, t);
+      pushKey(t.englishName, t);
     }
+
+    const counts = new Map<string, Set<string>>();
+    for (const s of allStudents) {
+      if (!s.enrollments) continue;
+      const matchedTeacherIds = new Set<string>();
+      for (const e of s.enrollments) {
+        const candidates = [
+          ...(keyToTeachers.get(e.staffId || "") || []),
+          ...(keyToTeachers.get(e.teacher || "") || []),
+        ];
+        for (const t of candidates) {
+          if (
+            t.subjects &&
+            t.subjects.length > 0 &&
+            e.subject &&
+            !t.subjects.includes(e.subject)
+          ) continue;
+          matchedTeacherIds.add(t.id);
+        }
+      }
+      for (const tid of matchedTeacherIds) {
+        if (!counts.has(tid)) counts.set(tid, new Set());
+        counts.get(tid)!.add(s.id);
+      }
+    }
+
+    const map = new Map<string, number>();
+    for (const t of teachers) map.set(t.id, counts.get(t.id)?.size || 0);
     return map;
-  }, [teachers, allStudents, isTeacherMatch]);
+  }, [teachers, allStudents]);
 
   // 시트 동기화 상태 + F열 tier 오버라이드
   const { sheets: teacherSheets, markSynced } = useTeacherSheets();
@@ -266,7 +307,7 @@ export default function AttendancePage() {
     // 2. 해당 월에 재원 중이었던 학생만 (신입생/퇴원생 월별 처리)
     filtered = filterStudentsByMonth(filtered, year, month);
 
-    const dataMap = studentDataMap();
+    const dataMap = studentDataMap;
     const ymPrefix = `${year}-${String(month).padStart(2, "0")}`;
 
     return filtered
@@ -365,7 +406,7 @@ export default function AttendancePage() {
     for (const student of filteredStudents) {
       const studentPayments = findStudentPayments(student, monthPayments);
       if (studentPayments.length === 0) continue;
-      const total = studentPayments.reduce((s, p) => s + (p.paid_amount || 0), 0);
+      const total = studentPayments.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (total > 0) map.set(student.id, total);
     }
     return map;

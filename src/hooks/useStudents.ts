@@ -2,18 +2,20 @@
 
 import { useEffect, useState } from "react";
 import type { Student } from "@/types";
+import { cachedFetch, getCached } from "@/lib/fetchCache";
+
+const URL_KEY = "/api/students";
 
 export function useStudents() {
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cached = getCached<Student[]>(URL_KEY);
+  const [students, setStudents] = useState<Student[]>(cached ?? []);
+  const [loading, setLoading] = useState(!cached);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/students", { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as Student[];
+        const data = await cachedFetch<Student[]>(URL_KEY);
         if (!cancelled) setStudents(data);
       } catch (e) {
         console.error("[useStudents]", e);
