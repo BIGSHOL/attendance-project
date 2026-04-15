@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAuth } from "@/lib/apiAuth";
+import { logAuditSafe } from "@/lib/audit";
 
 /**
  * GET /api/teacher-settings
@@ -88,5 +89,15 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  logAuditSafe(supabase, {
+    table: "teacher_settings",
+    recordId: staff_id,
+    action: existing ? "update" : "insert",
+    before: (existing as Record<string, unknown>) || null,
+    after: data as Record<string, unknown>,
+    editedBy: auth.email,
+  });
+
   return NextResponse.json(data);
 }

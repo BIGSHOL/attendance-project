@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAuth } from "@/lib/apiAuth";
+import { logAuditSafe } from "@/lib/audit";
 
 /**
  * GET /api/sessions?year=2026&category=math
@@ -45,7 +46,33 @@ export async function POST(request: NextRequest) {
     updated_at: new Date().toISOString(),
   }));
 
-  const { error } = await supabase.from("session_periods").upsert(normalized, { onConflict: "id" });
+  // 변경 전 스냅샷 (diff 용)
+  const ids = normalized.map((r) => r.id);
+  const { data: beforeRows } = await supabase
+    .from("session_periods")
+    .select("*")
+    .in("id", ids);
+  const beforeMap = new Map(
+    (beforeRows || []).map((r) => [r.id as string, r as Record<string, unknown>])
+  );
+
+  const { data: afterRows, error } = await supabase
+    .from("session_periods")
+    .upsert(normalized, { onConflict: "id" })
+    .select();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  for (const after of afterRows || []) {
+    const before = beforeMap.get(after.id as string);
+    logAuditSafe(supabase, {
+      table: "session_periods",
+      recordId: after.id as string,
+      action: before ? "update" : "insert",
+      before: before || null,
+      after: after as Record<string, unknown>,
+      editedBy: auth.email,
+    });
+  }
+
   return NextResponse.json({ count: normalized.length });
 }

@@ -40,6 +40,9 @@ interface Props {
   onMemoChange: (studentId: string, dateKey: string, memo: string) => void;
   onCellColorChange: (studentId: string, dateKey: string, color: string | null) => void;
   onHomeworkChange: (studentId: string, dateKey: string, done: boolean) => void;
+  /** 다른 사용자가 편집 중인 셀 (key: "studentId|dateKey") → 편집자 정보 */
+  editingByPeers?: Map<string, { email: string; name: string }>;
+  setEditingCell?: (studentId: string, date: string, editing: boolean) => void;
 }
 
 export default function AttendanceTable({
@@ -68,6 +71,7 @@ export default function AttendanceTable({
   onMemoChange,
   onCellColorChange,
   onHomeworkChange,
+  editingByPeers,
 }: Props) {
   const allDates = useMemo(
     () => overrideDates && overrideDates.length > 0 ? overrideDates : getDaysInMonth(year, month),
@@ -243,6 +247,7 @@ export default function AttendanceTable({
           onHideStudent={onHideStudent}
           onCellClick={handleCellClick}
           onCellRightClick={handleCellRightClick}
+          editingByPeers={editingByPeers}
         />
       ));
     }
@@ -328,28 +333,26 @@ export default function AttendanceTable({
       >
         <thead className="sticky top-0 z-[30]">
           <tr className="bg-zinc-800 text-white shadow-md">
-            <th className="sticky left-0 z-[40] bg-zinc-800 w-8 px-1 py-2 text-center text-[12px] border-r border-zinc-600">#</th>
-            <th className="sticky left-[32px] z-[40] bg-zinc-800 w-[90px] px-2 py-2 text-left text-[12px] border-r border-zinc-600">이름</th>
-            <th className="sticky left-[122px] z-[40] bg-zinc-800 w-[80px] px-1 py-2 text-left text-[12px] border-r border-zinc-600">학교</th>
-            <th className="sticky left-[202px] z-[40] bg-zinc-800 w-[140px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">요일</th>
+            <th style={{ width: 32, minWidth: 32, maxWidth: 32 }} className="sticky left-0 z-[40] bg-zinc-800 px-1 py-2 text-center text-[12px] border-r border-zinc-600">#</th>
+            <th style={{ width: 120, minWidth: 120, maxWidth: 120 }} className="sticky left-[32px] z-[40] bg-zinc-800 px-2 py-2 text-left text-[12px] border-r border-zinc-600">이름</th>
+            <th style={{ width: 80, minWidth: 80, maxWidth: 80 }} className="sticky left-[152px] z-[40] bg-zinc-800 px-1 py-2 text-left text-[12px] border-r border-zinc-600">학교</th>
+            <th className="bg-zinc-800 w-[140px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">요일</th>
             {showExpectedBilling && (
-              <th className="sticky left-[342px] z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">예정액</th>
+              <th className="bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">예정액</th>
             )}
             {showSettlement && (
-              <th className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-[40] bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600`}>
+              <th className="bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">
                 정산액
               </th>
             )}
             <th
-              className="sticky z-[40] bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
-              style={{ left: getTermHeaderLeftPx(showExpectedBilling, showSettlement) }}
+              className="bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
               title="등록차수 = 해당 월 담임 청구액 ÷ 학생 단가"
             >
               등록
             </th>
             <th
-              className="sticky z-[40] bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
-              style={{ left: getAttendanceHeaderLeftPx(showExpectedBilling, showSettlement) }}
+              className="bg-zinc-800 w-[52px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
             >
               출석
             </th>

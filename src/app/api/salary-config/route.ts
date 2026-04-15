@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAuth } from "@/lib/apiAuth";
+import { logAuditSafe } from "@/lib/audit";
 
 /**
  * GET /api/salary-config
@@ -38,6 +39,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "config 필드 누락" }, { status: 400 });
   }
 
+  const { data: before } = await supabase
+    .from("salary_configs")
+    .select("config")
+    .eq("teacher_id", "global")
+    .maybeSingle();
+
   const { error } = await supabase
     .from("salary_configs")
     .upsert(
@@ -50,5 +57,16 @@ export async function POST(request: NextRequest) {
     );
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  logAuditSafe(supabase, {
+    table: "salary_configs",
+    recordId: "global",
+    action: "update",
+    before: { config: before?.config ?? null },
+    after: { config: body.config },
+    editedBy: auth.email,
+    context: { note: "급여 설정 변경" },
+  });
+
   return NextResponse.json({ ok: true });
 }

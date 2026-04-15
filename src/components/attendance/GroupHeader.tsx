@@ -26,8 +26,8 @@ function GroupHeaderImpl({
       onClick={onToggleCollapse}
       className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 cursor-pointer select-none"
     >
-      <td colSpan={colSpan} className="px-2 py-1.5">
-        <div className="flex items-center gap-2">
+      <td colSpan={colSpan} className="p-0">
+        <div className="sticky left-0 z-[5] flex items-center gap-2 px-2 py-1.5 bg-slate-100 dark:bg-zinc-800 w-fit max-w-[calc(100vw-40px)]">
           <div className="flex items-center gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
             <span className="text-[12px]">{isCollapsed ? "▶" : "▼"}</span>
             <span>{isCollapsed ? "📁" : "📂"}</span>

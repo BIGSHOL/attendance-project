@@ -37,6 +37,8 @@ interface Props {
   onHideStudent?: (studentId: string) => void;
   onCellClick: (studentId: string, dateKey: string) => void;
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
+  /** 다른 사용자가 편집 중인 셀 정보 */
+  editingByPeers?: Map<string, { email: string; name: string }>;
 }
 
 function StudentRowImpl({
@@ -59,6 +61,7 @@ function StudentRowImpl({
   onHideStudent,
   onCellClick,
   onCellRightClick,
+  editingByPeers,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -108,7 +111,7 @@ function StudentRowImpl({
   );
 
   return (
-    <tr className={`border-b border-zinc-300 ${index % 2 === 0 ? "bg-white" : "bg-zinc-50/50"} hover:bg-blue-50/50`}>
+    <tr className={`border-b border-zinc-300 ${index % 2 === 0 ? "bg-white" : "bg-zinc-50"} hover:bg-blue-50`}>
       {/* # */}
       <td
         onContextMenu={(e) => {
@@ -118,13 +121,14 @@ function StudentRowImpl({
             onHideStudent(student.id);
           }
         }}
-        className="sticky left-0 z-10 bg-inherit w-8 px-1 py-1 text-center text-[13px] text-zinc-400 cursor-context-menu border-r border-zinc-200 dark:border-zinc-700"
+        style={{ width: 32, minWidth: 32, maxWidth: 32 }}
+        className="sticky left-0 z-10 bg-inherit px-1 py-1 text-center text-[13px] text-zinc-400 cursor-context-menu border-r border-zinc-200 dark:border-zinc-700"
       >
         {index + 1}
       </td>
 
       {/* 이름 */}
-      <td className="sticky left-[32px] z-10 bg-inherit w-[90px] px-2 py-1 text-sm font-medium text-zinc-900 whitespace-nowrap border-r border-zinc-200 dark:border-zinc-700">
+      <td style={{ width: 120, minWidth: 120, maxWidth: 120 }} className="sticky left-[32px] z-10 bg-inherit px-2 py-1 text-sm font-medium text-zinc-900 whitespace-nowrap border-r border-zinc-200 dark:border-zinc-700">
         <div className="flex items-center gap-1">
           <span>{student.name}</span>
           {isNew && (
@@ -132,7 +136,7 @@ function StudentRowImpl({
               className="inline-flex items-center gap-0.5 rounded-sm bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 px-1.5 py-0.5 text-[11px] font-black text-amber-900 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse ring-1 ring-amber-500"
               title={`신입 (${student.startDate})`}
             >
-              ✨신입
+              신입
             </span>
           )}
           {isLeaving && (
@@ -147,7 +151,7 @@ function StudentRowImpl({
       </td>
 
       {/* 학교/학년 + 급여설정 뱃지 */}
-      <td className="sticky left-[122px] z-10 bg-inherit w-[80px] px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
+      <td style={{ width: 80, minWidth: 80, maxWidth: 80 }} className="sticky left-[152px] z-10 bg-inherit px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
         <div className="text-[13px] text-zinc-500 leading-tight">{schoolGrade}</div>
         {settingItem && (
           <span
@@ -168,7 +172,7 @@ function StudentRowImpl({
       </td>
 
       {/* 요일 */}
-      <td className="sticky left-[202px] z-10 bg-[#f8f9fa] w-[140px] px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
+      <td className="bg-[#f8f9fa] w-[140px] px-1 py-1 border-r border-zinc-200 dark:border-zinc-700">
         <div className="flex flex-nowrap gap-0.5">
           {sortedDays.map((day) => (
             <span
@@ -189,22 +193,21 @@ function StudentRowImpl({
 
       {/* 예정액 */}
       {showExpectedBilling && (
-        <td className="sticky left-[342px] z-10 bg-[#fefce8] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
+        <td className="bg-[#fefce8] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
           {expectedBilling > 0 ? expectedBilling.toLocaleString() : "-"}
         </td>
       )}
 
       {/* 정산액 */}
       {showSettlement && (
-        <td className={`sticky ${showExpectedBilling ? "left-[402px]" : "left-[342px]"} z-10 bg-[#eff6ff] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700`}>
+        <td className="bg-[#eff6ff] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
           {settlementAmount > 0 ? settlementAmount.toLocaleString() : "-"}
         </td>
       )}
 
       {/* 등록차수 (담임 청구액 ÷ 단가) — 출석보다 먼저 */}
       <td
-        className="sticky z-10 bg-[#faf5ff] w-[52px] px-1 py-1 text-center text-[13px] font-bold text-violet-700 border-r border-zinc-300 dark:border-zinc-600"
-        style={{ left: getStickyLeftPx(showExpectedBilling, showSettlement, "term") }}
+        className="bg-[#faf5ff] w-[52px] px-1 py-1 text-center text-[13px] font-bold text-violet-700 border-r border-zinc-300 dark:border-zinc-600"
         title={termCount ? `등록차수 ${termCount.toFixed(1)}${unit}` : undefined}
       >
         {termCount ? `${termCount.toFixed(1)}${unit}` : "-"}
@@ -222,8 +225,7 @@ function StudentRowImpl({
           : "bg-[#f0f4f8] text-zinc-700";
         return (
           <td
-            className={`sticky z-10 w-[52px] px-1 py-1 text-center text-[13px] font-bold border-r border-zinc-300 dark:border-zinc-600 ${stateCls}`}
-            style={{ left: getStickyLeftPx(showExpectedBilling, showSettlement, "attendance") }}
+            className={`w-[52px] px-1 py-1 text-center text-[13px] font-bold border-r border-zinc-300 dark:border-zinc-600 ${stateCls}`}
             title={
               hasTerm
                 ? `출석 ${monthTotal.toFixed(1)}${unit} / 등록 ${termCount!.toFixed(1)}${unit}`
@@ -299,7 +301,12 @@ function StudentRowImpl({
           ? { backgroundColor: bgColor }
           : undefined;
 
-        const cellTitle = [holidayName ? `🎉 ${holidayName}` : "", memos[dateKey] || ""]
+        const peerEditor = editingByPeers?.get(`${student.id}|${dateKey}`);
+        const cellTitle = [
+          holidayName ? `🎉 ${holidayName}` : "",
+          memos[dateKey] || "",
+          peerEditor ? `✏️ ${peerEditor.name} 편집 중` : "",
+        ]
           .filter(Boolean)
           .join(" | ");
 
@@ -311,7 +318,13 @@ function StudentRowImpl({
             onContextMenu={(e) => isValid && onCellRightClick(e, student.id, dateKey)}
             className={`relative text-center select-none border-r border-b border-zinc-300 transition-colors ${
               isValid ? "cursor-pointer hover:brightness-95" : "cursor-not-allowed"
-            } ${isToday && isScheduledDay ? "ring-1 ring-inset ring-blue-400" : ""}`}
+            } ${
+              peerEditor
+                ? "ring-2 ring-inset ring-fuchsia-500 animate-pulse"
+                : isToday && isScheduledDay
+                ? "ring-1 ring-inset ring-blue-400"
+                : ""
+            }`}
             style={{
               ...(stripeStyle || {}),
               width: cellWidthPx,

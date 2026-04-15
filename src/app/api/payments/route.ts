@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAuth } from "@/lib/apiAuth";
+import { logAuditSafe } from "@/lib/audit";
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -50,6 +51,15 @@ export async function POST(request: NextRequest) {
       );
     }
   }
+
+  logAuditSafe(supabase, {
+    table: "payments",
+    recordId: String(billingMonth || "(unknown)"),
+    action: "bulk",
+    changes: { imported_count: records.length, billing_month: billingMonth },
+    editedBy: auth.email,
+    context: { note: "수납내역 일괄 업로드 (해당 청구월 덮어쓰기)" },
+  });
 
   return NextResponse.json({ count: records.length });
 }

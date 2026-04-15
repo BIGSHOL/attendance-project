@@ -24,6 +24,7 @@ export default function Nav({ email }: NavProps) {
     ...baseNavItems,
     ...(isAdmin ? [{ href: "/attendance-import", label: "출석부 업로드", icon: "📥" }] : []),
     ...(isMaster ? [{ href: "/admin/users", label: "사용자 관리", icon: "👤" }] : []),
+    ...(isAdmin ? [{ href: "/admin/audit", label: "변경 이력", icon: "📜" }] : []),
   ];
 
   return (

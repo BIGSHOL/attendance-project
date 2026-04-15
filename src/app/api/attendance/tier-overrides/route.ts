@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/apiAuth";
+import { logAuditSafe } from "@/lib/audit";
 
 /**
  * GET /api/attendance/tier-overrides?teacher_id=...
@@ -64,10 +65,38 @@ export async function PUT(request: NextRequest) {
 
   if (rows.length === 0) return NextResponse.json({ count: 0 });
 
-  const { error } = await supabase
+  // 변경 전 스냅샷
+  const studentIds = rows.map((r) => r.student_id);
+  const { data: beforeRows } = await supabase
     .from("student_tier_overrides")
-    .upsert(rows, { onConflict: "teacher_id,student_id" });
+    .select("*")
+    .eq("teacher_id", teacherId)
+    .in("student_id", studentIds);
+  const beforeMap = new Map(
+    (beforeRows || []).map((r) => [
+      r.student_id as string,
+      r as Record<string, unknown>,
+    ])
+  );
+
+  const { data: afterRows, error } = await supabase
+    .from("student_tier_overrides")
+    .upsert(rows, { onConflict: "teacher_id,student_id" })
+    .select();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  for (const after of afterRows || []) {
+    const before = beforeMap.get(after.student_id as string);
+    logAuditSafe(supabase, {
+      table: "student_tier_overrides",
+      recordId: `${after.teacher_id}:${after.student_id}`,
+      action: before ? "update" : "insert",
+      before: before || null,
+      after: after as Record<string, unknown>,
+      editedBy: user.email!,
+    });
+  }
+
   return NextResponse.json({ count: rows.length });
 }

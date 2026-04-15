@@ -288,6 +288,8 @@ export default function AttendancePage() {
     updateCellColor,
     updateHomework,
     refetch: refetchAttendance,
+    editingByPeers,
+    setEditingCell,
   } = useAttendanceData(selectedTeacherId, year, month, attendanceRangeOverride);
 
   // 선생님 기반 학생 필터링 + Supabase 출석 데이터 머지
@@ -364,6 +366,13 @@ export default function AttendancePage() {
     const teacherEnglishName = selectedTeacher.englishName;
     const teacherId = selectedTeacher.id;
 
+    // 수학 선생님 여부: subjects에 math/highmath 포함
+    const isMathTeacher = !!selectedTeacher.subjects?.some(
+      (s) => s === "math" || s === "highmath"
+    );
+    // 수학 수납 식별: payment_name 끝에 공백+요일 조합 (예: "중등M 중1 EL2T 화금")
+    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
+
     for (const student of filteredStudents) {
       const studentPayments = findStudentPayments(student, monthPayments);
       // 담임 선생님 일치 필터
@@ -376,9 +385,13 @@ export default function AttendancePage() {
         if (teacherEnglishName && pt.includes(teacherEnglishName)) return true;
         return false;
       });
-      if (teacherPayments.length === 0) continue;
+      // 수학 선생님이면 수납명에 요일 패턴이 있는 행만 포함 (영어/기타 과목 수납 제외)
+      const filtered = isMathTeacher
+        ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
+        : teacherPayments;
+      if (filtered.length === 0) continue;
 
-      const totalCharge = teacherPayments.reduce((s, p) => s + (p.charge_amount || 0), 0);
+      const totalCharge = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (totalCharge <= 0) continue;
 
       const setting = matchSalarySetting(
@@ -512,33 +525,48 @@ export default function AttendancePage() {
     }
   }, [syncing, selectedTeacherId, selectedTeacher, currentSheetUrl, year, month, allStudents, markSynced, refetchAttendance, salaryConfig, refetchTierOverrides]);
 
-  // Supabase 연동 핸들러
+  // Supabase 연동 핸들러 — 편집 시 presence broadcast (다른 사용자에게 "편집 중" 표시)
+  // 변경 후 2초간 본인 편집 셀로 잠가서 realtime 에코로 인한 깜빡임 방지
+  const markEditing = useCallback(
+    (studentId: string, dateKey: string) => {
+      void setEditingCell(studentId, dateKey, true);
+      setTimeout(() => {
+        void setEditingCell(studentId, dateKey, false);
+      }, 2000);
+    },
+    [setEditingCell]
+  );
+
   const handleAttendanceChange = useCallback(
     (studentId: string, dateKey: string, value: number | null) => {
+      markEditing(studentId, dateKey);
       upsertAttendance(studentId, dateKey, value);
     },
-    [upsertAttendance]
+    [upsertAttendance, markEditing]
   );
 
   const handleMemoChange = useCallback(
     (studentId: string, dateKey: string, memo: string) => {
+      markEditing(studentId, dateKey);
       updateMemo(studentId, dateKey, memo);
     },
-    [updateMemo]
+    [updateMemo, markEditing]
   );
 
   const handleCellColorChange = useCallback(
     (studentId: string, dateKey: string, color: string | null) => {
+      markEditing(studentId, dateKey);
       updateCellColor(studentId, dateKey, color);
     },
-    [updateCellColor]
+    [updateCellColor, markEditing]
   );
 
   const handleHomeworkChange = useCallback(
     (studentId: string, dateKey: string, done: boolean) => {
+      markEditing(studentId, dateKey);
       updateHomework(studentId, dateKey, done);
     },
-    [updateHomework]
+    [updateHomework, markEditing]
   );
 
   return (
@@ -885,6 +913,8 @@ export default function AttendancePage() {
             onMemoChange={handleMemoChange}
             onCellColorChange={handleCellColorChange}
             onHomeworkChange={handleHomeworkChange}
+            editingByPeers={editingByPeers}
+            setEditingCell={setEditingCell}
           />
         )}
       </div>
