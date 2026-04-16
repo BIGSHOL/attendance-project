@@ -334,13 +334,25 @@ export default function AttendancePage() {
     return filtered
       .map((s): Student => {
         const supaData = dataMap.get(s.id);
-        // 선택된 선생님과 매칭되는 모든 enrollments (재수강 대응).
+        // 선택된 선생님과 매칭되는 모든 enrollments (재수강 · 반이동 대응).
         // 원본 DB 에 필드가 전부 빈 쓰레기 enrollment 가 있으면 isTeacherMatch 가
-        // 이름 매칭 "" === "" 로 통과시키므로, startDate 있는 것만 취함.
-        const teacherEnrollments =
+        // 이름 매칭 "" === "" 로 통과시키므로, start/end 중 하나라도 있는 것만 취함.
+        // (반이동 직후 startDate 가 빈 값으로 저장되는 Firebase 이슈 대응 —
+        //  같은 선생님 직전 enrollment 의 endDate 를 startDate 로 유추.)
+        const rawTeacherEnrollments =
           s.enrollments?.filter(
-            (e) => e.startDate && isTeacherMatch(e, selectedTeacher)
+            (e) => (e.startDate || e.endDate) && isTeacherMatch(e, selectedTeacher)
           ) || [];
+        const teacherEnrollments = rawTeacherEnrollments.map((e) => {
+          if (e.startDate) return e;
+          // startDate 비어있으면 같은 선생님 직전 enrollment endDate 로 유추
+          const priorEnd = rawTeacherEnrollments
+            .filter((x) => x !== e && x.endDate)
+            .map((x) => x.endDate || "")
+            .sort()
+            .reverse()[0];
+          return priorEnd ? { ...e, startDate: priorEnd } : e;
+        });
         // 표시용 반이름/시작일/종료일: 현재 진행 중인 것 우선, 없으면 마지막
         const today = new Date().toISOString().slice(0, 10);
         const primaryEnrollment =

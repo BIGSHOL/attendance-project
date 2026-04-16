@@ -652,14 +652,26 @@ function TeacherRatiosCard({
 
   const subjectLabel = (s: string) => (s === "math" ? "수학" : "영어");
 
+  // 하드코딩 기본값 + DB 오버라이드 머지 (DB 우선). UI 표시 및 dirty 비교의 기준.
+  const merged = useMemo(() => {
+    const out: Record<string, Record<string, number>> = {};
+    for (const s of Object.keys(defaultRatios || {})) {
+      out[s] = { ...(defaultRatios[s] || {}) };
+    }
+    for (const s of Object.keys(ratios || {})) {
+      out[s] = { ...(out[s] || {}), ...(ratios[s] || {}) };
+    }
+    return out;
+  }, [defaultRatios, ratios]);
+
   const [draft, setDraft] = useState<Record<string, Record<string, number>>>(
-    () => JSON.parse(JSON.stringify(ratios || {}))
+    () => JSON.parse(JSON.stringify(merged))
   );
   const [saving, setSaving] = useState(false);
-  // ratios prop 변경 시 draft 동기화 (선생님 전환 등)
+  // merged 변경 시 draft 동기화 (선생님 전환 등)
   useEffect(() => {
-    setDraft(JSON.parse(JSON.stringify(ratios || {})));
-  }, [ratios]);
+    setDraft(JSON.parse(JSON.stringify(merged)));
+  }, [merged]);
 
   const handleChange = (subject: string, group: string, value: string) => {
     setDraft((d) => {
@@ -675,7 +687,7 @@ function TeacherRatiosCard({
     });
   };
 
-  const isDirty = JSON.stringify(draft) !== JSON.stringify(ratios || {});
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(merged);
 
   const handleSave = async () => {
     setSaving(true);
@@ -690,7 +702,7 @@ function TeacherRatiosCard({
     <div className="mt-6 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          급여 비율 <span className="text-xs font-normal text-zinc-400">(비어있으면 공용 45% 적용)</span>
+          급여 비율 <span className="text-xs font-normal text-zinc-400">(값을 바꾸고 저장하면 이 선생님에게만 적용 · 비우면 45% 폴백)</span>
         </h3>
         {isEditable && isDirty && (
           <button
@@ -721,10 +733,10 @@ function TeacherRatiosCard({
               </td>
               {GROUPS.map((g) => {
                 const value = draft[subject]?.[g];
+                const dbValue = ratios?.[subject]?.[g];
                 const defaultValue = defaultRatios[subject]?.[g];
-                // DB 값이 없어도 INITIAL 에 힌트가 있으면 placeholder 로 표시
-                const placeholder =
-                  defaultValue != null ? String(defaultValue) : "45";
+                // DB 저장값인지 구분 — 테두리만 강조 (DB=파랑 / 기본값=회색)
+                const isFromDB = dbValue != null;
                 return (
                   <td key={g} className="px-2 py-1 text-center">
                     {isEditable ? (
@@ -736,23 +748,25 @@ function TeacherRatiosCard({
                           max="100"
                           value={value ?? ""}
                           onChange={(e) => handleChange(subject, g, e.target.value)}
-                          placeholder={placeholder}
+                          placeholder="45"
                           title={
-                            defaultValue != null
-                              ? `현재 적용 중: ${defaultValue}% (코드 하드코딩 값)`
-                              : "기본 공용 45% 적용"
+                            dbValue != null
+                              ? `DB 저장값: ${dbValue}%`
+                              : defaultValue != null
+                              ? `하드코딩 기본값: ${defaultValue}% (적용 중, 저장하면 DB에 기록)`
+                              : "비어있으면 공용 45% 적용"
                           }
-                          className="w-16 rounded-sm border border-zinc-300 bg-white px-1 py-1 text-center text-sm placeholder:text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                          className={`w-16 rounded-sm border bg-white px-1 py-1 text-center text-sm text-zinc-900 placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100 ${
+                            isFromDB
+                              ? "border-blue-400 dark:border-blue-500"
+                              : "border-zinc-300 dark:border-zinc-700"
+                          }`}
                         />
                         <span className="text-xs text-zinc-400">%</span>
                       </div>
                     ) : (
                       <span className="text-sm text-zinc-700 dark:text-zinc-300">
-                        {value != null
-                          ? `${value}%`
-                          : defaultValue != null
-                          ? <span className="text-zinc-400">({defaultValue}%)</span>
-                          : <span className="text-zinc-400">—</span>}
+                        {value != null ? `${value}%` : <span className="text-zinc-400">—</span>}
                       </span>
                     )}
                   </td>
