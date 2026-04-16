@@ -14,7 +14,7 @@ import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useStudentTierOverrides } from "@/hooks/useStudentTierOverrides";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import { INITIAL_SETTLEMENT } from "@/types";
-import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPeriod } from "@/types";
+import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPeriod, Enrollment } from "@/types";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useHolidays } from "@/hooks/useHolidays";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
@@ -387,6 +387,100 @@ export default function AttendancePage() {
   const { payments: monthPayments } = usePaymentsForMonth(year, month);
 
   /**
+   * 수납명 끝의 요일 문자열을 배열로 추출.
+   * 예: "초등M 초4 BS1J 화금" → ["화","금"], "초등M 개별 JJ1E 수" → ["수"]
+   */
+  const extractPaymentDays = (paymentName: string): string[] => {
+    const m = (paymentName || "").match(/\s([월화수목금토일]+)\s*$/);
+    return m ? m[1].split("") : [];
+  };
+
+  /**
+   * 학생을 "수납" 기준으로 분리한 행 목록.
+   *
+   * 규칙: 한 학생이 한 선생님에게 서로 다른 요일 세트(즉 서로 다른 분반/단가)의
+   *       수납을 2건 이상 보유한 경우에만 행을 분리한다.
+   *       한 건만 있거나 모두 같은 요일 세트면 기존처럼 1행 유지.
+   *
+   * 예) 김지홍 — 화금 수납(24,000원) + 목 수납(21,250원) → 2행으로 분리
+   *     강지원 — 수 수납 1건만 → 1행 유지
+   *
+   * 각 분리 행은:
+   *   - id: `{studentId}|{요일키}` 로 고유
+   *   - group/days: 해당 수납이 커버하는 요일
+   *   - attendance: 그 요일의 출석만 필터
+   */
+  const studentRows = useMemo(() => {
+    if (!selectedTeacher) return filteredStudents;
+
+    const opts = {
+      teacherId: selectedTeacher.id,
+      teacherName: selectedTeacher.name,
+      teacherEnglishName: selectedTeacher.englishName,
+      isMathTeacher: !!selectedTeacher.subjects?.some(
+        (s) => s === "math" || s === "highmath"
+      ),
+    };
+
+    const rows: Student[] = [];
+    for (const s of filteredStudents) {
+      const studentPayments = findStudentPayments(s, monthPayments);
+      const teacherPayments = studentPayments.filter((p) => {
+        if (p.teacher_staff_id && p.teacher_staff_id === opts.teacherId) return true;
+        const pt = p.teacher_name || "";
+        if (!pt) return false;
+        if (opts.teacherName && pt.includes(opts.teacherName)) return true;
+        if (opts.teacherEnglishName && pt.includes(opts.teacherEnglishName))
+          return true;
+        return false;
+      });
+
+      // 수납이 가리키는 요일 세트별 그룹핑
+      const byDays = new Map<string, string[]>();
+      for (const p of teacherPayments) {
+        const d = extractPaymentDays(p.payment_name || "").slice().sort();
+        const key = d.join(",");
+        if (!byDays.has(key)) byDays.set(key, d);
+      }
+
+      // 요일 세트가 1개 이하 (또는 빈 키 하나뿐) → 분리 안 함
+      const keys = Array.from(byDays.keys()).filter((k) => k.length > 0);
+      if (keys.length <= 1) {
+        rows.push(s);
+        continue;
+      }
+
+      // 2개 이상의 서로 다른 요일 세트 → 행 분리
+      for (const key of keys) {
+        const days = byDays.get(key)!;
+        const filteredAttendance: Record<string, number> = {};
+        for (const [dk, v] of Object.entries(s.attendance || {})) {
+          const dow = ["일", "월", "화", "수", "목", "금", "토"][
+            new Date(dk).getDay()
+          ];
+          if (days.includes(dow)) filteredAttendance[dk] = v;
+        }
+        // group 이름: enrollment className 중 요일이 맞는 것 우선, 없으면 요일키 표기
+        const matchingEnrollment = (s.enrollments || []).find((e) => {
+          const ed = (e.days || []).slice().sort();
+          return ed.length === days.length && ed.every((x, i) => x === days[i]);
+        });
+        rows.push({
+          ...s,
+          id: `${s.id}|${key}`,
+          group:
+            matchingEnrollment?.className ||
+            `${days.join("·")} 수업`,
+          enrollments: matchingEnrollment ? [matchingEnrollment] : s.enrollments,
+          days,
+          attendance: filteredAttendance,
+        });
+      }
+    }
+    return rows;
+  }, [filteredStudents, monthPayments, selectedTeacher]);
+
+  /**
    * 이번 월에 대응하는 세션 범위 predicate.
    * 시트 규칙: 예컨대 "26.03" 월은 3/6 ~ 4/2 범위를 포함.
    * 달력 월(1~말일)만 쓰면 4월초 수업을 3월 급여에서 놓치는 버그 발생.
@@ -401,101 +495,114 @@ export default function AttendancePage() {
     return (dateKey: string) => dateKey.startsWith(monthStr);
   }, [sessionPeriods, year, month]);
 
-  // 학생별 등록차수 계산: (담당 선생님 수납 합계) / (학생 단가)
-  // 사용자 정의: "학생과 담임선생님이 일치하는 행의 청구액" / "학생의 단가"
+  /**
+   * 행(수강)별 수납 필터:
+   *   1) 선생님 일치
+   *   2) 수학이면 수납명에 요일 패턴이 있는 것만
+   *   3) 수납명 요일 세트가 이 행 요일 세트와 동일
+   * 조건 3) 이 한 학생 여러 수강 중 각 수강에 해당하는 수납만 고르는 핵심.
+   */
+  const filterPaymentsForRow = (
+    row: Student,
+    payments: ReturnType<typeof findStudentPayments>,
+    opts: {
+      teacherId: string;
+      teacherName?: string;
+      teacherEnglishName?: string;
+      isMathTeacher: boolean;
+    }
+  ) => {
+    const teacherPayments = payments.filter((p) => {
+      if (p.teacher_staff_id && p.teacher_staff_id === opts.teacherId) return true;
+      const pt = p.teacher_name || "";
+      if (!pt) return false;
+      if (opts.teacherName && pt.includes(opts.teacherName)) return true;
+      if (opts.teacherEnglishName && pt.includes(opts.teacherEnglishName)) return true;
+      return false;
+    });
+    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
+    const dayFiltered = opts.isMathTeacher
+      ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
+      : teacherPayments;
+    const rowDays = (row.days || []).slice().sort();
+    if (rowDays.length === 0) return dayFiltered;
+    return dayFiltered.filter((p) => {
+      const payDays = extractPaymentDays(p.payment_name || "").slice().sort();
+      if (payDays.length === 0) return !opts.isMathTeacher; // 수학 외 과목 폴백
+      return (
+        payDays.length === rowDays.length &&
+        payDays.every((d, i) => d === rowDays[i])
+      );
+    });
+  };
+
+  // 행별 등록차수: (이 수강에 해당하는 수납 합계) / (이 수강의 학생 단가)
   const termCountMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!selectedTeacher || monthPayments.length === 0) return map;
 
-    const teacherName = selectedTeacher.name;
-    const teacherEnglishName = selectedTeacher.englishName;
-    const teacherId = selectedTeacher.id;
+    const opts = {
+      teacherId: selectedTeacher.id,
+      teacherName: selectedTeacher.name,
+      teacherEnglishName: selectedTeacher.englishName,
+      isMathTeacher: !!selectedTeacher.subjects?.some(
+        (s) => s === "math" || s === "highmath"
+      ),
+    };
 
-    // 수학 선생님 여부: subjects에 math/highmath 포함
-    const isMathTeacher = !!selectedTeacher.subjects?.some(
-      (s) => s === "math" || s === "highmath"
-    );
-    // 수학 수납 식별: payment_name 끝에 공백+요일 조합 (예: "중등M 중1 EL2T 화금")
-    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
-
-    for (const student of filteredStudents) {
-      const studentPayments = findStudentPayments(student, monthPayments);
-      // 담임 선생님 일치 필터
-      // payment.teacher_name 이 "이영현(Ellen)" 형식일 수 있어 substring 매칭
-      const teacherPayments = studentPayments.filter((p) => {
-        if (p.teacher_staff_id && p.teacher_staff_id === teacherId) return true;
-        const pt = p.teacher_name || "";
-        if (!pt) return false;
-        if (teacherName && pt.includes(teacherName)) return true;
-        if (teacherEnglishName && pt.includes(teacherEnglishName)) return true;
-        return false;
-      });
-      // 수학 선생님이면 수납명에 요일 패턴이 있는 행만 포함 (영어/기타 과목 수납 제외)
-      const filtered = isMathTeacher
-        ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
-        : teacherPayments;
+    for (const row of studentRows) {
+      const studentPayments = findStudentPayments(row, monthPayments);
+      const filtered = filterPaymentsForRow(row, studentPayments, opts);
       if (filtered.length === 0) continue;
 
       const totalCharge = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (totalCharge <= 0) continue;
 
       const setting = matchSalarySetting(
-        student,
+        row,
         salaryConfig,
         undefined,
-        tierOverrides[student.id]
+        tierOverrides[row.id]
       );
       const unitPrice = setting?.unitPrice || 0;
       if (unitPrice <= 0) continue;
 
-      // 반올림 (원 단위 잔돈이 있을 수 있으므로)
       const term = Math.round(totalCharge / unitPrice);
-      if (term > 0) map.set(student.id, term);
+      if (term > 0) map.set(row.id, term);
     }
     return map;
-  }, [filteredStudents, monthPayments, selectedTeacher, salaryConfig, tierOverrides, year, month]);
+  }, [studentRows, monthPayments, selectedTeacher, salaryConfig, tierOverrides]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading;
 
-  // 학생별 이번 달 납부액 합계 (수납 → 정산 반영용)
-  // 담임 선생님 일치 + (수학 선생님이면) 수납명 끝 요일 패턴 필터 적용
-  // 동일 로직을 등록차수(termCountMap) 계산과 맞춰 일관성 유지
+  // 행(수강)별 이번 달 수납 합계 — 수강 요일 세트와 일치하는 수납만 집계
   const paidAmountByStudent = useMemo(() => {
     const map = new Map<string, number>();
     if (!selectedTeacher || monthPayments.length === 0) return map;
 
-    const teacherName = selectedTeacher.name;
-    const teacherEnglishName = selectedTeacher.englishName;
-    const teacherId = selectedTeacher.id;
-    const isMathTeacher = !!selectedTeacher.subjects?.some(
-      (s) => s === "math" || s === "highmath"
-    );
-    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
+    const opts = {
+      teacherId: selectedTeacher.id,
+      teacherName: selectedTeacher.name,
+      teacherEnglishName: selectedTeacher.englishName,
+      isMathTeacher: !!selectedTeacher.subjects?.some(
+        (s) => s === "math" || s === "highmath"
+      ),
+    };
 
-    for (const student of filteredStudents) {
-      const studentPayments = findStudentPayments(student, monthPayments);
-      const teacherPayments = studentPayments.filter((p) => {
-        if (p.teacher_staff_id && p.teacher_staff_id === teacherId) return true;
-        const pt = p.teacher_name || "";
-        if (!pt) return false;
-        if (teacherName && pt.includes(teacherName)) return true;
-        if (teacherEnglishName && pt.includes(teacherEnglishName)) return true;
-        return false;
-      });
-      const filtered = isMathTeacher
-        ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
-        : teacherPayments;
+    for (const row of studentRows) {
+      const studentPayments = findStudentPayments(row, monthPayments);
+      const filtered = filterPaymentsForRow(row, studentPayments, opts);
       if (filtered.length === 0) continue;
       const total = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
-      if (total > 0) map.set(student.id, total);
+      if (total > 0) map.set(row.id, total);
     }
     return map;
-  }, [filteredStudents, monthPayments, selectedTeacher]);
+  }, [studentRows, monthPayments, selectedTeacher]);
 
-  // 통계
+  // 통계 — 행 단위로 집계해 합산 (학생 수는 고유 학생 기준)
   const stats = useMemo(
     () => calculateStats(
-      filteredStudents,
+      studentRows,
       salaryConfig,
       year,
       month,
@@ -512,7 +619,7 @@ export default function AttendancePage() {
       paidAmountByStudent,
       isDateInCurrentPeriod
     ),
-    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod]
+    [studentRows, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod]
   );
 
   /**
@@ -530,7 +637,7 @@ export default function AttendancePage() {
         ? "math"
         : "other";
 
-    for (const student of filteredStudents) {
+    for (const student of studentRows) {
       if (!student.attendance) continue;
 
       let classUnits = 0;
@@ -575,7 +682,7 @@ export default function AttendancePage() {
     }
     return map;
   }, [
-    filteredStudents,
+    studentRows,
     salaryConfig,
     year,
     month,
@@ -678,34 +785,45 @@ export default function AttendancePage() {
     [setEditingCell]
   );
 
+  /**
+   * studentRows 는 `{원본ID}|{className}` 형식의 가상 id 를 가짐.
+   * 실제 저장/편집은 원본 학생 id 로 보내야 하므로 prefix 를 벗겨낸다.
+   */
+  const realStudentId = (rowId: string) =>
+    rowId.includes("|") ? rowId.split("|")[0] : rowId;
+
   const handleAttendanceChange = useCallback(
     (studentId: string, dateKey: string, value: number | null) => {
-      markEditing(studentId, dateKey);
-      upsertAttendance(studentId, dateKey, value);
+      const realId = realStudentId(studentId);
+      markEditing(realId, dateKey);
+      upsertAttendance(realId, dateKey, value);
     },
     [upsertAttendance, markEditing]
   );
 
   const handleMemoChange = useCallback(
     (studentId: string, dateKey: string, memo: string) => {
-      markEditing(studentId, dateKey);
-      updateMemo(studentId, dateKey, memo);
+      const realId = realStudentId(studentId);
+      markEditing(realId, dateKey);
+      updateMemo(realId, dateKey, memo);
     },
     [updateMemo, markEditing]
   );
 
   const handleCellColorChange = useCallback(
     (studentId: string, dateKey: string, color: string | null) => {
-      markEditing(studentId, dateKey);
-      updateCellColor(studentId, dateKey, color);
+      const realId = realStudentId(studentId);
+      markEditing(realId, dateKey);
+      updateCellColor(realId, dateKey, color);
     },
     [updateCellColor, markEditing]
   );
 
   const handleHomeworkChange = useCallback(
     (studentId: string, dateKey: string, done: boolean) => {
-      markEditing(studentId, dateKey);
-      updateHomework(studentId, dateKey, done);
+      const realId = realStudentId(studentId);
+      markEditing(realId, dateKey);
+      updateHomework(realId, dateKey, done);
     },
     [updateHomework, markEditing]
   );
@@ -1001,7 +1119,7 @@ export default function AttendancePage() {
           </div>
         ) : (
           <AttendanceTable
-            students={filteredStudents}
+            students={studentRows}
             year={year}
             month={month}
             subject={selectedSubject}

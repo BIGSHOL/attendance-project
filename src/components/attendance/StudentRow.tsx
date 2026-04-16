@@ -453,19 +453,3 @@ function formatSchoolGrade(school?: string, grade?: string): string {
   return school || grade || "-";
 }
 
-/**
- * Sticky left 픽셀 값 (등록차수 → 출석 순서)
- * - term: 고정 컬럼 끝 바로 뒤 (base)
- * - attendance: 등록 칸(52px) 뒤 (base + 52)
- */
-function getStickyLeftPx(
-  showExpected: boolean,
-  showSettlement: boolean,
-  col: "attendance" | "term"
-): number {
-  let base = 342;
-  if (showExpected) base += 60;
-  if (showSettlement) base += 60;
-  if (col === "attendance") base += 52;
-  return base;
-}
