@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getAuthedUser } from "@/lib/getAuthedUser";
 import {
   getSheetMetadata,
   getSheetValuesWithNotes,
@@ -17,7 +18,7 @@ interface SyncFetchBody {
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getAuthedUser(supabase);
   if (!user) return NextResponse.json({ error: "인증 필요" }, { status: 401 });
 
   const { data: role } = await supabase

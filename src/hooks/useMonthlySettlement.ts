@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useState, useCallback } from "react";
 import type { SalaryConfig, MonthlySettlement } from "@/types";
 
 export interface SettlementRow {
@@ -20,24 +19,30 @@ export interface SettlementRow {
 
 /**
  * 특정 월의 모든 선생님 정산 데이터 조회
+ * 서버 /api/settlements 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
  */
 export function useMonthlySettlement(year: number, month: number) {
   const [settlements, setSettlements] = useState<SettlementRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const supabaseRef = useRef(createClient());
 
   const fetch = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabaseRef.current
-      .from("monthly_settlements")
-      .select("*")
-      .eq("year", year)
-      .eq("month", month);
-
-    if (!error && data) {
-      setSettlements(data as SettlementRow[]);
+    try {
+      const res = await window.fetch(
+        `/api/settlements?year=${year}&month=${month}`,
+        { cache: "no-store" }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as SettlementRow[];
+        setSettlements(data || []);
+      } else {
+        setSettlements([]);
+      }
+    } catch {
+      setSettlements([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [year, month]);
 
   useEffect(() => {

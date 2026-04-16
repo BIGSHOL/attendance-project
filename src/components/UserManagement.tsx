@@ -4,7 +4,6 @@ import { useState, useMemo } from "react";
 import { useUserRole, type UserRole, type SalaryType } from "@/hooks/useUserRole";
 import { useAllUserRoles } from "@/hooks/useAllUserRoles";
 import { useStaff } from "@/hooks/useStaff";
-import { createClient } from "@/lib/supabase/client";
 import { DAY_ORDER } from "@/types";
 import Pagination from "./Pagination";
 
@@ -52,11 +51,11 @@ export default function UserManagement() {
 
   const updateUser = async (userId: string, patch: Record<string, unknown>) => {
     setSaving(userId);
-    const supabase = createClient();
-    await supabase
-      .from("user_roles")
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq("id", userId);
+    await window.fetch(`/api/admin/user-roles/${userId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
     await refetch();
     setSaving(null);
   };
@@ -99,8 +98,7 @@ export default function UserManagement() {
   const handleDelete = async (userId: string, email: string) => {
     if (!confirm(`${email} 계정을 삭제하시겠습니까?`)) return;
     setSaving(userId);
-    const supabase = createClient();
-    await supabase.from("user_roles").delete().eq("id", userId);
+    await window.fetch(`/api/admin/user-roles/${userId}`, { method: "DELETE" });
     await refetch();
     setSaving(null);
   };

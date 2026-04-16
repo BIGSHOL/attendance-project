@@ -1,35 +1,34 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import type { AttendanceRow } from "./useAttendanceData";
 
 /**
- * 특정 연도의 모든 출석 데이터 조회 (hours > 0 인 것만 의미 있음)
- * - 선생님별 재원학생(distinct student_id) 집계에 사용
+ * 특정 연도의 모든 출석 데이터 조회 (hours > 0 인 것만)
+ * 서버 /api/attendance/yearly 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
  */
 export function useYearlyAttendance(year: number) {
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const supabaseRef = useRef(createClient());
-
-  const startDate = `${year}-01-01`;
-  const endDate = `${year}-12-31`;
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabaseRef.current
-      .from("attendance")
-      .select("teacher_id, student_id, date, hours")
-      .gte("date", startDate)
-      .lte("date", endDate)
-      .gt("hours", 0);
-
-    if (!error && data) {
-      setRecords(data as AttendanceRow[]);
+    try {
+      const res = await window.fetch(`/api/attendance/yearly?year=${year}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = (await res.json()) as AttendanceRow[];
+        setRecords(data || []);
+      } else {
+        setRecords([]);
+      }
+    } catch {
+      setRecords([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [startDate, endDate]);
+  }, [year]);
 
   useEffect(() => {
     fetchAll();

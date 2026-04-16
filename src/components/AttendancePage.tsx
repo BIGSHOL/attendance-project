@@ -18,16 +18,24 @@ import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPe
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useHolidays } from "@/hooks/useHolidays";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
-import { expandSessionDatesContiguous } from "@/lib/sessionUtils";
-import { calculateStats, calculateFinalSalary, matchSalarySetting } from "@/lib/salary";
+import { expandSessionDatesContiguous, isDateInSession } from "@/lib/sessionUtils";
+import {
+  calculateStats,
+  calculateFinalSalary,
+  matchSalarySetting,
+  calculateStudentSalary,
+  getEffectiveRatio,
+  isAttendanceCountable,
+} from "@/lib/salary";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
-import { CELL_SIZE_OPTIONS, CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
+import { CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
 import AttendanceTable from "./attendance/AttendanceTable";
+import ViewOptionsMenu from "./attendance/ViewOptionsMenu";
 import dynamic from "next/dynamic";
 
 // 큰 모달들은 초기 번들에서 분리 — 열릴 때 로드
@@ -66,11 +74,24 @@ export default function AttendancePage() {
     }
   }, [viewMode, sessionPeriods, month, selectedSessionId, setSelectedSessionId]);
 
-  // 표시 옵션
+  // 표시 옵션 (localStorage 영속화 — CLAUDE.md 규칙)
   const [sortMode, setSortMode] = useState<SortMode>("class");
-  const [highlightWeekends, setHighlightWeekends] = useState(false);
-  const [showExpectedBilling, setShowExpectedBilling] = useState(false);
-  const [showSettlement, setShowSettlement] = useState(false);
+  const [highlightWeekends, setHighlightWeekends] = useLocalStorage<boolean>(
+    "attendance.highlightWeekends",
+    false
+  );
+  const [showExpectedBilling, setShowExpectedBilling] = useLocalStorage<boolean>(
+    "attendance.showExpectedBilling",
+    false
+  );
+  const [showPaidAmount, setShowPaidAmount] = useLocalStorage<boolean>(
+    "attendance.showPaidAmount",
+    false
+  );
+  const [showActualSalary, setShowActualSalary] = useLocalStorage<boolean>(
+    "attendance.showActualSalary",
+    false
+  );
   const [hideZeroAttendance, setHideZeroAttendance] = useLocalStorage<boolean>(
     "attendance.hideZeroAttendance",
     false
@@ -315,21 +336,30 @@ export default function AttendancePage() {
     return filtered
       .map((s): Student => {
         const supaData = dataMap.get(s.id);
-        // 선택된 선생님 담당 enrollment의 className 사용
-        const teacherEnrollment = s.enrollments?.find((e) => isTeacherMatch(e, selectedTeacher));
+        // 선택된 선생님과 매칭되는 모든 enrollments (재수강 대응).
+        // 원본 DB 에 필드가 전부 빈 쓰레기 enrollment 가 있으면 isTeacherMatch 가
+        // 이름 매칭 "" === "" 로 통과시키므로, startDate 있는 것만 취함.
+        const teacherEnrollments =
+          s.enrollments?.filter(
+            (e) => e.startDate && isTeacherMatch(e, selectedTeacher)
+          ) || [];
+        // 표시용 반이름/시작일/종료일: 현재 진행 중인 것 우선, 없으면 마지막
+        const today = new Date().toISOString().slice(0, 10);
+        const primaryEnrollment =
+          teacherEnrollments.find((e) => !e.endDate || e.endDate >= today) ||
+          teacherEnrollments[teacherEnrollments.length - 1];
         // 해당 선생님 수업의 요일만 추출 (schedule "월 1" → "월")
         const days = extractDaysForTeacher(s.enrollments, (e) => isTeacherMatch(e, selectedTeacher));
 
-        // 반이동/첫수업/퇴원 경계 판정을 per-teacher 단위로 하기 위해
-        // 해당 선생님 enrollment의 날짜로 오버라이드
-        const enrollStart = teacherEnrollment?.startDate || s.startDate;
-        const enrollEnd = teacherEnrollment?.endDate || s.endDate;
-
         return {
           ...s,
-          group: teacherEnrollment?.className || s.group || "미분류",
-          startDate: enrollStart,
-          endDate: enrollEnd,
+          group: primaryEnrollment?.className || s.group || "미분류",
+          // enrollments 를 해당 선생님 것으로 한정 — studentFilter 함수들이
+          // 이 배열을 보고 재원 구간 판정하므로 per-teacher 정확도 확보
+          enrollments: teacherEnrollments,
+          // 참고용 top-level 날짜 (일부 레거시 UI 용) — primary 기준
+          startDate: primaryEnrollment?.startDate || "",
+          endDate: primaryEnrollment?.endDate || "",
           days,
           attendance: supaData?.attendance ?? s.attendance ?? {},
           memos: supaData?.memos ?? s.memos ?? {},
@@ -355,6 +385,21 @@ export default function AttendancePage() {
 
   // 수납 데이터 (등록차수 계산용)
   const { payments: monthPayments } = usePaymentsForMonth(year, month);
+
+  /**
+   * 이번 월에 대응하는 세션 범위 predicate.
+   * 시트 규칙: 예컨대 "26.03" 월은 3/6 ~ 4/2 범위를 포함.
+   * 달력 월(1~말일)만 쓰면 4월초 수업을 3월 급여에서 놓치는 버그 발생.
+   * 해당 월의 세션이 정의돼 있으면 그 범위로, 없으면 기존 달력 월 prefix 매칭 fallback.
+   */
+  const isDateInCurrentPeriod = useMemo(() => {
+    const currentMonthSession = sessionPeriods.find((s) => s.month === month);
+    const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+    if (currentMonthSession) {
+      return (dateKey: string) => isDateInSession(dateKey, currentMonthSession);
+    }
+    return (dateKey: string) => dateKey.startsWith(monthStr);
+  }, [sessionPeriods, year, month]);
 
   // 학생별 등록차수 계산: (담당 선생님 수납 합계) / (학생 단가)
   // 사용자 정의: "학생과 담임선생님이 일치하는 행의 청구액" / "학생의 단가"
@@ -413,17 +458,39 @@ export default function AttendancePage() {
   const loading = staffLoading || studentsLoading || attendanceLoading;
 
   // 학생별 이번 달 납부액 합계 (수납 → 정산 반영용)
+  // 담임 선생님 일치 + (수학 선생님이면) 수납명 끝 요일 패턴 필터 적용
+  // 동일 로직을 등록차수(termCountMap) 계산과 맞춰 일관성 유지
   const paidAmountByStudent = useMemo(() => {
     const map = new Map<string, number>();
-    if (monthPayments.length === 0) return map;
+    if (!selectedTeacher || monthPayments.length === 0) return map;
+
+    const teacherName = selectedTeacher.name;
+    const teacherEnglishName = selectedTeacher.englishName;
+    const teacherId = selectedTeacher.id;
+    const isMathTeacher = !!selectedTeacher.subjects?.some(
+      (s) => s === "math" || s === "highmath"
+    );
+    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
+
     for (const student of filteredStudents) {
       const studentPayments = findStudentPayments(student, monthPayments);
-      if (studentPayments.length === 0) continue;
-      const total = studentPayments.reduce((s, p) => s + (p.charge_amount || 0), 0);
+      const teacherPayments = studentPayments.filter((p) => {
+        if (p.teacher_staff_id && p.teacher_staff_id === teacherId) return true;
+        const pt = p.teacher_name || "";
+        if (!pt) return false;
+        if (teacherName && pt.includes(teacherName)) return true;
+        if (teacherEnglishName && pt.includes(teacherEnglishName)) return true;
+        return false;
+      });
+      const filtered = isMathTeacher
+        ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
+        : teacherPayments;
+      if (filtered.length === 0) continue;
+      const total = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (total > 0) map.set(student.id, total);
     }
     return map;
-  }, [filteredStudents, monthPayments]);
+  }, [filteredStudents, monthPayments, selectedTeacher]);
 
   // 통계
   const stats = useMemo(
@@ -442,10 +509,84 @@ export default function AttendancePage() {
       selectedTeacher?.name,
       blogPenalty,
       tierOverrides,
-      paidAmountByStudent
+      paidAmountByStudent,
+      isDateInCurrentPeriod
     ),
-    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent]
+    [filteredStudents, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod]
   );
+
+  /**
+   * 학생별 실제 급여 계산 결과 맵.
+   * 상단 "이번 달 급여"와 동일한 `calculateStudentSalary` 공식을 학생 단위로 분해한 값.
+   * 합계 = stats.totalSalary (= 상단 이번 달 급여 − 인센티브).
+   * 출석 셀의 "실급여" 컬럼과 합계행에 사용된다.
+   */
+  const actualSalaryByStudent = useMemo(() => {
+    const map = new Map<string, number>();
+    const subjectHint =
+      selectedSubject === "english"
+        ? "english"
+        : selectedSubject === "math" || selectedSubject === "highmath"
+        ? "math"
+        : "other";
+
+    for (const student of filteredStudents) {
+      if (!student.attendance) continue;
+
+      let classUnits = 0;
+      for (const [dateKey, value] of Object.entries(student.attendance)) {
+        // 세션 범위(없으면 달력 월) 필터
+        if (!isDateInCurrentPeriod(dateKey) || value <= 0) continue;
+        if (
+          isAttendanceCountable(
+            dateKey,
+            selectedTeacherSalaryInfo.type,
+            selectedTeacherSalaryInfo.days
+          )
+        ) {
+          classUnits += value;
+        }
+      }
+
+      const settingItem = matchSalarySetting(
+        student,
+        salaryConfig,
+        subjectHint,
+        tierOverrides[student.id]
+      );
+      if (!settingItem) continue;
+      const baseRatio = getEffectiveRatio(
+        settingItem,
+        salaryConfig,
+        selectedTeacher?.name
+      );
+      const effective = { ...settingItem, ratio: baseRatio };
+      // 수납액이 없으면 0으로 취급 — 수납 없이 급여 지급 불가
+      const paid = paidAmountByStudent.get(student.id) ?? 0;
+      const salary = calculateStudentSalary(
+        effective,
+        salaryConfig.academyFee,
+        classUnits,
+        paid,
+        blogPenalty
+      );
+      // 0도 맵에 기록해야 "수납 없음 → 실급여 0" 셀에 표시됨
+      map.set(student.id, salary);
+    }
+    return map;
+  }, [
+    filteredStudents,
+    salaryConfig,
+    year,
+    month,
+    selectedTeacherSalaryInfo,
+    selectedSubject,
+    selectedTeacher,
+    blogPenalty,
+    tierOverrides,
+    paidAmountByStudent,
+    isDateInCurrentPeriod,
+  ]);
 
   const finalSalary = useMemo(
     () => calculateFinalSalary(stats.totalSalary, salaryConfig.incentives, settlement),
@@ -693,51 +834,23 @@ export default function AttendancePage() {
 
       {/* 상단 2행: 표시 옵션 */}
       <div className="flex items-center gap-2 px-3 pb-2 pt-1 border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
-        {/* 토글 */}
-        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
-          <input type="checkbox" checked={showExpectedBilling} onChange={(e) => setShowExpectedBilling(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
-          예정액
-        </label>
-        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
-          <input type="checkbox" checked={showSettlement} onChange={(e) => setShowSettlement(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
-          정산액
-        </label>
-        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
-          <input type="checkbox" checked={highlightWeekends} onChange={(e) => setHighlightWeekends(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
-          주말 회색
-        </label>
-        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 cursor-pointer dark:text-zinc-300">
-          <input type="checkbox" checked={hideZeroAttendance} onChange={(e) => setHideZeroAttendance(e.target.checked)} className="rounded border-zinc-300 w-4 h-4" />
-          0출석 숨김
-        </label>
-
-        {/* 날짜 셀 가로폭 */}
-        <div className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 ml-1 dark:text-zinc-300">
-          <span>가로</span>
-          <select
-            value={cellWidth}
-            onChange={(e) => setCellWidth(e.target.value as CellSize)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-          >
-            {CELL_SIZE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* 날짜 셀 세로폭 */}
-        <div className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          <span>세로</span>
-          <select
-            value={cellHeight}
-            onChange={(e) => setCellHeight(e.target.value as CellSize)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-          >
-            {CELL_SIZE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+        {/* 보기 — 열 표시 / 화면 옵션 / 셀 크기 통합 팝오버 */}
+        <ViewOptionsMenu
+          showExpectedBilling={showExpectedBilling}
+          setShowExpectedBilling={setShowExpectedBilling}
+          showPaidAmount={showPaidAmount}
+          setShowPaidAmount={setShowPaidAmount}
+          showActualSalary={showActualSalary}
+          setShowActualSalary={setShowActualSalary}
+          highlightWeekends={highlightWeekends}
+          setHighlightWeekends={setHighlightWeekends}
+          hideZeroAttendance={hideZeroAttendance}
+          setHideZeroAttendance={setHideZeroAttendance}
+          cellWidth={cellWidth}
+          setCellWidth={setCellWidth}
+          cellHeight={cellHeight}
+          setCellHeight={setCellHeight}
+        />
 
         {/* 숨김 해제 */}
         {(hiddenDateSet.size > 0 || hiddenStudentSet.size > 0) && (
@@ -896,7 +1009,10 @@ export default function AttendancePage() {
             tierOverrides={tierOverrides}
             highlightWeekends={highlightWeekends}
             showExpectedBilling={showExpectedBilling}
-            showSettlement={showSettlement}
+            showPaidAmount={showPaidAmount}
+            showActualSalary={showActualSalary}
+            paidAmountByStudent={paidAmountByStudent}
+            actualSalaryByStudent={actualSalaryByStudent}
             sortMode={sortMode}
             canCustomValue={isAdmin}
             overrideDates={viewMode === "session" && selectedSession ? expandSessionDatesContiguous(selectedSession) : undefined}

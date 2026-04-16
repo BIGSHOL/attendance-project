@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 
 export type UserRole = "master" | "admin" | "teacher" | "pending";
 
@@ -24,7 +23,8 @@ export interface UserRoleData {
 
 /**
  * 현재 로그인 사용자의 역할 조회
- * 미등록 사용자는 자동으로 pending 상태로 등록
+ * 서버 /api/me 엔드포인트를 호출해 dev bypass 와 Supabase 세션 두 경로를 통합 처리.
+ * 미등록 사용자는 서버에서 pending 으로 자동 등록됨.
  */
 export function useUserRole() {
   const [userRole, setUserRole] = useState<UserRoleData | null>(null);
@@ -33,39 +33,23 @@ export function useUserRole() {
 
   const fetch = useCallback(async () => {
     setLoading(true);
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user?.email) {
+    try {
+      const res = await window.fetch("/api/me", { cache: "no-store" });
+      if (!res.ok) {
+        setUserRole(null);
+        setEmail(null);
+        return;
+      }
+      const data = await res.json();
+      const role = (data?.userRole ?? null) as UserRoleData | null;
+      setUserRole(role);
+      setEmail(role?.email ?? null);
+    } catch {
       setUserRole(null);
       setEmail(null);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setEmail(user.email);
-
-    // user_roles 조회
-    const { data: existing } = await supabase
-      .from("user_roles")
-      .select("*")
-      .eq("email", user.email)
-      .single();
-
-    if (existing) {
-      setUserRole(existing as UserRoleData);
-    } else {
-      // 미등록 → pending 으로 등록
-      const { data: inserted } = await supabase
-        .from("user_roles")
-        .insert({ email: user.email, role: "pending" })
-        .select()
-        .single();
-      if (inserted) {
-        setUserRole(inserted as UserRoleData);
-      }
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => {

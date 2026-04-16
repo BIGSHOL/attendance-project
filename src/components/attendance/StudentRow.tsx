@@ -25,7 +25,14 @@ interface Props {
   tierOverrideId?: string;
   highlightWeekends: boolean;
   showExpectedBilling: boolean;
-  showSettlement: boolean;
+  /** 이번 달 실질 납부액 컬럼 표시 */
+  showPaidAmount: boolean;
+  /** 실제 계산된 급여 컬럼 표시 (상단 이번 달 급여와 동일 공식) */
+  showActualSalary: boolean;
+  /** 이번 달 수납 합계 (없으면 undefined) */
+  paidAmount?: number;
+  /** 실급여 = calculateStudentSalary 결과 (없으면 undefined) */
+  actualSalary?: number;
   cellWidthPx: number;
   cellHeightPx: number;
   holidayDateSet?: Set<string>;
@@ -51,7 +58,10 @@ function StudentRowImpl({
   tierOverrideId,
   highlightWeekends,
   showExpectedBilling,
-  showSettlement,
+  showPaidAmount,
+  showActualSalary,
+  paidAmount,
+  actualSalary,
   cellWidthPx,
   cellHeightPx,
   holidayDateSet,
@@ -101,6 +111,7 @@ function StudentRowImpl({
       ? Math.min(monthTotal, termCount)
       : monthTotal;
   const settlementAmount = billableUnits * classRate;
+
 
   // 학교+학년 포맷
   const schoolGrade = formatSchoolGrade(student.school, student.grade);
@@ -198,12 +209,37 @@ function StudentRowImpl({
         </td>
       )}
 
-      {/* 정산액 */}
-      {showSettlement && (
-        <td className="bg-[#eff6ff] w-[60px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
-          {settlementAmount > 0 ? settlementAmount.toLocaleString() : "-"}
+      {/* 수납액 — 이번 달 실제 납부 합계 (이 선생님·해당 과목 한정) */}
+      {showPaidAmount && (
+        <td className="bg-[#ecfeff] w-[70px] px-1 py-1 text-right text-[12px] text-zinc-600 border-r border-zinc-200 dark:border-zinc-700">
+          {typeof paidAmount === "number" && paidAmount > 0
+            ? paidAmount.toLocaleString()
+            : "-"}
         </td>
       )}
+
+      {/* 실급여 — 상단 '이번 달 급여'와 동일 공식. 수납 0 → 0 인 특수 케이스만 빨강 강조. */}
+      {showActualSalary && (() => {
+        const hasActual = typeof actualSalary === "number";
+        const actual = hasActual ? (actualSalary as number) : 0;
+        // 출석 > 0 인데 수납이 없어 실급여가 0 으로 처리된 경우만 빨강.
+        // 등록/출석 불일치는 각 컬럼에서 이미 표시되므로 여기선 중복 강조하지 않음.
+        const isZero = hasActual && actual === 0 && monthTotal > 0;
+        const cellCls = isZero
+          ? "bg-red-100 text-red-800 font-bold dark:bg-red-900/50 dark:text-red-200"
+          : "bg-[#fef9c3] text-zinc-800";
+        const tip = isZero
+          ? "수납 없음 → 실급여 0"
+          : "수납 캡 · 선생님 비율 · 블로그 패널티 반영";
+        return (
+          <td
+            className={`${cellCls} w-[70px] px-1 py-1 text-right text-[12px] font-medium border-r border-zinc-200 dark:border-zinc-700`}
+            title={tip}
+          >
+            {hasActual ? actual.toLocaleString() : "-"}
+          </td>
+        );
+      })()}
 
       {/* 등록차수 (담임 청구액 ÷ 단가) — 출석보다 먼저 */}
       <td

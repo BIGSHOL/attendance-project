@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  DEV_BYPASS_EMAIL,
+  DEV_BYPASS_TOKEN_COOKIE,
+  verifyTokenCookie,
+} from "@/lib/devBypass";
 
 type AuthResult =
   | { ok: true; email: string; role: "master" | "admin" | "teacher" | "pending" }
@@ -11,6 +17,13 @@ type Client = SupabaseClient;
  * 로그인된 사용자인지 확인
  */
 export async function requireAuth(supabase: Client): Promise<AuthResult> {
+  // 개발 환경 로그인 우회 — 유효한 dev bypass 쿠키가 있으면 마스터로 간주
+  const cookieStore = await cookies();
+  const devBypassToken = cookieStore.get(DEV_BYPASS_TOKEN_COOKIE)?.value;
+  if (verifyTokenCookie(devBypassToken)) {
+    return { ok: true, email: DEV_BYPASS_EMAIL, role: "master" };
+  }
+
   const {
     data: { user },
   } = await supabase.auth.getUser();

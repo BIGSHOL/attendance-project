@@ -16,9 +16,38 @@ export interface PaymentLite {
 }
 
 /**
+ * 학교명 정규화 — 전체명을 축약형으로 통일.
+ * 학생 DB는 "대산초", 수납 DB는 "대산초등학교" 식으로 혼재해 있어서 비교 전에 항상 이 함수로 변환.
+ *
+ * 규칙 (긴 접미사 먼저 치환해야 함):
+ *   - "여자중학교" → "여중"
+ *   - "여자고등학교" → "여고"
+ *   - "초등학교" → "초"
+ *   - "중학교" → "중"
+ *   - "고등학교" → "고"
+ */
+export function normalizeSchool(name?: string): string {
+  if (!name) return "";
+  return name
+    .trim()
+    .replace(/여자중학교$/, "여중")
+    .replace(/여자고등학교$/, "여고")
+    .replace(/초등학교$/, "초")
+    .replace(/중학교$/, "중")
+    .replace(/고등학교$/, "고");
+}
+
+function schoolMatches(a: string, b: string): boolean {
+  const na = normalizeSchool(a);
+  const nb = normalizeSchool(b);
+  if (!na || !nb) return true; // 한쪽이 비어있으면 통과
+  return na === nb;
+}
+
+/**
  * 학생 → 수납 매칭
- * 우선순위 1: studentCode 완벽 매칭
- * 우선순위 2: 이름 + 학교 매칭 (fallback)
+ * 우선순위 1: studentCode 완벽 매칭 (양쪽 모두 값이 있을 때만)
+ * 우선순위 2: 이름 + 학교 prefix 매칭 (fallback)
  */
 export function findStudentPayments<T extends PaymentLite>(
   student: Student,
@@ -28,17 +57,19 @@ export function findStudentPayments<T extends PaymentLite>(
   const filterByMonth = (list: T[]) =>
     month ? list.filter((p) => p.billing_month === month) : list;
 
-  // 1. studentCode 매칭
+  // 1. studentCode 매칭 — payment.student_code 가 빈값이면 스킵
   if (student.studentCode) {
-    const matched = payments.filter((p) => p.student_code === student.studentCode);
+    const matched = payments.filter(
+      (p) => p.student_code && p.student_code === student.studentCode
+    );
     if (matched.length > 0) return filterByMonth(matched);
   }
 
-  // 2. 이름 + 학교 fallback
+  // 2. 이름 + 학교 prefix 매칭 fallback
   const byNameSchool = payments.filter(
     (p) =>
       p.student_name === student.name &&
-      (!student.school || !p.school || p.school === student.school)
+      schoolMatches(p.school || "", student.school || "")
   );
 
   return filterByMonth(byNameSchool);
@@ -57,11 +88,11 @@ export function findPaymentStudent(
     if (byCode) return byCode;
   }
 
-  // 2. 이름 + 학교 fallback
+  // 2. 이름 + 학교 fallback (학교명은 정규화 후 비교)
   return students.find(
     (s) =>
       s.name === payment.student_name &&
-      (!s.school || !payment.school || s.school === payment.school)
+      schoolMatches(s.school || "", payment.school || "")
   );
 }
 

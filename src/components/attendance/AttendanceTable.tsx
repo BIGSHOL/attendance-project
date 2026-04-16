@@ -21,7 +21,14 @@ interface Props {
   tierOverrides?: Record<string, string>;
   highlightWeekends: boolean;
   showExpectedBilling: boolean;
-  showSettlement: boolean;
+  /** 이번 달 실질 납부액 컬럼 표시 */
+  showPaidAmount: boolean;
+  /** 실제 계산된 급여 컬럼 표시 (상단 이번 달 급여와 동일 공식) */
+  showActualSalary: boolean;
+  /** 학생 id → 이번 달 수납 합계 */
+  paidAmountByStudent?: Map<string, number>;
+  /** 학생 id → 실급여(= calculateStudentSalary 결과) */
+  actualSalaryByStudent?: Map<string, number>;
   sortMode: SortMode;
   canCustomValue?: boolean;
   /** 세션 모드 등에서 날짜 범위를 외부에서 지정할 때 사용 */
@@ -54,7 +61,10 @@ export default function AttendanceTable({
   tierOverrides,
   highlightWeekends,
   showExpectedBilling,
-  showSettlement,
+  showPaidAmount,
+  showActualSalary,
+  paidAmountByStudent,
+  actualSalaryByStudent,
   sortMode,
   canCustomValue,
   overrideDates,
@@ -194,7 +204,13 @@ export default function AttendanceTable({
   );
 
   // 고정 컬럼 수 계산
-  const fixedColCount = 4 + (showExpectedBilling ? 1 : 0) + (showSettlement ? 1 : 0) + 2; // #, 이름, 학교, 요일, [예정액], [정산액], 출석, 등록
+  // 기본: #, 이름, 학교, 요일 (4) + 출석, 등록 (2) = 6
+  // 옵션: 예정액 / 수납액 / 실급여
+  const optionalCols =
+    (showExpectedBilling ? 1 : 0) +
+    (showPaidAmount ? 1 : 0) +
+    (showActualSalary ? 1 : 0);
+  const fixedColCount = 4 + optionalCols + 2;
 
   // 과목별 단위: 영어는 U(유닛), 나머지는 T(타임)
   const unit: "U" | "T" = subject === "english" ? "U" : "T";
@@ -237,7 +253,10 @@ export default function AttendanceTable({
           tierOverrideId={tierOverrides?.[student.id]}
           highlightWeekends={highlightWeekends}
           showExpectedBilling={showExpectedBilling}
-          showSettlement={showSettlement}
+          showPaidAmount={showPaidAmount}
+          showActualSalary={showActualSalary}
+          paidAmount={paidAmountByStudent?.get(student.id)}
+          actualSalary={actualSalaryByStudent?.get(student.id)}
           cellWidthPx={cellWidthPx}
           cellHeightPx={cellHeightPx}
           holidayDateSet={holidayDateSet}
@@ -301,7 +320,10 @@ export default function AttendanceTable({
               tierOverrideId={tierOverrides?.[student.id]}
               highlightWeekends={highlightWeekends}
               showExpectedBilling={showExpectedBilling}
-              showSettlement={showSettlement}
+              showPaidAmount={showPaidAmount}
+              showActualSalary={showActualSalary}
+              paidAmount={paidAmountByStudent?.get(student.id)}
+              actualSalary={actualSalaryByStudent?.get(student.id)}
               cellWidthPx={cellWidthPx}
               cellHeightPx={cellHeightPx}
               holidayDateSet={holidayDateSet}
@@ -340,9 +362,20 @@ export default function AttendanceTable({
             {showExpectedBilling && (
               <th className="bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">예정액</th>
             )}
-            {showSettlement && (
-              <th className="bg-zinc-800 w-[60px] px-1 py-2 text-center text-[12px] border-r border-zinc-600">
-                정산액
+            {showPaidAmount && (
+              <th
+                className="bg-zinc-800 w-[70px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
+                title="이번 달 실제 납부된 금액 합계"
+              >
+                수납액
+              </th>
+            )}
+            {showActualSalary && (
+              <th
+                className="bg-zinc-800 w-[70px] px-1 py-2 text-center text-[12px] border-r border-zinc-600"
+                title="상단 이번 달 급여와 동일 공식 (수납 캡 · 선생님 비율 · 블로그 패널티 반영)"
+              >
+                실급여
               </th>
             )}
             <th
@@ -394,6 +427,18 @@ export default function AttendanceTable({
           </tr>
         </thead>
         <tbody>{renderRows()}</tbody>
+        {(showExpectedBilling || showPaidAmount || showActualSalary) && (
+          <SummaryFooter
+            students={visibleStudents}
+            showExpectedBilling={showExpectedBilling}
+            showPaidAmount={showPaidAmount}
+            showActualSalary={showActualSalary}
+            paidAmountByStudent={paidAmountByStudent}
+            actualSalaryByStudent={actualSalaryByStudent}
+            datesCount={dates.length}
+            cellWidthPx={cellWidthPx}
+          />
+        )}
       </table>
 
       {/* 컨텍스트 메뉴 */}
@@ -415,15 +460,92 @@ export default function AttendanceTable({
   );
 }
 
-function getTermHeaderLeftPx(showExpected: boolean, showSettlement: boolean): number {
-  // 등록이 먼저 (고정 컬럼 끝 바로 뒤)
-  let base = 342;
-  if (showExpected) base += 60;
-  if (showSettlement) base += 60;
-  return base;
-}
+/**
+ * 합계행 — 옵션 컬럼(예정액/정산액/수납액/실급여)의 총합을 보여준다.
+ * 상단 "이번 달 급여"와 실급여 합계가 일치하는지 한눈에 확인 가능.
+ */
+function SummaryFooter({
+  students,
+  showExpectedBilling,
+  showPaidAmount,
+  showActualSalary,
+  paidAmountByStudent,
+  actualSalaryByStudent,
+  datesCount,
+  cellWidthPx,
+}: {
+  students: Student[];
+  showExpectedBilling: boolean;
+  showPaidAmount: boolean;
+  showActualSalary: boolean;
+  paidAmountByStudent?: Map<string, number>;
+  actualSalaryByStudent?: Map<string, number>;
+  datesCount: number;
+  cellWidthPx: number;
+}) {
+  const totalPaid = useMemo(() => {
+    if (!paidAmountByStudent) return 0;
+    let sum = 0;
+    for (const s of students) sum += paidAmountByStudent.get(s.id) ?? 0;
+    return Math.floor(sum); // 합산 시 정수 내림
+  }, [students, paidAmountByStudent]);
 
-function getAttendanceHeaderLeftPx(showExpected: boolean, showSettlement: boolean): number {
-  // 등록 칸(52px) 뒤
-  return getTermHeaderLeftPx(showExpected, showSettlement) + 52;
+  const totalActual = useMemo(() => {
+    if (!actualSalaryByStudent) return 0;
+    let sum = 0;
+    for (const s of students) sum += actualSalaryByStudent.get(s.id) ?? 0;
+    return Math.floor(sum); // 합산 시 정수 내림
+  }, [students, actualSalaryByStudent]);
+
+  const sumCellClass =
+    "sticky bottom-0 bg-zinc-100 px-1 py-2 text-right text-[12px] font-bold text-zinc-800 border-t-2 border-zinc-400 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-600";
+  const labelCellClass =
+    "sticky bottom-0 bg-zinc-100 px-2 py-2 text-[12px] font-bold text-zinc-700 border-t-2 border-zinc-400 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-600";
+  const plainCellClass =
+    "sticky bottom-0 bg-zinc-100 border-t-2 border-zinc-400 dark:bg-zinc-800 dark:border-zinc-600";
+
+  return (
+    <tfoot className="sticky bottom-0 z-[25]">
+      <tr>
+        {/* # (비워둠) */}
+        <td className={`${plainCellClass} sticky left-0 z-[40]`} style={{ width: 32 }} />
+        {/* 이름 = 합계 라벨 */}
+        <td
+          className={`${labelCellClass} sticky left-[32px] z-[40]`}
+          style={{ width: 120 }}
+          colSpan={2}
+        >
+          합계 (학생 {students.length}명)
+        </td>
+        {/* 요일 (비워둠) */}
+        <td className={plainCellClass} />
+        {/* 예정액 — 합계 미계산 (개별 셀에서만 표시) */}
+        {showExpectedBilling && (
+          <td className={sumCellClass} title="예정액 합계는 개별 셀 참고">
+            —
+          </td>
+        )}
+        {showPaidAmount && (
+          <td className={sumCellClass}>
+            {totalPaid > 0 ? totalPaid.toLocaleString() : "-"}
+          </td>
+        )}
+        {showActualSalary && (
+          <td
+            className={sumCellClass}
+            title="상단 '이번 달 급여'에서 인센티브 제외한 값과 일치해야 함"
+          >
+            {totalActual > 0 ? totalActual.toLocaleString() : "-"}
+          </td>
+        )}
+        {/* 등록, 출석 (비워둠) */}
+        <td className={plainCellClass} />
+        <td className={plainCellClass} />
+        {/* 날짜 열들 (비워둠) */}
+        {Array.from({ length: datesCount }).map((_, i) => (
+          <td key={i} className={plainCellClass} style={{ width: cellWidthPx }} />
+        ))}
+      </tr>
+    </tfoot>
+  );
 }

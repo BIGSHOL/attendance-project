@@ -37,10 +37,18 @@ export function getEffectiveUnitPrice(item: SalarySettingItem): number {
 }
 
 /**
+ * 소수 첫째 자리까지 내림 (e.g. 69691.5 → 69691.5, 69691.56 → 69691.5)
+ */
+function floor1(n: number): number {
+  return Math.floor(n * 10) / 10;
+}
+
+/**
  * 과정별 1회 수업료 계산
  * - 고정급: fixedRate 그대로
  * - 비율제: baseTuition × (1 - 수수료/100) × (비율/100)
  * - ratioOverride가 제공되면 해당 비율 사용
+ * 반올림 정책: 소수 첫째 자리까지 내림 (학원 손해 방지). 최종 합계는 정수 내림.
  */
 export function calculateClassRate(
   item: SalarySettingItem,
@@ -52,7 +60,7 @@ export function calculateClassRate(
   }
   const netTuition = item.baseTuition * (1 - academyFee / 100);
   const effectiveRatio = typeof ratioOverride === "number" ? ratioOverride : item.ratio;
-  return Math.round(netTuition * (effectiveRatio / 100));
+  return floor1(netTuition * (effectiveRatio / 100));
 }
 
 /**
@@ -84,9 +92,9 @@ export function calculateStudentSalary(
   // 블로그 패널티 적용된 실질 비율
   const effectiveRatio = applyBlogPenalty(settingItem.ratio, blogPenalty);
 
-  // 납입금 없으면 출석 × 단가
+  // 납입금 없으면 출석 × 단가 — 소수 1자리 내림
   if (paidAmount === undefined || paidAmount === null) {
-    return Math.ceil(classUnits * calculateClassRate(settingItem, academyFee, effectiveRatio));
+    return floor1(classUnits * calculateClassRate(settingItem, academyFee, effectiveRatio));
   }
 
   if (settingItem.type === "fixed") {
@@ -98,11 +106,11 @@ export function calculateStudentSalary(
     return settingItem.fixedRate * coveredSessions;
   }
 
-  // 비율제 (패널티 적용된 ratio 사용)
+  // 비율제 — 소수 1자리 내림. 최종 합산 시 정수 내림.
   const unitPrice = settingItem.baseTuition;
-  const grossByAttendance = Math.floor(unitPrice * classUnits);
+  const grossByAttendance = floor1(unitPrice * classUnits);
   const effectiveBase = Math.min(paidAmount, grossByAttendance);
-  return Math.ceil(effectiveBase * (1 - academyFee / 100) * (effectiveRatio / 100));
+  return floor1(effectiveBase * (1 - academyFee / 100) * (effectiveRatio / 100));
 }
 
 /**
@@ -186,7 +194,13 @@ export function calculateStats(
   /** 시트 F열 동기화 결과 — student_id → salary_item_id */
   tierOverrides?: Record<string, string>,
   /** 학생 id → 해당 월 납부액 합계. 있으면 calculateStudentSalary에 전달되어 수납 cap 적용 */
-  paidAmountByStudent?: Map<string, number>
+  paidAmountByStudent?: Map<string, number>,
+  /**
+   * 이번 월 세션 범위 판정 함수 (선택).
+   * 제공되면 이 predicate 가 true 인 날짜만 집계. (예: 3월 세션 = 3/6~4/2)
+   * 미제공 시 `YYYY-MM` prefix 매칭 기본 동작.
+   */
+  isDateInPeriod?: (dateKey: string) => boolean
 ): {
   totalSalary: number;
   totalAttendance: number;
@@ -196,14 +210,16 @@ export function calculateStats(
   let totalAttendance = 0;
 
   const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+  const inPeriod =
+    isDateInPeriod ?? ((dateKey: string) => dateKey.startsWith(monthStr));
 
   for (const student of students) {
     if (!student.attendance) continue;
 
-    // 이번 달 출석 합계 (급여 유형 필터링 적용)
+    // 이번 달(세션) 출석 합계 (급여 유형 필터링 적용)
     let classUnits = 0;
     for (const [dateKey, value] of Object.entries(student.attendance)) {
-      if (!dateKey.startsWith(monthStr) || value <= 0) continue;
+      if (!inPeriod(dateKey) || value <= 0) continue;
       totalAttendance += value;
       if (isAttendanceCountable(dateKey, salaryType, commissionDays)) {
         classUnits += value;
@@ -216,7 +232,12 @@ export function calculateStats(
       const baseRatio = getEffectiveRatio(settingItem, salaryConfig, teacherName);
       // teacherRatios 오버라이드가 있으면 블로그 패널티 포함해서 임시 settingItem 만들어서 계산
       const effectiveSetting: SalarySettingItem = { ...settingItem, ratio: baseRatio };
-      const paidAmount = paidAmountByStudent?.get(student.id) ?? null;
+      // paidAmountByStudent 가 주어지면 수납액 기반 캡 적용 (맵에 없으면 수납 0으로 간주)
+      // 맵 자체가 undefined 면 기존 동작 유지 (수납 데이터 미로드 케이스)
+      const paidAmount =
+        paidAmountByStudent !== undefined
+          ? paidAmountByStudent.get(student.id) ?? 0
+          : null;
       totalSalary += calculateStudentSalary(
         effectiveSetting,
         salaryConfig.academyFee,
@@ -228,7 +249,8 @@ export function calculateStats(
   }
 
   return {
-    totalSalary,
+    // 최종 합계는 정수 내림
+    totalSalary: Math.floor(totalSalary),
     totalAttendance,
     studentCount: students.length,
   };

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 
 export interface TeacherSheet {
   teacher_id: string;
@@ -13,6 +12,7 @@ export interface TeacherSheet {
 
 /**
  * 선생님별 Google Sheets URL 매핑 훅
+ * 서버 /api/teacher-sheets 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
  */
 export function useTeacherSheets() {
   const [sheets, setSheets] = useState<TeacherSheet[]>([]);
@@ -20,10 +20,19 @@ export function useTeacherSheets() {
 
   const refetch = useCallback(async () => {
     setLoading(true);
-    const supabase = createClient();
-    const { data } = await supabase.from("teacher_sheets").select("*");
-    if (data) setSheets(data as TeacherSheet[]);
-    setLoading(false);
+    try {
+      const res = await window.fetch("/api/teacher-sheets", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as TeacherSheet[];
+        setSheets(data || []);
+      } else {
+        setSheets([]);
+      }
+    } catch {
+      setSheets([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -32,17 +41,11 @@ export function useTeacherSheets() {
 
   const upsertSheet = useCallback(
     async (teacherId: string, sheetUrl: string) => {
-      const supabase = createClient();
-      await supabase
-        .from("teacher_sheets")
-        .upsert(
-          {
-            teacher_id: teacherId,
-            sheet_url: sheetUrl,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "teacher_id" }
-        );
+      await window.fetch("/api/teacher-sheets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_id: teacherId, sheet_url: sheetUrl }),
+      });
       await refetch();
     },
     [refetch]
@@ -50,8 +53,10 @@ export function useTeacherSheets() {
 
   const deleteSheet = useCallback(
     async (teacherId: string) => {
-      const supabase = createClient();
-      await supabase.from("teacher_sheets").delete().eq("teacher_id", teacherId);
+      await window.fetch(
+        `/api/teacher-sheets/${encodeURIComponent(teacherId)}`,
+        { method: "DELETE" }
+      );
       await refetch();
     },
     [refetch]
@@ -59,11 +64,10 @@ export function useTeacherSheets() {
 
   const markSynced = useCallback(
     async (teacherId: string) => {
-      const supabase = createClient();
-      await supabase
-        .from("teacher_sheets")
-        .update({ last_synced_at: new Date().toISOString() })
-        .eq("teacher_id", teacherId);
+      await window.fetch(
+        `/api/teacher-sheets/${encodeURIComponent(teacherId)}`,
+        { method: "PATCH" }
+      );
       await refetch();
     },
     [refetch]

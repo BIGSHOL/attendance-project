@@ -46,6 +46,7 @@ export async function GET() {
             onHold: d.onHold || false,
           };
         });
+
         return { ...student, enrollments };
       })
     );

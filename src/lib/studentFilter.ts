@@ -17,38 +17,76 @@ function normalizeSubjectForTransfer(subject?: string, className?: string): stri
 }
 
 /**
- * 해당 날짜에 학생이 재원 중이었는지 확인
- * - startDate 이전이면 false
- * - endDate 이후이면 false
+ * 유효한 재원 구간들을 학생 enrollments 에서 추출.
+ * enrollments 가 없으면 top-level startDate/endDate 를 단일 구간으로 fallback.
+ *
+ * 재수강(종료 → 재수강) 케이스를 정확히 다루기 위해 반드시 enrollments 전체를 고려해야 한다.
+ * 단일 top-level endDate 는 과거 종료 반의 찌꺼기일 수 있으므로 우선 사용하지 않는다.
+ */
+function getEnrollmentPeriods(student: Student): { start: string; end: string }[] {
+  const periods = (student.enrollments || [])
+    .filter((e) => e.startDate) // 시작일 없는 빈 enrollment 무시
+    .map((e) => ({ start: e.startDate || "", end: e.endDate || "" }));
+  if (periods.length > 0) return periods;
+  // fallback: 구식 데이터 대비 top-level 단일 구간
+  if (student.startDate || student.endDate) {
+    return [{ start: student.startDate || "", end: student.endDate || "" }];
+  }
+  return [];
+}
+
+/**
+ * 해당 날짜에 학생이 재원 중이었는지 확인.
+ * enrollments 중 하나라도 해당 날짜를 포함하면 true (재수강 반영).
  */
 export function isDateValidForStudent(dateKey: string, student: Student): boolean {
-  if (student.startDate && dateKey < student.startDate) return false;
-  if (student.endDate && dateKey > student.endDate) return false;
-  return true;
+  const periods = getEnrollmentPeriods(student);
+  if (periods.length === 0) return true; // 시작/종료 정보 전혀 없으면 유효로 취급
+  return periods.some(({ start, end }) => {
+    if (start && dateKey < start) return false;
+    if (end && dateKey > end) return false;
+    return true;
+  });
 }
 
 /**
- * 해당 월이 학생의 신입 달인지 (startDate가 월 내)
+ * 해당 월이 학생의 "신입" 달인지.
+ * 이번 달에 시작한 enrollment 가 있어도, 그 이전에 끝난 다른 enrollment 가 있으면
+ * 재수강이므로 신입 아님.
  */
 export function isNewInMonth(student: Student, year: number, month: number): boolean {
-  if (!student.startDate) return false;
+  const periods = getEnrollmentPeriods(student);
+  if (periods.length === 0) return false;
   const ym = `${year}-${String(month).padStart(2, "0")}`;
-  return student.startDate.startsWith(ym);
+  return periods.some(({ start }) => {
+    if (!start || !start.startsWith(ym)) return false;
+    // 이 enrollment 시작일 이전에 끝난 다른 enrollment 가 있으면 재수강 → 신입 아님
+    const hasPriorEnrollment = periods.some((p) => p.end && p.end < start);
+    return !hasPriorEnrollment;
+  });
 }
 
 /**
- * 해당 월이 학생의 퇴원 달인지 (endDate가 월 내)
+ * 해당 월이 학생의 "퇴원" 달인지 — 이번 달에 종료된 enrollment 가 있고,
+ * 그 종료일 이후에 시작하는 다른 enrollment 가 없으면 퇴원(재수강 아님).
  */
 export function isLeavingInMonth(student: Student, year: number, month: number): boolean {
-  if (!student.endDate) return false;
+  const periods = getEnrollmentPeriods(student);
+  if (periods.length === 0) return false;
   const ym = `${year}-${String(month).padStart(2, "0")}`;
-  return student.endDate.startsWith(ym);
+  // 이번 달에 끝난 enrollment
+  const endedThisMonth = periods.filter(({ end }) => end && end.startsWith(ym));
+  if (endedThisMonth.length === 0) return false;
+  // 그 끝 이후에 시작되는 다른 enrollment 가 있으면 재수강이므로 퇴원 아님
+  return endedThisMonth.some(({ end }) => {
+    const hasLater = periods.some(({ start }) => start && end && start > end);
+    return !hasLater;
+  });
 }
 
 /**
- * 해당 월에 보여야 할 학생 필터링 (ijw-calander 방식)
- * - 퇴원생: endDate가 조회 월 내이면 포함, 이전이면 제외
- * - 신입생: startDate가 조회 월 이후면 제외
+ * 해당 월에 보여야 할 학생 필터링.
+ * 재원 구간들 중 하나라도 조회 월과 겹치면 포함.
  */
 export function filterStudentsByMonth(
   students: Student[],
@@ -60,11 +98,15 @@ export function filterStudentsByMonth(
   const monthLastDay = `${year}-${String(month).padStart(2, "0")}-${String(lastDate).padStart(2, "0")}`;
 
   return students.filter((s) => {
-    // 퇴원생: endDate가 조회 월 시작일보다 이전이면 제외
-    if (s.endDate && s.endDate < monthFirstDay) return false;
-    // 신입생: startDate가 조회 월 마지막일보다 이후면 제외
-    if (s.startDate && s.startDate > monthLastDay) return false;
-    return true;
+    const periods = getEnrollmentPeriods(s);
+    if (periods.length === 0) return true;
+    // 하나의 구간이라도 조회 월과 겹치면 포함
+    return periods.some(({ start, end }) => {
+      // 월 시작일 이후에 종료된 구간 & 월 말 이전에 시작한 구간
+      if (end && end < monthFirstDay) return false;
+      if (start && start > monthLastDay) return false;
+      return true;
+    });
   });
 }
 

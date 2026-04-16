@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 import type { UserRoleData } from "./useUserRole";
 
 /**
  * 전체 user_roles 목록 조회 (마스터/관리자용)
+ * 서버 /api/admin/user-roles 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
  */
 export function useAllUserRoles() {
   const [users, setUsers] = useState<UserRoleData[]>([]);
@@ -13,16 +13,21 @@ export function useAllUserRoles() {
 
   const fetch = useCallback(async () => {
     setLoading(true);
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("user_roles")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (!error && data) {
-      setUsers(data as UserRoleData[]);
+    try {
+      const res = await window.fetch("/api/admin/user-roles", {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = (await res.json()) as UserRoleData[];
+        setUsers(data || []);
+      } else {
+        setUsers([]);
+      }
+    } catch {
+      setUsers([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {

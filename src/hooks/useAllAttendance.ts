@@ -1,33 +1,35 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useState, useCallback } from "react";
 import type { AttendanceRow } from "./useAttendanceData";
 
 /**
  * 특정 월의 모든 선생님 출석 데이터 조회
+ * 서버 /api/attendance/all 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
  */
 export function useAllAttendance(year: number, month: number) {
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const supabaseRef = useRef(createClient());
-
-  const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
-  const endDate = `${year}-${String(month).padStart(2, "0")}-${new Date(year, month, 0).getDate()}`;
 
   const fetch = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabaseRef.current
-      .from("attendance")
-      .select("id, teacher_id, student_id, date, hours, memo, cell_color, homework, is_makeup")
-      .gte("date", startDate)
-      .lte("date", endDate);
-
-    if (!error && data) {
-      setRecords(data as AttendanceRow[]);
+    try {
+      const res = await window.fetch(
+        `/api/attendance/all?year=${year}&month=${month}`,
+        { cache: "no-store" }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as AttendanceRow[];
+        setRecords(data || []);
+      } else {
+        setRecords([]);
+      }
+    } catch {
+      setRecords([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [startDate, endDate]);
+  }, [year, month]);
 
   useEffect(() => {
     fetch();
