@@ -33,6 +33,11 @@ interface Props {
   paidAmount?: number;
   /** 실급여 = calculateStudentSalary 결과 (없으면 undefined) */
   actualSalary?: number;
+  /**
+   * 같은 원본 학생의 "연속된 분반 행" 중 2번째+ 일 때 true.
+   * 번호/이름 셀을 비워 시각적으로 병합된 것처럼 표시 (rowspan 대체).
+   */
+  hideIdentity?: boolean;
   cellWidthPx: number;
   cellHeightPx: number;
   holidayDateSet?: Set<string>;
@@ -62,6 +67,7 @@ function StudentRowImpl({
   showActualSalary,
   paidAmount,
   actualSalary,
+  hideIdentity,
   cellWidthPx,
   cellHeightPx,
   holidayDateSet,
@@ -133,32 +139,37 @@ function StudentRowImpl({
           }
         }}
         style={{ width: 32, minWidth: 32, maxWidth: 32 }}
-        className="sticky left-0 z-10 bg-inherit px-1 py-1 text-center text-[13px] text-zinc-400 cursor-context-menu border-r border-zinc-200 dark:border-zinc-700"
+        className={`sticky left-0 z-10 bg-inherit px-1 py-1 text-center text-[13px] cursor-context-menu border-r border-zinc-200 dark:border-zinc-700 ${
+          hideIdentity ? "text-transparent" : "text-zinc-400"
+        }`}
       >
-        {index + 1}
+        {hideIdentity ? "" : index + 1}
       </td>
 
-      {/* 이름 */}
+      {/* 이름 (같은 원본 학생의 연속 분반 행은 빈 칸 — rowspan 시각 효과) */}
       <td style={{ width: 120, minWidth: 120, maxWidth: 120 }} className="sticky left-[32px] z-10 bg-inherit px-2 py-1 text-sm font-medium text-zinc-900 whitespace-nowrap border-r border-zinc-200 dark:border-zinc-700">
-        <div className="flex items-center gap-1">
-          <span>{student.name}</span>
-          {isNew && (
-            <span
-              className="inline-flex items-center gap-0.5 rounded-sm bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 px-1.5 py-0.5 text-[11px] font-black text-amber-900 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse ring-1 ring-amber-500"
-              title={`신입 (${student.startDate})`}
-            >
-              신입
-            </span>
-          )}
-          {isLeaving && (
-            <span
-              className="inline-flex items-center rounded-sm bg-red-100 px-1 py-0 text-[11px] font-bold text-red-700"
-              title={`퇴원 (${student.endDate})`}
-            >
-              퇴원
-            </span>
-          )}
-        </div>
+        {hideIdentity && <span className="text-zinc-300">↳</span>}
+        {!hideIdentity && (
+          <div className="flex items-center gap-1">
+            <span>{student.name}</span>
+            {isNew && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded-sm bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 px-1.5 py-0.5 text-[11px] font-black text-amber-900 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse ring-1 ring-amber-500"
+                title={`신입 (${student.startDate})`}
+              >
+                신입
+              </span>
+            )}
+            {isLeaving && (
+              <span
+                className="inline-flex items-center rounded-sm bg-red-100 px-1 py-0 text-[11px] font-bold text-red-700"
+                title={`퇴원 (${student.endDate})`}
+              >
+                퇴원
+              </span>
+            )}
+          </div>
+        )}
       </td>
 
       {/* 학교/학년 + 급여설정 뱃지 */}

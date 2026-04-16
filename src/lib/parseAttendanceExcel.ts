@@ -6,6 +6,8 @@ export interface AttendanceEntry {
   grade: string;
   /** F열 — 급여 tier 명 (예: "중등 3T"). SalarySettingItem.name과 매칭 */
   tierName: string;
+  /** C열 — 수업 요일 배열 (예: ["화","금"]). 분반 식별용 */
+  days: string[];
   attendance: Record<string, number>; // "YYYY-MM-DD" → 0|1 (빈칸 제외)
   memos: Record<string, string>;      // "YYYY-MM-DD" → 메모 텍스트 (빈값 제외)
 }
@@ -112,6 +114,9 @@ export function parseAttendanceFromArray(
     const school = normalizeSchoolName(String(row[3] || ""));
     const grade = String(row[4] || "").trim();
     const tierName = String(row[5] || "").trim();
+    // C열 요일 파싱 (예: "화, 금" → ["화","금"])
+    const daysCell = String(row[2] || "").trim();
+    const days = (daysCell.match(/[월화수목금토일]/g) || []);
     // 학교와 학년이 모두 비어 있으면 유효한 학생 행이 아님
     if (!school && !grade) continue;
 
@@ -130,7 +135,7 @@ export function parseAttendanceFromArray(
       }
     }
 
-    entries.push({ studentName: name, school, grade, tierName, attendance, memos });
+    entries.push({ studentName: name, school, grade, tierName, days, attendance, memos });
   }
 
   // 날짜 범위 계산 (min/max) — 월 단위가 아닌 실제 탭 커버 범위 기준으로 덮어쓰기

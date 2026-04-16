@@ -77,10 +77,16 @@ export async function syncTeacherSheet(
     return result;
   }
 
-  // tier 오버라이드 누적 (선생님 단위 - 여러 탭에서도 같은 학생이면 마지막 탭 값 사용)
+  // tier 오버라이드 누적 — key: `{studentId}|{daysKey}` (학생 × 분반).
+  // 한 학생이 같은 선생님에게 여러 분반(요일 다름) 수업을 받는 경우 분반별로 저장.
   const tierOverrides: Record<
     string,
-    { salary_item_id: string; tier_name: string }
+    {
+      student_id: string;
+      salary_item_id: string;
+      tier_name: string;
+      class_name: string;
+    }
   > = {};
 
   // 2. 각 탭별로 파싱 + 매칭 + 저장
@@ -130,19 +136,25 @@ export async function syncTeacherSheet(
           continue;
         }
         monthResult.matched++;
-        records[match.id] = entry.attendance;
+        // 같은 학생이 같은 탭(월)에 여러 분반으로 등장 가능 (예: 김지홍 = 화금 + 목).
+        // 덮어쓰기 대신 병합하여 모든 요일의 출석/메모를 보존한다.
+        records[match.id] = { ...(records[match.id] || {}), ...entry.attendance };
         if (entry.memos && Object.keys(entry.memos).length > 0) {
-          memos[match.id] = entry.memos;
+          memos[match.id] = { ...(memos[match.id] || {}), ...entry.memos };
           monthResult.memoCount += Object.keys(entry.memos).length;
         }
 
-        // F열 tier → SalaryConfig.items[].name 정확 매칭
+        // F열 tier → SalaryConfig.items[].name 정확 매칭. 분반(요일)별 저장.
         if (salaryConfig && entry.tierName) {
           const item = salaryConfig.items.find((i) => i.name === entry.tierName);
           if (item) {
-            tierOverrides[match.id] = {
+            const daysKey = (entry.days || []).slice().sort().join(",");
+            const key = `${match.id}|${daysKey}`;
+            tierOverrides[key] = {
+              student_id: match.id,
               salary_item_id: item.id,
               tier_name: entry.tierName,
+              class_name: daysKey,
             };
             monthResult.tierMatched++;
           } else {
@@ -183,20 +195,21 @@ export async function syncTeacherSheet(
     result.months.push(monthResult);
   }
 
-  // 3. tier 오버라이드 일괄 저장
-  if (Object.keys(tierOverrides).length > 0) {
+  // 3. tier 오버라이드 일괄 저장 (배열 형식 — 분반별 분리 지원)
+  const overrideList = Object.values(tierOverrides);
+  if (overrideList.length > 0) {
     try {
       const tierRes = await fetch("/api/attendance/tier-overrides", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ teacherId, overrides: tierOverrides }),
+        body: JSON.stringify({ teacherId, overrides: overrideList }),
       });
       if (!tierRes.ok) {
         const err = await tierRes.json();
         console.warn("[sync] tier 오버라이드 저장 실패:", err.error);
       } else {
         console.log(
-          `[sync] tier 오버라이드 저장 완료: ${Object.keys(tierOverrides).length}명`
+          `[sync] tier 오버라이드 저장 완료: ${overrideList.length}건 (분반별 분리 포함)`
         );
       }
     } catch (e) {

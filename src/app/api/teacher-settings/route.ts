@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
         blog_required: false,
         salary_type: "commission",
         commission_days: [],
+        ratios: {},
       }
     );
   }
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const body = await request.json();
-  const { staff_id, blog_required, salary_type, commission_days } = body || {};
+  const { staff_id, blog_required, salary_type, commission_days, ratios } = body || {};
 
   if (!staff_id) {
     return NextResponse.json({ error: "staff_id 필수" }, { status: 400 });
@@ -79,6 +80,10 @@ export async function POST(request: NextRequest) {
       commission_days !== undefined
         ? commission_days
         : existing?.commission_days || [],
+    ratios:
+      ratios !== undefined && ratios !== null && typeof ratios === "object"
+        ? ratios
+        : existing?.ratios || {},
     updated_at: new Date().toISOString(),
   };
 

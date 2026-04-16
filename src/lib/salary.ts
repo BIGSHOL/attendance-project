@@ -248,11 +248,14 @@ export function calculateStats(
     }
   }
 
+  // 가상 행(`{studentId}|{className}`) 중복 제거 — 동일 원본 학생은 1명으로 카운트
+  const uniqueStudentIds = new Set(students.map((s) => (s.id || "").split("|")[0]));
+
   return {
     // 최종 합계는 정수 내림
     totalSalary: Math.floor(totalSalary),
     totalAttendance,
-    studentCount: students.length,
+    studentCount: uniqueStudentIds.size,
   };
 }
 

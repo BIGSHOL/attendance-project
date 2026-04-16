@@ -40,7 +40,6 @@ import dynamic from "next/dynamic";
 
 // 큰 모달들은 초기 번들에서 분리 — 열릴 때 로드
 const SettlementModal = dynamic(() => import("./attendance/SettlementModal"), { ssr: false });
-const SalarySettingsModal = dynamic(() => import("./attendance/SalarySettingsModal"), { ssr: false });
 const SessionSettingsModal = dynamic(() => import("./attendance/SessionSettingsModal"), { ssr: false });
 
 type SortMode = "class" | "name" | "day";
@@ -115,11 +114,10 @@ export default function AttendancePage() {
 
   // 모달
   const [isSettlementOpen, setSettlementOpen] = useState(false);
-  const [isSalarySettingsOpen, setSalarySettingsOpen] = useState(false);
   const [isSessionSettingsOpen, setSessionSettingsOpen] = useState(false);
 
-  // 급여 설정 (Supabase 영속화)
-  const { config: salaryConfig, save: saveSalaryConfig } = useSalaryConfig();
+  // 급여 설정 (teacher_settings.ratios 와 자동 병합됨)
+  const { config: salaryConfig } = useSalaryConfig();
   const [settlement, setSettlement] = useState<MonthlySettlement>(INITIAL_SETTLEMENT);
 
   // 공휴일 (data.go.kr getHoliDeInfo 캐시)
@@ -396,19 +394,58 @@ export default function AttendancePage() {
   };
 
   /**
-   * 학생을 "수납" 기준으로 분리한 행 목록.
+   * 수납명에서 끝의 요일 토큰을 제거한 prefix (분반/tier 폴백 식별자).
+   */
+  const paymentClassKey = (paymentName: string): string =>
+    (paymentName || "").replace(/\s[월화수목금토일]+\s*$/, "").trim();
+
+  /**
+   * 단가 풀 — salaryConfig.items 의 비율제 baseTuition(+ fixed 유형의 unitPrice) 집합.
+   * "수납 엔진"이 수납 금액을 이 풀의 단가로 역산 매칭하는 기준.
+   */
+  const knownUnitPrices = useMemo(() => {
+    const set = new Set<number>();
+    for (const item of salaryConfig.items || []) {
+      const p = item.baseTuition || item.unitPrice || 0;
+      if (p > 0) set.add(p);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [salaryConfig]);
+
+  /**
+   * 수납 엔진 — charge 금액에서 단가를 역산.
    *
-   * 규칙: 한 학생이 한 선생님에게 서로 다른 요일 세트(즉 서로 다른 분반/단가)의
-   *       수납을 2건 이상 보유한 경우에만 행을 분리한다.
-   *       한 건만 있거나 모두 같은 요일 세트면 기존처럼 1행 유지.
+   * 가정: charge = 단가 × 시수(월 수업 횟수).
+   * 알려진 단가 풀에서 `charge % 단가 === 0` 인 값을 탐색.
+   * 여러 값이 매치하면 시수가 1~16 범위 안에 들어오는 것 중 가장 큰 단가를 선택
+   * (큰 단가일수록 "특수/상위 과정"일 가능성이 높고 시수가 작아 현실적).
    *
-   * 예) 김지홍 — 화금 수납(24,000원) + 목 수납(21,250원) → 2행으로 분리
-   *     강지원 — 수 수납 1건만 → 1행 유지
+   * 매치 실패 시 null 반환 → 폴백으로 payment_name prefix 사용.
+   */
+  const inferUnitPrice = (charge: number): number | null => {
+    if (charge <= 0) return null;
+    for (const price of knownUnitPrices) {
+      if (charge % price !== 0) continue;
+      const n = charge / price;
+      if (n >= 1 && n <= 16) return price;
+    }
+    return null;
+  };
+
+  /**
+   * 학생을 "수납 분반(=payment_name prefix)" 기준으로 분리한 행 목록.
+   *
+   * 규칙: 한 학생이 한 선생님에게 서로 다른 분반(다른 단가)의 수납이 2건 이상인 경우에만
+   *       행을 분리. 같은 분반(단가 동일)의 요일 분할 수납은 1행으로 병합.
+   *
+   * 예) 김지홍 — "CR1C 목"(21,250) + "TP2Q 화금"(24,000) → 2행 분리
+   *     김민찬 — "CR1C 월" 85,000 + "CR1C 목" 85,000 → 같은 분반 → 1행 병합 (170,000)
+   *     강지원 — 수 수납 1건 → 1행 유지
    *
    * 각 분리 행은:
-   *   - id: `{studentId}|{요일키}` 로 고유
-   *   - group/days: 해당 수납이 커버하는 요일
-   *   - attendance: 그 요일의 출석만 필터
+   *   - id: `{studentId}|{병합된 요일키}` 로 고유
+   *   - days: 병합된 모든 요일의 합집합
+   *   - attendance: 이 요일들의 출석만 필터
    */
   const studentRows = useMemo(() => {
     if (!selectedTeacher) return filteredStudents;
@@ -435,24 +472,52 @@ export default function AttendancePage() {
         return false;
       });
 
-      // 수납이 가리키는 요일 세트별 그룹핑
-      const byDays = new Map<string, string[]>();
+      // 수납 엔진: 역산된 "단가"를 그룹 키로 사용.
+      // 같은 단가 = 같은 tier = 병합. 다른 단가 = 분반 다름 = 분리.
+      // 단가 역산 실패 시 payment_name prefix 폴백.
+      const byClass = new Map<string, { daySet: Set<string>; payments: typeof teacherPayments; label: string }>();
       for (const p of teacherPayments) {
-        const d = extractPaymentDays(p.payment_name || "").slice().sort();
-        const key = d.join(",");
-        if (!byDays.has(key)) byDays.set(key, d);
+        const price = inferUnitPrice(p.charge_amount || 0);
+        const classKey = price !== null ? `price:${price}` : paymentClassKey(p.payment_name || "");
+        if (!classKey) continue;
+        const entry = byClass.get(classKey) || {
+          daySet: new Set<string>(),
+          payments: [],
+          label: price !== null ? `${price.toLocaleString()}원 수업` : paymentClassKey(p.payment_name || ""),
+        };
+        for (const d of extractPaymentDays(p.payment_name || "")) entry.daySet.add(d);
+        entry.payments.push(p);
+        byClass.set(classKey, entry);
       }
 
-      // 요일 세트가 1개 이하 (또는 빈 키 하나뿐) → 분리 안 함
-      const keys = Array.from(byDays.keys()).filter((k) => k.length > 0);
-      if (keys.length <= 1) {
+      // 분반이 1개 이하 → 분리 안 하지만, 단일 수납 존재 시 row.days 를 수납 요일로 재설정.
+      // 이유: 학생 enrollment 가 "월화목금" 합집합이라도 실제 수납 요일(payment_name)이
+      // "화금"이면 filterPaymentsForRow 의 요일 세트 비교에서 매칭이 깨져 0원 처리됨.
+      // 수납 요일로 맞춰 출석도 해당 요일만 집계.
+      if (byClass.size <= 1) {
+        const only = Array.from(byClass.values())[0];
+        if (only) {
+          const days = Array.from(only.daySet).sort();
+          if (days.length > 0) {
+            const filteredAttendance: Record<string, number> = {};
+            for (const [dk, v] of Object.entries(s.attendance || {})) {
+              const dow = ["일", "월", "화", "수", "목", "금", "토"][
+                new Date(dk).getDay()
+              ];
+              if (days.includes(dow)) filteredAttendance[dk] = v;
+            }
+            rows.push({ ...s, days, attendance: filteredAttendance });
+            continue;
+          }
+        }
         rows.push(s);
         continue;
       }
 
-      // 2개 이상의 서로 다른 요일 세트 → 행 분리
-      for (const key of keys) {
-        const days = byDays.get(key)!;
+      // 2개 이상 분반 → 행 분리 (같은 분반의 여러 요일 수납은 합쳐짐)
+      for (const [, { daySet, label }] of byClass) {
+        const days = Array.from(daySet).sort();
+        const daysKey = days.join(",");
         const filteredAttendance: Record<string, number> = {};
         for (const [dk, v] of Object.entries(s.attendance || {})) {
           const dow = ["일", "월", "화", "수", "목", "금", "토"][
@@ -460,25 +525,17 @@ export default function AttendancePage() {
           ];
           if (days.includes(dow)) filteredAttendance[dk] = v;
         }
-        // group 이름: enrollment className 중 요일이 맞는 것 우선, 없으면 요일키 표기
-        const matchingEnrollment = (s.enrollments || []).find((e) => {
-          const ed = (e.days || []).slice().sort();
-          return ed.length === days.length && ed.every((x, i) => x === days[i]);
-        });
         rows.push({
           ...s,
-          id: `${s.id}|${key}`,
-          group:
-            matchingEnrollment?.className ||
-            `${days.join("·")} 수업`,
-          enrollments: matchingEnrollment ? [matchingEnrollment] : s.enrollments,
+          id: `${s.id}|${daysKey}`,
+          group: label,
           days,
           attendance: filteredAttendance,
         });
       }
     }
     return rows;
-  }, [filteredStudents, monthPayments, selectedTeacher]);
+  }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices]);
 
   /**
    * 이번 월에 대응하는 세션 범위 predicate.
@@ -524,15 +581,15 @@ export default function AttendancePage() {
     const dayFiltered = opts.isMathTeacher
       ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
       : teacherPayments;
-    const rowDays = (row.days || []).slice().sort();
+    const rowDays = row.days || [];
     if (rowDays.length === 0) return dayFiltered;
+    const rowDaysSet = new Set(rowDays);
+    // 수납의 요일 세트가 이 행 요일의 부분집합이면 이 분반 수납으로 간주.
+    // (같은 단가 다중 수납이 병합된 경우 각 payment 요일이 행 요일의 부분이 됨)
     return dayFiltered.filter((p) => {
-      const payDays = extractPaymentDays(p.payment_name || "").slice().sort();
-      if (payDays.length === 0) return !opts.isMathTeacher; // 수학 외 과목 폴백
-      return (
-        payDays.length === rowDays.length &&
-        payDays.every((d, i) => d === rowDays[i])
-      );
+      const payDays = extractPaymentDays(p.payment_name || "");
+      if (payDays.length === 0) return !opts.isMathTeacher;
+      return payDays.every((d) => rowDaysSet.has(d));
     });
   };
 
@@ -745,6 +802,43 @@ export default function AttendancePage() {
     if (month === 12) { setYear(year + 1); setMonth(1); }
     else setMonth(month + 1);
   };
+
+  /**
+   * 동기화 진행 중 페이지 이탈/리로드 방지.
+   *   - beforeunload: 브라우저 새로고침/닫기/탭 이동 경고
+   *   - 캡처 단계 click: 링크/네비 버튼 클릭 시 confirm 후 차단
+   * 동기화 중 이동 시 비동기 fetch 가 버려져 부분 저장·tier 누락 발생하므로 방어.
+   */
+  useEffect(() => {
+    if (!syncing) return;
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    const clickBlocker = (e: MouseEvent) => {
+      const target = (e.target as HTMLElement | null)?.closest(
+        'a[href], [data-nav-link]'
+      ) as HTMLElement | null;
+      if (!target) return;
+      const href = target.getAttribute("href");
+      // 현재 페이지 내 앵커/빈 링크는 통과
+      if (!href || href.startsWith("#") || href === location.pathname) return;
+      if (
+        !confirm(
+          "시트 동기화가 진행 중입니다. 지금 이동하면 일부 데이터가 저장되지 않을 수 있습니다. 계속하시겠습니까?"
+        )
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", clickBlocker, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", clickBlocker, true);
+    };
+  }, [syncing]);
 
   // 현재 선택 월 + 선생님 기준 시트 동기화
   const handleSyncSheet = useCallback(async () => {
@@ -1056,13 +1150,7 @@ export default function AttendancePage() {
           </button>
         )}
 
-        {/* 설정 */}
-        <button
-          onClick={() => setSalarySettingsOpen(true)}
-          className="rounded-sm border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          ⚙ 설정
-        </button>
+        {/* 급여 비율/설정은 선생님 상세 페이지에서 편집 */}
       </div>
 
       {/* 동기화 결과 토스트 */}
@@ -1164,13 +1252,6 @@ export default function AttendancePage() {
         salaryConfig={salaryConfig}
         data={settlement}
         onUpdate={setSettlement}
-      />
-      <SalarySettingsModal
-        isOpen={isSalarySettingsOpen}
-        onClose={() => setSalarySettingsOpen(false)}
-        config={salaryConfig}
-        onSave={saveSalaryConfig}
-        readOnly={!isAdmin}
       />
       <SessionSettingsModal
         isOpen={isSessionSettingsOpen}

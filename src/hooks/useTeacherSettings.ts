@@ -3,11 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SalaryType } from "./useUserRole";
 
+/**
+ * 선생님별 과목×그룹 비율 오버라이드.
+ * 예: { math: { "초등": 47.5, "중등": 48.5 }, english: { "초등": 43 } }
+ */
+export type TeacherRatioMap = Record<string, Record<string, number>>;
+
 export interface TeacherSetting {
   staff_id: string;
   blog_required: boolean;
   salary_type: SalaryType;
   commission_days: string[];
+  ratios?: TeacherRatioMap;
   updated_at?: string;
 }
 
@@ -114,6 +121,22 @@ export function useTeacherSettings(staffId?: string) {
     [settings]
   );
 
+  /** 선생님의 비율 오버라이드 맵 반환 (없으면 빈 객체) */
+  const getRatios = useCallback(
+    (id: string): TeacherRatioMap => {
+      const row = settings.find((s) => s.staff_id === id);
+      return row?.ratios || {};
+    },
+    [settings]
+  );
+
+  /** 선생님의 비율 오버라이드 맵 저장 */
+  const setRatios = useCallback(
+    (targetStaffId: string, ratios: TeacherRatioMap) =>
+      postPatch({ staff_id: targetStaffId, ratios }),
+    [postPatch]
+  );
+
   return {
     settings,
     loading,
@@ -121,8 +144,10 @@ export function useTeacherSettings(staffId?: string) {
     setBlogRequired,
     setSalaryType,
     setCommissionDays,
+    setRatios,
     isBlogRequired,
     getSalary,
+    getRatios,
     refetch: fetchSettings,
   };
 }

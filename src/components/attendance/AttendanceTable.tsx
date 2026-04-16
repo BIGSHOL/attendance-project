@@ -307,7 +307,11 @@ export default function AttendanceTable({
 
       if (!isCollapsed) {
         const sorted = [...groupStudents].sort((a, b) => a.name.localeCompare(b.name, "ko"));
+        let prevRealId: string | null = null;
         for (const student of sorted) {
+          const realId = (student.id || "").split("|")[0];
+          const hideIdentity = realId === prevRealId;
+          prevRealId = realId;
           elements.push(
             <StudentRow
               key={student.id}
@@ -324,6 +328,7 @@ export default function AttendanceTable({
               showActualSalary={showActualSalary}
               paidAmount={paidAmountByStudent?.get(student.id)}
               actualSalary={actualSalaryByStudent?.get(student.id)}
+              hideIdentity={hideIdentity}
               cellWidthPx={cellWidthPx}
               cellHeightPx={cellHeightPx}
               holidayDateSet={holidayDateSet}
@@ -515,7 +520,7 @@ function SummaryFooter({
           style={{ width: 120 }}
           colSpan={2}
         >
-          합계 (학생 {students.length}명)
+          합계 (학생 {new Set(students.map((s) => (s.id || "").split("|")[0])).size}명)
         </td>
         {/* 요일 (비워둠) */}
         <td className={plainCellClass} />
