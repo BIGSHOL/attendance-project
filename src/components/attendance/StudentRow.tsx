@@ -417,8 +417,10 @@ function StudentRowImpl({
               </span>
             )}
 
-            {/* 출석값 (중앙) */}
-            {isValid && value !== undefined && value !== null && (
+            {/* 출석값 (중앙).
+                재원 외(빗금) 셀이어도 value > 0 이면 표시 — 퇴원 후 보강 출석을
+                확인할 수 있도록. 재원 외 + 결석(0) 은 의미 없어 생략. */}
+            {value !== undefined && value !== null && (isValid || value > 0) && (
               <span
                 className={`absolute inset-0 flex items-center justify-center text-[14px] font-bold ${
                   value === 0 ? "text-white" : "text-zinc-800"
