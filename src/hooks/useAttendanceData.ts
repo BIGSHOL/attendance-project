@@ -91,35 +91,51 @@ export function useAttendanceData(
   const overrideStart = rangeOverride?.startDate;
   const overrideEnd = rangeOverride?.endDate;
 
-  // 월별 or 범위별 데이터 로드
-  const fetchRecords = useCallback(async () => {
-    if (!teacherId) {
-      setRecords([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ teacher_id: teacherId });
-      if (overrideStart && overrideEnd) {
-        params.set("startDate", overrideStart);
-        params.set("endDate", overrideEnd);
-      } else {
-        params.set("year", String(year));
-        params.set("month", String(month));
+  // 월별 or 범위별 데이터 로드.
+  // ─ race condition 방지: deps 변경으로 fetch 가 여러 번 호출될 때 (예: 첫 렌더 후
+  //   session 뷰로 rangeOverride 가 나중에 들어오는 케이스), 이전 요청이 늦게 resolve
+  //   되어도 그 결과로 records 를 덮어쓰지 않도록 reqId 로 stale 체크.
+  const reqIdRef = useRef(0);
+  const fetchRecords = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!teacherId) {
+        setRecords([]);
+        setLoading(false);
+        return;
       }
-      const res = await fetch(`/api/attendance?${params}`, { cache: "no-store" });
-      if (res.ok) {
-        const data = (await res.json()) as AttendanceRow[];
-        setRecords(data);
+      const myReqId = ++reqIdRef.current;
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ teacher_id: teacherId });
+        if (overrideStart && overrideEnd) {
+          params.set("startDate", overrideStart);
+          params.set("endDate", overrideEnd);
+        } else {
+          params.set("year", String(year));
+          params.set("month", String(month));
+        }
+        const res = await fetch(`/api/attendance?${params}`, {
+          cache: "no-store",
+          signal,
+        });
+        if (res.ok && reqIdRef.current === myReqId) {
+          const data = (await res.json()) as AttendanceRow[];
+          if (reqIdRef.current === myReqId) setRecords(data);
+        }
+      } catch (e) {
+        // AbortError 는 무시
+        if ((e as Error).name !== "AbortError") throw e;
+      } finally {
+        if (reqIdRef.current === myReqId) setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, [teacherId, year, month, overrideStart, overrideEnd]);
+    },
+    [teacherId, year, month, overrideStart, overrideEnd]
+  );
 
   useEffect(() => {
-    fetchRecords();
+    const ctrl = new AbortController();
+    fetchRecords(ctrl.signal);
+    return () => ctrl.abort();
   }, [fetchRecords]);
 
   // 현재 보고 있는 기간 (날짜 필터링)

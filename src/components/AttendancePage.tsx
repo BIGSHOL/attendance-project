@@ -513,26 +513,51 @@ export default function AttendancePage() {
       //  0) 학생의 DB class_name 이 유일하면 무조건 그걸 사용 (시트 우선 원칙) —
       //     수납 단가와 시트 tier 단가가 다른 경우에도 시트를 따라감.
       //  1) 단가 매칭 후보 중 DB class_name 과 일치
-      //  2) 학생 group 과 일치
-      //  3) 후보 첫 번째.
+      //  2) charge 금액을 DB tier 단가로 역산해서 시수 1~16 정수면 매칭
+      //     (inferUnitPrice 가 "큰 단가 우선"이라 72000→36000 오매칭하는 문제 해결)
+      //  3) 학생 group 과 일치
+      //  4) 후보 첫 번째.
       const nonEmptyDbClassNames = [...dbClassNames].filter((c) => c);
-      const inferTierForPrice = (price: number | null): string | null => {
+      const inferTierForPrice = (
+        price: number | null,
+        chargeAmount?: number
+      ): string | null => {
         // DB 에 이 학생 분반이 딱 1개면 모든 수납을 그리로 귀속
         if (nonEmptyDbClassNames.length === 1) return nonEmptyDbClassNames[0];
-        if (price === null) return null;
 
         // ★ DB 우선: 학생의 DB 분반들 중 salary item price 가 일치하는 것을 직접 탐색.
         //   salaryConfig.items 를 먼저 필터링하는 방식은 item 조회 실패 시 매칭 실패함 —
         //   dbClassName 기준으로 직접 lookup 해야 확실.
         if (nonEmptyDbClassNames.length > 0) {
-          for (const cn of nonEmptyDbClassNames) {
-            const item = (salaryConfig.items || []).find((i) => i.name === cn);
-            if (!item) continue;
-            if (item.baseTuition === price || item.unitPrice === price) return cn;
+          // 1) price(inferUnitPrice 결과) 와 DB tier 단가 직접 매칭
+          if (price !== null) {
+            for (const cn of nonEmptyDbClassNames) {
+              const item = (salaryConfig.items || []).find((i) => i.name === cn);
+              if (!item) continue;
+              if (item.baseTuition === price || item.unitPrice === price) return cn;
+            }
+          }
+          // 2) charge 를 DB tier 단가로 직접 역산.
+          //    예) 72000원 = 24000(중등 3T) × 3 → 중등 3T.
+          //    inferUnitPrice 는 단가 풀 전역에서 "큰 단가 우선"이라 36000 을
+          //    먼저 고르지만, 이 학생의 DB tier 는 중등 3T 뿐이니 직접 역산으로
+          //    정확히 귀속.
+          if (chargeAmount !== undefined && chargeAmount > 0) {
+            for (const cn of nonEmptyDbClassNames) {
+              const item = (salaryConfig.items || []).find((i) => i.name === cn);
+              if (!item) continue;
+              for (const unit of [item.baseTuition, item.unitPrice]) {
+                if (!unit || unit <= 0) continue;
+                if (chargeAmount % unit !== 0) continue;
+                const n = chargeAmount / unit;
+                if (n >= 1 && n <= 16) return cn;
+              }
+            }
           }
           return null;
         }
 
+        if (price === null) return null;
         // DB 정보 없는 경우 기존 fallback (candidates → group → first)
         const candidates = (salaryConfig.items || []).filter(
           (i) => i.baseTuition === price || i.unitPrice === price
@@ -568,21 +593,22 @@ export default function AttendancePage() {
       }
 
       for (const p of teacherPayments) {
-        const price = inferUnitPrice(p.charge_amount || 0);
+        const charge = p.charge_amount || 0;
+        const price = inferUnitPrice(charge);
         let classKey: string | null = null;
 
         if (nonEmptyDbClassNames.length > 0) {
-          // DB 분반이 있으면 그 안에서만 선택 (price 매칭 우선, 실패 시 단일 분반 귀속)
-          const inferred = inferTierForPrice(price);
+          // DB 분반이 있으면 그 안에서만 선택 (price 매칭 → charge 역산 → 단일 분반)
+          const inferred = inferTierForPrice(price, charge);
           if (inferred && byClass.has(inferred)) {
             classKey = inferred;
           } else if (nonEmptyDbClassNames.length === 1) {
             classKey = nonEmptyDbClassNames[0];
           }
-          // price 매칭도 실패하고 분반도 여러 개면 이 수납은 drop (ghost 생성 방지)
+          // price/charge 역산도 실패하고 분반도 여러 개면 이 수납은 drop (ghost 생성 방지)
         } else {
           // DB 분반 정보 없는 학생 — 기존 inferTier / price / payment_name 폴백 체인
-          const tierName = inferTierForPrice(price);
+          const tierName = inferTierForPrice(price, charge);
           classKey =
             tierName ||
             (price !== null ? `price:${price}` : paymentClassKey(p.payment_name || ""));

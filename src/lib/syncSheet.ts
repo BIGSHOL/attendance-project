@@ -177,12 +177,33 @@ export async function syncTeacherSheet(
         // 시트 F열 tier(entry.tierName)를 class_name 으로 사용해 분반별 독립 저장.
         // 요일 기반 키는 실제 출석 요일과 어긋날 수 있어 포기 — tier 는 시트에서
         // 사용자가 직접 지정한 확정 분반 식별자이므로 가장 안정적.
-        // 학생이 분반 2+ 라면 각 시트 행이 서로 다른 tier 를 가지므로 충돌 없음.
+        //
+        // 규칙 (사용자 확정):
+        //   - 같은 tierName (= 같은 단가) 여러 행 → 같은 rowKey 로 병합.
+        //     날짜 충돌 시 출석 시수를 **덧셈**으로 합산.
+        //     예) 윤현소 R31(중등 3T 월목 1.0) + R32(중등 3T 토일 0.5) →
+        //         같은 날짜에 1.5 로 기록 → 12.0T 합산
+        //   - 다른 tierName (= 다른 단가) → rowKey 분리되어 독립 행 유지
         const className = (entry.tierName || "").trim();
         const rowKey = className ? `${match.id}|${className}` : match.id;
-        records[rowKey] = { ...(records[rowKey] || {}), ...entry.attendance };
+        const existingAtt = records[rowKey] || {};
+        const mergedAtt: Record<string, number> = { ...existingAtt };
+        for (const [date, hours] of Object.entries(entry.attendance)) {
+          mergedAtt[date] = (mergedAtt[date] || 0) + hours;
+        }
+        records[rowKey] = mergedAtt;
         if (entry.memos && Object.keys(entry.memos).length > 0) {
-          memos[rowKey] = { ...(memos[rowKey] || {}), ...entry.memos };
+          const existingMemo = memos[rowKey] || {};
+          const mergedMemo: Record<string, string> = { ...existingMemo };
+          for (const [date, memo] of Object.entries(entry.memos)) {
+            if (!mergedMemo[date]) mergedMemo[date] = memo;
+            else if (mergedMemo[date] !== memo) {
+              // 같은 날짜에 다른 메모 여러 개면 구분자로 연결
+              mergedMemo[date] = mergedMemo[date] + " | " + memo;
+            }
+            // 같은 메모면 무시 (이전에 발견한 중복 저장 방지)
+          }
+          memos[rowKey] = mergedMemo;
           monthResult.memoCount += Object.keys(entry.memos).length;
         }
 
