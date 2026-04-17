@@ -1,5 +1,6 @@
 import type { SalarySettingItem, SalaryConfig, Student, IncentiveConfig, SalarySubject, SalaryGroup } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
+import { isDateValidForStudent } from "./studentFilter";
 
 /**
  * 날짜 문자열(YYYY-MM-DD)을 요일 라벨(일~토)로 변환
@@ -220,6 +221,8 @@ export function calculateStats(
     let classUnits = 0;
     for (const [dateKey, value] of Object.entries(student.attendance)) {
       if (!inPeriod(dateKey) || value <= 0) continue;
+      // 재원 기간 밖 출석은 급여/집계에서 제외 (퇴원 후 남은 레코드 방지)
+      if (!isDateValidForStudent(dateKey, student)) continue;
       totalAttendance += value;
       if (isAttendanceCountable(dateKey, salaryType, commissionDays)) {
         classUnits += value;

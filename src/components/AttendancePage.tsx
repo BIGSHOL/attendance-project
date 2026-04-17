@@ -29,7 +29,7 @@ import {
   gradeToGroup,
 } from "@/lib/salary";
 import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
-import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
+import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth, isDateValidForStudent } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
@@ -867,6 +867,9 @@ export default function AttendancePage() {
       for (const [dateKey, value] of Object.entries(student.attendance)) {
         // 세션 범위(없으면 달력 월) 필터
         if (!isDateInCurrentPeriod(dateKey) || value <= 0) continue;
+        // 재원 기간(enrollment start/end) 밖이면 실급여 대상 아님.
+        // 퇴원 후 남은 출석 레코드가 실급여에 반영되던 버그 방지.
+        if (!isDateValidForStudent(dateKey, student)) continue;
         if (
           isAttendanceCountable(
             dateKey,
