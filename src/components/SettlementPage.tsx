@@ -13,6 +13,7 @@ import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
+import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
@@ -36,7 +37,27 @@ export default function SettlementPage() {
 
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
-  const { records: attendanceRecords, loading: attendanceLoading } = useAllAttendance(year, month);
+
+  // 세션 기반 급여: 이 월에 매핑된 모든 과목 세션의 합집합 날짜 범위로 출석을 로드.
+  // (예: 수학 3월 세션 = 3/6~4/2, 영어 3월 세션 = ... → union)
+  const { sessions: mathSessions } = useSessionPeriods(year, "math");
+  const { sessions: englishSessions } = useSessionPeriods(year, "english");
+  const sessionRange = useMemo(() => {
+    const all = [...mathSessions, ...englishSessions].filter((s) => s.month === month);
+    const ranges = all.flatMap((s) => s.ranges || []);
+    if (ranges.length === 0) return null;
+    const sorted = [...ranges].sort((a, b) => a.startDate.localeCompare(b.startDate));
+    return {
+      startDate: sorted[0].startDate,
+      endDate: [...ranges].sort((a, b) => b.endDate.localeCompare(a.endDate))[0].endDate,
+    };
+  }, [mathSessions, englishSessions, month]);
+
+  const { records: attendanceRecords, loading: attendanceLoading } = useAllAttendance(
+    year,
+    month,
+    sessionRange
+  );
   const { getByTeacher, loading: settlementLoading } = useMonthlySettlement(year, month);
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();

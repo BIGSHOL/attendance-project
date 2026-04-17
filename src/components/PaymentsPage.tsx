@@ -36,7 +36,7 @@ interface MonthSummary {
   total_paid: number;
 }
 
-type SortKey = "student_name" | "grade" | "payment_name" | "charge_amount" | "discount_amount" | "paid_amount" | "teacher_name";
+type SortKey = "student_name" | "school" | "grade" | "payment_name" | "charge_amount" | "discount_amount" | "paid_amount" | "teacher_name";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE = 30;
@@ -190,7 +190,7 @@ export default function PaymentsPage() {
   // 열별 고유값 추출
   const columnValues = useMemo(() => {
     const cols: Record<string, string[]> = {};
-    const keys: SortKey[] = ["student_name", "grade", "payment_name", "teacher_name"];
+    const keys: SortKey[] = ["student_name", "school", "grade", "payment_name", "teacher_name"];
     for (const key of keys) {
       const set = new Set<string>();
       payments.forEach((p) => { const v = String(p[key] || ""); if (v) set.add(v); });
@@ -259,6 +259,7 @@ export default function PaymentsPage() {
   const startEdit = (p: Payment) => {
     setEditingId(p.id);
     setEditValues({
+      school: p.school,
       payment_name: p.payment_name,
       charge_amount: p.charge_amount,
       discount_amount: p.discount_amount,
@@ -493,6 +494,16 @@ export default function PaymentsPage() {
                 </th>
                 <th className="text-left">
                   <ColumnFilter
+                    values={columnValues.school || []}
+                    selected={columnFilters.school || new Set()}
+                    onChange={(s) => setColumnFilter("school", s)}
+                    sortKey={sortKey === "school" ? sortKey : null}
+                    sortDir={sortDir}
+                    onSort={(d) => { setSortKey("school"); setSortDir(d); setPage(1); }}
+                  >학교</ColumnFilter>
+                </th>
+                <th className="text-left">
+                  <ColumnFilter
                     values={columnValues.grade || []}
                     selected={columnFilters.grade || new Set()}
                     onChange={(s) => setColumnFilter("grade", s)}
@@ -579,6 +590,21 @@ export default function PaymentsPage() {
                       p.student_name
                     )}
                   </td>
+                  {editingId === p.id ? (
+                    <td className="px-3 py-2">
+                      <input
+                        value={editValues.school || ""}
+                        onChange={(e) =>
+                          setEditValues({ ...editValues, school: e.target.value })
+                        }
+                        className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                    </td>
+                  ) : (
+                    <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
+                      {p.school || "-"}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
                     {p.grade}
                   </td>

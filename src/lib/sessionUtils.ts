@@ -2,13 +2,21 @@ import type { SessionPeriod, DateRange } from "@/types";
 import { formatDateKey } from "./date";
 
 /**
- * 특정 날짜가 세션 범위에 포함되는지 확인
+ * 특정 날짜가 세션 범위에 포함되는지 확인 (주차 ranges 사이 공백도 포함).
+ * 세션 ranges 는 주별로 Mon~Fri 끊어 정의되는 경우가 많지만, 급여/출석 집계는
+ * 세션 전체 기간(min startDate ~ max endDate) 기준이어야 한다.
+ * (예: 토요일 수업 학생의 주중-주말 사이 토요일 출석이 공백에 빠지지 않도록)
  * @param dateKey "YYYY-MM-DD"
  */
 export function isDateInSession(dateKey: string, session: SessionPeriod): boolean {
-  return session.ranges.some(
-    (r) => dateKey >= r.startDate && dateKey <= r.endDate
-  );
+  if (!session.ranges || session.ranges.length === 0) return false;
+  let min = session.ranges[0].startDate;
+  let max = session.ranges[0].endDate;
+  for (const r of session.ranges) {
+    if (r.startDate < min) min = r.startDate;
+    if (r.endDate > max) max = r.endDate;
+  }
+  return dateKey >= min && dateKey <= max;
 }
 
 /**

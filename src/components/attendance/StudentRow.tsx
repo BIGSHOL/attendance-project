@@ -177,7 +177,7 @@ function StudentRowImpl({
         <div className="text-[13px] text-zinc-500 leading-tight">{schoolGrade}</div>
         {settingItem && (
           <span
-            className="inline-block mt-0.5 rounded px-1 py-0 text-[11px] font-semibold border"
+            className="mt-0.5 block max-w-full truncate rounded px-1 py-0 text-[11px] font-semibold border"
             style={getBadgeStyle(settingItem.color)}
             title={
               `${settingItem.name}\n` +

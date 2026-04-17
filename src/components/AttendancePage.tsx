@@ -28,7 +28,7 @@ import {
   isAttendanceCountable,
   gradeToGroup,
 } from "@/lib/salary";
-import { findStudentPayments } from "@/lib/studentPaymentMatcher";
+import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
@@ -286,7 +286,9 @@ export default function AttendancePage() {
     }
   }, [visibleTeachers, selectedTeacherId]);
 
-  // 세션 모드일 때 출석 fetch 범위 = 세션 전체 기간 (교차 월 포함)
+  // 출석 fetch 범위.
+  // - 세션 뷰: 선택된 세션 범위(교차 월 포함)
+  // - 월별 뷰: null (useAttendanceData 가 달력 월로 fetch)
   const attendanceRangeOverride = useMemo(() => {
     if (viewMode !== "session" || !selectedSession) return null;
     const sorted = [...selectedSession.ranges].sort((a, b) =>
@@ -431,8 +433,9 @@ export default function AttendancePage() {
   const knownUnitPrices = useMemo(() => {
     const set = new Set<number>();
     for (const item of salaryConfig.items || []) {
-      const p = item.baseTuition || item.unitPrice || 0;
-      if (p > 0) set.add(p);
+      // baseTuition 과 unitPrice 둘 다 후보로 추가 (서로 다를 수 있음)
+      if (item.baseTuition && item.baseTuition > 0) set.add(item.baseTuition);
+      if (item.unitPrice && item.unitPrice > 0) set.add(item.unitPrice);
     }
     return Array.from(set).sort((a, b) => b - a);
   }, [salaryConfig]);
@@ -517,13 +520,24 @@ export default function AttendancePage() {
         // DB 에 이 학생 분반이 딱 1개면 모든 수납을 그리로 귀속
         if (nonEmptyDbClassNames.length === 1) return nonEmptyDbClassNames[0];
         if (price === null) return null;
+
+        // ★ DB 우선: 학생의 DB 분반들 중 salary item price 가 일치하는 것을 직접 탐색.
+        //   salaryConfig.items 를 먼저 필터링하는 방식은 item 조회 실패 시 매칭 실패함 —
+        //   dbClassName 기준으로 직접 lookup 해야 확실.
+        if (nonEmptyDbClassNames.length > 0) {
+          for (const cn of nonEmptyDbClassNames) {
+            const item = (salaryConfig.items || []).find((i) => i.name === cn);
+            if (!item) continue;
+            if (item.baseTuition === price || item.unitPrice === price) return cn;
+          }
+          return null;
+        }
+
+        // DB 정보 없는 경우 기존 fallback (candidates → group → first)
         const candidates = (salaryConfig.items || []).filter(
-          (i) => (i.baseTuition || i.unitPrice) === price
+          (i) => i.baseTuition === price || i.unitPrice === price
         );
         if (candidates.length === 0) return null;
-        for (const c of candidates) {
-          if (dbClassNames.has(c.name)) return c.name;
-        }
         const fromGroup = candidates.find((c) => c.group === studentGroup);
         if (fromGroup) return fromGroup.name;
         return candidates[0].name;
@@ -540,38 +554,53 @@ export default function AttendancePage() {
           label: string;
         }
       >();
+      // DB 우선 원칙: 학생의 DB 분반이 있으면 그것만으로 byClass 를 초기화.
+      // 이후 수납은 이 entry 중 하나에 배정만 함 — ghost tier(예: 중등특강2) 생성 금지.
+      if (nonEmptyDbClassNames.length > 0) {
+        for (const cn of nonEmptyDbClassNames) {
+          byClass.set(cn, {
+            tierName: cn,
+            daySet: new Set<string>(),
+            payments: [],
+            label: cn,
+          });
+        }
+      }
+
       for (const p of teacherPayments) {
         const price = inferUnitPrice(p.charge_amount || 0);
-        const tierName = inferTierForPrice(price);
-        const classKey =
-          tierName || (price !== null ? `price:${price}` : paymentClassKey(p.payment_name || ""));
+        let classKey: string | null = null;
+
+        if (nonEmptyDbClassNames.length > 0) {
+          // DB 분반이 있으면 그 안에서만 선택 (price 매칭 우선, 실패 시 단일 분반 귀속)
+          const inferred = inferTierForPrice(price);
+          if (inferred && byClass.has(inferred)) {
+            classKey = inferred;
+          } else if (nonEmptyDbClassNames.length === 1) {
+            classKey = nonEmptyDbClassNames[0];
+          }
+          // price 매칭도 실패하고 분반도 여러 개면 이 수납은 drop (ghost 생성 방지)
+        } else {
+          // DB 분반 정보 없는 학생 — 기존 inferTier / price / payment_name 폴백 체인
+          const tierName = inferTierForPrice(price);
+          classKey =
+            tierName ||
+            (price !== null ? `price:${price}` : paymentClassKey(p.payment_name || ""));
+        }
         if (!classKey) continue;
+
         const entry = byClass.get(classKey) || {
-          tierName,
+          tierName: classKey.startsWith("price:") ? null : classKey,
           daySet: new Set<string>(),
           payments: [],
           label:
-            tierName ||
-            (price !== null
-              ? `${price.toLocaleString()}원 수업`
-              : paymentClassKey(p.payment_name || "")),
+            classKey.startsWith("price:")
+              ? (price !== null ? `${price.toLocaleString()}원 수업` : classKey)
+              : classKey,
         };
         for (const d of extractPaymentDays(p.payment_name || "")) entry.daySet.add(d);
         entry.payments.push(p);
         byClass.set(classKey, entry);
-      }
-
-      // DB 에만 있고 수납에 없는 분반도 행으로 추가 (수납 전/퇴원 과도기 대응)
-      for (const dbCn of dbClassNames) {
-        if (!dbCn) continue;
-        if (!byClass.has(dbCn)) {
-          byClass.set(dbCn, {
-            tierName: dbCn,
-            daySet: new Set<string>(),
-            payments: [],
-            label: dbCn,
-          });
-        }
       }
 
       // 분반이 없으면 수납·DB 모두 없는 학생 → 그대로 추가
@@ -589,44 +618,76 @@ export default function AttendancePage() {
         const rowKey = tierName ? `${s.id}|${tierName}` : s.id;
         const rowData = studentDataMap.get(rowKey);
         const paymentDays = Array.from(entry.daySet).sort();
-        const displayDays = new Set<string>(paymentDays);
-        for (const d of s.days || []) displayDays.add(d);
+
+        // displayDays 결정 우선순위:
+        //  1) 이 행에 매핑된 수납의 요일 (entry.daySet) — 가장 정확
+        //  2) 이 행의 실제 출석 기록에서 요일 도출 — 수납이 다른 행에 귀속된 경우
+        //  3) 단일 분반이면 s.days fallback
+        //  4) 빈 배열 (여러 분반 + 정보 없음)
+        // s.days 를 병합하지 않는 이유: 분반 2+ 학생에서 subset 매칭이 수납을 다른 행으로 흡수.
+        let displayDays: string[];
+        if (paymentDays.length > 0) {
+          displayDays = paymentDays;
+        } else {
+          const attendanceDayLabels = new Set<string>();
+          for (const dateKey of Object.keys(rowData?.attendance || {})) {
+            const v = rowData?.attendance[dateKey] ?? 0;
+            if (v <= 0) continue;
+            const d = new Date(dateKey);
+            if (!isNaN(d.getTime())) {
+              attendanceDayLabels.add(["일","월","화","수","목","금","토"][d.getDay()]);
+            }
+          }
+          if (attendanceDayLabels.size > 0) {
+            displayDays = Array.from(attendanceDayLabels).sort();
+          } else if (byClass.size === 1) {
+            displayDays = (s.days || []).slice().sort();
+          } else {
+            displayDays = [];
+          }
+        }
         rows.push({
           ...s,
           id: rowKey,
           group: entry.label,
-          days: Array.from(displayDays).sort(),
+          days: displayDays,
           attendance: rowData?.attendance ?? {},
           memos: rowData?.memos ?? {},
           homework: rowData?.homework ?? {},
           cellColors: rowData?.cellColors ?? {},
-        });
+          // 이 행에 귀속된 수납 — inferTierForPrice 로 tier 기반 정확 매칭된 결과.
+          // paidAmountByStudent / termCountMap 에서 filterPaymentsForRow 대신 이 필드를 사용.
+          _payments: entry.payments,
+        } as Student & { _payments: typeof entry.payments });
       }
     }
     return rows;
   }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices, studentDataMap, salaryConfig]);
 
   /**
-   * 이번 월에 대응하는 세션 범위 predicate.
-   * 시트 규칙: 예컨대 "26.03" 월은 3/6 ~ 4/2 범위를 포함.
-   * 달력 월(1~말일)만 쓰면 4월초 수업을 3월 급여에서 놓치는 버그 발생.
-   * 해당 월의 세션이 정의돼 있으면 그 범위로, 없으면 기존 달력 월 prefix 매칭 fallback.
+   * 급여 계산 범위 predicate.
+   * - 월별 뷰: 달력 월(1일~말일). "3월 급여는 3월 1~31일 분만" 규칙.
+   * - 세션별 뷰: 세션 정의 기간 전체(min ~ max). "26.03 세션 = 3/6~4/2" 규칙.
+   * 두 뷰는 의도적으로 다른 값을 낸다 — 사용자가 명시적으로 선택한 집계 기준을 따른다.
    */
   const isDateInCurrentPeriod = useMemo(() => {
-    const currentMonthSession = sessionPeriods.find((s) => s.month === month);
     const monthStr = `${year}-${String(month).padStart(2, "0")}`;
-    if (currentMonthSession) {
-      return (dateKey: string) => isDateInSession(dateKey, currentMonthSession);
+    // 세션 뷰: 선택된 세션 우선, 없으면 해당 월 세션, 그것도 없으면 달력 월 fallback
+    if (viewMode === "session") {
+      const s = selectedSession || sessionPeriods.find((sp) => sp.month === month);
+      if (s) return (dateKey: string) => isDateInSession(dateKey, s);
     }
+    // 월별 뷰(또는 세션 없음): 달력 월 prefix
     return (dateKey: string) => dateKey.startsWith(monthStr);
-  }, [sessionPeriods, year, month]);
+  }, [viewMode, selectedSession, sessionPeriods, year, month]);
 
   /**
    * 행(수강)별 수납 필터:
    *   1) 선생님 일치
    *   2) 수학이면 수납명에 요일 패턴이 있는 것만
-   *   3) 수납명 요일 세트가 이 행 요일 세트와 동일
-   * 조건 3) 이 한 학생 여러 수강 중 각 수강에 해당하는 수납만 고르는 핵심.
+   *   3) 수납명 요일 세트가 이 행 요일 세트의 부분집합
+   * 조건 3): row.days 가 수납과 학생 enrollment 에서 병합되면 subset 이 과잉 매칭됨.
+   * 이 문제는 studentRows 생성 시 displayDays 를 payment 기반으로만 구성해 해결.
    */
   const filterPaymentsForRow = (
     row: Student,
@@ -653,8 +714,6 @@ export default function AttendancePage() {
     const rowDays = row.days || [];
     if (rowDays.length === 0) return dayFiltered;
     const rowDaysSet = new Set(rowDays);
-    // 수납의 요일 세트가 이 행 요일의 부분집합이면 이 분반 수납으로 간주.
-    // (같은 단가 다중 수납이 병합된 경우 각 payment 요일이 행 요일의 부분이 됨)
     return dayFiltered.filter((p) => {
       const payDays = extractPaymentDays(p.payment_name || "");
       if (payDays.length === 0) return !opts.isMathTeacher;
@@ -677,9 +736,16 @@ export default function AttendancePage() {
     };
 
     for (const row of studentRows) {
-      const studentPayments = findStudentPayments(row, monthPayments);
-      const filtered = filterPaymentsForRow(row, studentPayments, opts);
-      if (filtered.length === 0) continue;
+      // tier 기반 정확 매칭된 수납 직접 사용 (studentRows 생성 시 byClass 로 이미 분류됨).
+      // filterPaymentsForRow 의 요일 subset 매칭은 tier 다른 행에 같은 요일 수납을 중복 귀속시키는 버그가 있어 우회.
+      const rowWithPayments = row as Student & { _payments?: PaymentLite[] };
+      let filtered: PaymentLite[] | undefined = rowWithPayments._payments;
+      if (!filtered) {
+        // fallback: 레거시 row (분반 없는 단순 학생) — 기존 경로 유지
+        const studentPayments = findStudentPayments(row, monthPayments);
+        filtered = filterPaymentsForRow(row, studentPayments, opts);
+      }
+      if (!filtered || filtered.length === 0) continue;
 
       const totalCharge = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (totalCharge <= 0) continue;
@@ -716,9 +782,14 @@ export default function AttendancePage() {
     };
 
     for (const row of studentRows) {
-      const studentPayments = findStudentPayments(row, monthPayments);
-      const filtered = filterPaymentsForRow(row, studentPayments, opts);
-      if (filtered.length === 0) continue;
+      // tier 기반 분류된 수납 직접 사용 (termCountMap 와 동일 로직)
+      const rowWithPayments = row as Student & { _payments?: PaymentLite[] };
+      let filtered: PaymentLite[] | undefined = rowWithPayments._payments;
+      if (!filtered) {
+        const studentPayments = findStudentPayments(row, monthPayments);
+        filtered = filterPaymentsForRow(row, studentPayments, opts);
+      }
+      if (!filtered || filtered.length === 0) continue;
       const total = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
       if (total > 0) map.set(row.id, total);
     }

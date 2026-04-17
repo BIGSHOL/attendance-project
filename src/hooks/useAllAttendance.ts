@@ -4,18 +4,29 @@ import { useEffect, useState, useCallback } from "react";
 import type { AttendanceRow } from "./useAttendanceData";
 
 /**
- * 특정 월의 모든 선생님 출석 데이터 조회
- * 서버 /api/attendance/all 엔드포인트를 경유해 RLS 우회(dev bypass) 호환.
+ * 특정 월 또는 세션 기간의 모든 선생님 출석 데이터 조회.
+ * rangeOverride 가 주어지면 해당 기간으로 조회 (세션 기반 급여 정산용).
  */
-export function useAllAttendance(year: number, month: number) {
+export function useAllAttendance(
+  year: number,
+  month: number,
+  rangeOverride?: { startDate: string; endDate: string } | null
+) {
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const overrideStart = rangeOverride?.startDate;
+  const overrideEnd = rangeOverride?.endDate;
 
   const fetch = useCallback(async () => {
     setLoading(true);
     try {
+      const qs =
+        overrideStart && overrideEnd
+          ? `startDate=${overrideStart}&endDate=${overrideEnd}`
+          : `year=${year}&month=${month}`;
       const res = await window.fetch(
-        `/api/attendance/all?year=${year}&month=${month}`,
+        `/api/attendance/all?${qs}`,
         { cache: "no-store" }
       );
       if (res.ok) {
@@ -29,7 +40,7 @@ export function useAllAttendance(year: number, month: number) {
     } finally {
       setLoading(false);
     }
-  }, [year, month]);
+  }, [year, month, overrideStart, overrideEnd]);
 
   useEffect(() => {
     fetch();

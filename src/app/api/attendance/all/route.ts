@@ -4,7 +4,9 @@ import { requireAuth } from "@/lib/apiAuth";
 
 /**
  * GET /api/attendance/all?year=2026&month=4
- * 특정 월의 모든 선생님 출석 기록 조회
+ *   또는 /api/attendance/all?startDate=2026-03-06&endDate=2026-04-02
+ * 기간 내 모든 선생님 출석 기록 조회.
+ * startDate/endDate 가 주어지면 그 범위로 조회 (세션 기반 급여용).
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -12,18 +14,27 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const { searchParams } = new URL(request.url);
-  const year = Number(searchParams.get("year"));
-  const month = Number(searchParams.get("month"));
-  if (!year || !month) {
-    return NextResponse.json(
-      { error: "year, month 필수" },
-      { status: 400 }
-    );
-  }
+  const overrideStart = searchParams.get("startDate");
+  const overrideEnd = searchParams.get("endDate");
 
-  const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
-  const lastDay = new Date(year, month, 0).getDate();
-  const endDate = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  let startDate: string;
+  let endDate: string;
+  if (overrideStart && overrideEnd) {
+    startDate = overrideStart;
+    endDate = overrideEnd;
+  } else {
+    const year = Number(searchParams.get("year"));
+    const month = Number(searchParams.get("month"));
+    if (!year || !month) {
+      return NextResponse.json(
+        { error: "year+month 또는 startDate+endDate 필수" },
+        { status: 400 }
+      );
+    }
+    startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    endDate = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  }
 
   // PostgREST 의 기본 max-rows=1000 제한을 페이지네이션으로 우회.
   const pageSize = 1000;
@@ -54,6 +65,6 @@ export async function GET(request: NextRequest) {
     accumulated.push(...(data as Row[]));
     if (data.length < pageSize) break;
   }
-  console.log(`[attendance/all] ${year}.${month} returned=${accumulated.length}`);
+  console.log(`[attendance/all] ${startDate}~${endDate} returned=${accumulated.length}`);
   return NextResponse.json(accumulated);
 }
