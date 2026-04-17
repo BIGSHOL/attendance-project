@@ -12,6 +12,7 @@ import { useTeacherBlogPosts } from "@/hooks/useTeacherBlogPosts";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
+import { getEffectiveRatio } from "@/lib/salary";
 import { INITIAL_SALARY_CONFIG } from "@/types";
 import type { PaymentLite } from "@/lib/studentPaymentMatcher";
 
@@ -57,8 +58,24 @@ export default function TeacherDetail({ teacherId }: Props) {
     saving: blogRequiredSaving,
     getRatios,
     setRatios,
+    getAdminAllowance,
+    setAdminAllowance,
   } = useTeacherSettings(teacherId);
   const blogRequired = isBlogRequired(teacherId);
+  const adminAllowance = getAdminAllowance(teacherId);
+  const [adminBaseInput, setAdminBaseInput] = useState<string>("");
+  const [adminTierInput, setAdminTierInput] = useState<string>("");
+  // 저장된 값 동기화
+  useEffect(() => {
+    setAdminBaseInput(adminAllowance?.baseAmount ? String(adminAllowance.baseAmount) : "");
+    setAdminTierInput(adminAllowance?.tierId || "");
+  }, [adminAllowance?.baseAmount, adminAllowance?.tierId]);
+
+  const handleAdminSave = async () => {
+    const amount = Math.max(0, parseInt(adminBaseInput.replace(/[^\d]/g, "")) || 0);
+    const tierId = amount > 0 ? adminTierInput || null : null;
+    await setAdminAllowance(teacherId, amount, tierId);
+  };
 
   const handleToggleBlogRequired = () =>
     setBlogRequired(teacherId, !blogRequired);
@@ -527,6 +544,84 @@ export default function TeacherDetail({ teacherId }: Props) {
           }
           onSave={(next) => setRatios(teacher.id, next)}
         />
+      )}
+
+      {/* 행정급여 — 학생 수업 외 행정업무 월 고정급. 기본액 × tier 비율 × (1−수수료) */}
+      {teacher && (
+        <div className="mt-4 rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              행정급여
+            </h3>
+            <span className="text-xs text-zinc-500">
+              실급여 = 기본액 × tier 비율 × (1 − 수수료 {salaryConfig.academyFee}%)
+            </span>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col">
+              <label className="text-xs text-zinc-500">월 기본액 (원)</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={adminBaseInput}
+                onChange={(e) => setAdminBaseInput(e.target.value)}
+                disabled={!isAdmin}
+                placeholder="예: 340000"
+                className="w-32 rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm disabled:bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800 dark:disabled:bg-zinc-700"
+              />
+            </div>
+            <div className="flex flex-col">
+              <label className="text-xs text-zinc-500">참조 tier</label>
+              <select
+                value={adminTierInput}
+                onChange={(e) => setAdminTierInput(e.target.value)}
+                disabled={!isAdmin}
+                className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm disabled:bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800 dark:disabled:bg-zinc-700"
+              >
+                <option value="">(선택 안 함)</option>
+                {(salaryConfig.items || []).map((item) => {
+                  const effRatio = getEffectiveRatio(item, salaryConfig, teacher?.name);
+                  return (
+                    <option key={item.id} value={item.id}>
+                      {item.name} · {effRatio}%
+                      {effRatio !== item.ratio ? ` (기본 ${item.ratio}%)` : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            {isAdmin && (
+              <button
+                onClick={handleAdminSave}
+                className="rounded-sm bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                저장
+              </button>
+            )}
+            {adminAllowance && (() => {
+              const item = (salaryConfig.items || []).find(
+                (i) => i.id === adminAllowance.tierId
+              );
+              if (!item) return null;
+              const gross = adminAllowance.baseAmount;
+              const effRatio = getEffectiveRatio(item, salaryConfig, teacher?.name);
+              const salary = Math.floor(
+                gross * (effRatio / 100) * (1 - salaryConfig.academyFee / 100)
+              );
+              return (
+                <div className="ml-auto text-sm text-zinc-700 dark:text-zinc-300">
+                  예상 실급여 <span className="font-bold text-green-700 dark:text-green-400">{salary.toLocaleString()}원</span>
+                  <span className="ml-1 text-xs text-zinc-500">
+                    ({gross.toLocaleString()} × {effRatio}% × {(100 - salaryConfig.academyFee).toFixed(1)}%)
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+          <p className="mt-2 text-xs text-zinc-500">
+            ※ 기본액 0 또는 tier 미선택 시 행정급여 없음. 기존 가상 학생(행정1~5) 방식 대체용.
+          </p>
+        </div>
       )}
 
       {/* 요약 */}

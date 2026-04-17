@@ -136,6 +136,10 @@ export async function syncTeacherSheet(
       > = {};
 
       for (const entry of parsed.entries) {
+        // "행정1", "행정2" 같은 가상 행정 학생은 sync skip.
+        // 행정급여는 TeacherDetail 설정 필드(admin_base_amount + admin_tier_id)로
+        // 처리되므로 시트의 플레이스홀더 행은 DB 에 저장하지 않는다.
+        if (/^행정\d*$/.test(entry.studentName?.trim() || "")) continue;
         const entrySchool = normalizeSchoolName(entry.school || "");
         // 이름 + 학교 정규화 매칭
         let match = students.find(

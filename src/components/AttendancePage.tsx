@@ -132,7 +132,7 @@ export default function AttendancePage() {
   const { users: userRoles } = useAllUserRoles();
 
   // 블로그 의무 + 급여 유형 (staff_id 기반 teacher_settings 우선)
-  const { isBlogRequired, getSalary } = useTeacherSettings();
+  const { isBlogRequired, getSalary, getAdminAllowance } = useTeacherSettings();
 
   // 선택된 선생님의 급여 유형
   // 우선순위: teacher_settings → user_roles fallback → 기본 commission
@@ -148,6 +148,20 @@ export default function AttendancePage() {
     };
   }, [getSalary, userRoles, selectedTeacherId]);
   const selectedBlogRequired = isBlogRequired(selectedTeacherId);
+
+  // 행정급여 — 기본액 × tier 비율(선생님 오버라이드 반영) × (1 − 수수료). 0 이면 미사용.
+  const adminSalaryInfo = useMemo(() => {
+    const aa = getAdminAllowance(selectedTeacherId);
+    if (!aa) return { gross: 0, salary: 0, tierName: "", ratio: 0 };
+    const item = (salaryConfig.items || []).find((i) => i.id === aa.tierId);
+    if (!item) return { gross: 0, salary: 0, tierName: "", ratio: 0 };
+    const teacherName = teachers.find((t) => t.id === selectedTeacherId)?.name;
+    const ratio = getEffectiveRatio(item, salaryConfig, teacherName);
+    const salary = Math.floor(
+      aa.baseAmount * (ratio / 100) * (1 - salaryConfig.academyFee / 100)
+    );
+    return { gross: aa.baseAmount, salary, tierName: item.name, ratio };
+  }, [getAdminAllowance, selectedTeacherId, salaryConfig, teachers]);
 
   // 선택된 선생님의 해당 월 블로그 작성 여부 → 패널티 판정
   const { hasPostForMonth, getPost } = useTeacherBlogPosts(selectedTeacherId, year, month);
@@ -922,8 +936,10 @@ export default function AttendancePage() {
   ]);
 
   const finalSalary = useMemo(
-    () => calculateFinalSalary(stats.totalSalary, salaryConfig.incentives, settlement),
-    [stats.totalSalary, salaryConfig.incentives, settlement]
+    () =>
+      calculateFinalSalary(stats.totalSalary, salaryConfig.incentives, settlement) +
+      adminSalaryInfo.salary,
+    [stats.totalSalary, salaryConfig.incentives, settlement, adminSalaryInfo.salary]
   );
 
   // 이번 달 신입/퇴원 수
@@ -1097,6 +1113,18 @@ export default function AttendancePage() {
           <span className="font-semibold">이번 달 급여</span>
           <span className="font-bold">{finalSalary.toLocaleString()}원</span>
         </button>
+
+        {/* 행정급여 (설정 있는 선생님만) */}
+        {adminSalaryInfo.salary > 0 && (
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-sm bg-amber-50 text-amber-800 text-sm dark:bg-amber-950 dark:text-amber-300"
+            title={`${adminSalaryInfo.gross.toLocaleString()}원 × ${adminSalaryInfo.tierName} ${adminSalaryInfo.ratio}% × (1−${salaryConfig.academyFee}%)`}
+          >
+            <span>📋</span>
+            <span className="font-semibold">행정급여</span>
+            <span className="font-bold">+{adminSalaryInfo.salary.toLocaleString()}원</span>
+          </div>
+        )}
 
         {/* 학생 수 */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-zinc-100 text-zinc-700 text-sm dark:bg-zinc-800 dark:text-zinc-300">

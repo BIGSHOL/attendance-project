@@ -15,6 +15,17 @@ export interface TeacherSetting {
   salary_type: SalaryType;
   commission_days: string[];
   ratios?: TeacherRatioMap;
+  /**
+   * 행정급여 월 기본액 (원). 0 이면 미사용.
+   * 실급여 = admin_base_amount × tier.ratio × (1 − academyFee).
+   * 김민주 선생님처럼 학생 외 행정업무 겸임하는 케이스 대응.
+   */
+  admin_base_amount?: number;
+  /**
+   * 행정급여 환산에 참조할 tier id (salaryConfig.items[].id).
+   * 이 tier 의 ratio · 수수료 체계를 그대로 사용해 계산한다.
+   */
+  admin_tier_id?: string | null;
   updated_at?: string;
 }
 
@@ -137,6 +148,34 @@ export function useTeacherSettings(staffId?: string) {
     [postPatch]
   );
 
+  /** 행정급여 설정 저장 (기본액 + 참조 tier id) */
+  const setAdminAllowance = useCallback(
+    (
+      targetStaffId: string,
+      baseAmount: number,
+      tierId: string | null
+    ) =>
+      postPatch({
+        staff_id: targetStaffId,
+        admin_base_amount: baseAmount,
+        admin_tier_id: tierId,
+      }),
+    [postPatch]
+  );
+
+  /** 행정급여 설정 조회 (없으면 null) */
+  const getAdminAllowance = useCallback(
+    (id: string): { baseAmount: number; tierId: string | null } | null => {
+      const row = settings.find((s) => s.staff_id === id);
+      if (!row) return null;
+      const baseAmount = row.admin_base_amount ?? 0;
+      const tierId = row.admin_tier_id ?? null;
+      if (baseAmount <= 0 || !tierId) return null;
+      return { baseAmount, tierId };
+    },
+    [settings]
+  );
+
   return {
     settings,
     loading,
@@ -145,9 +184,11 @@ export function useTeacherSettings(staffId?: string) {
     setSalaryType,
     setCommissionDays,
     setRatios,
+    setAdminAllowance,
     isBlogRequired,
     getSalary,
     getRatios,
+    getAdminAllowance,
     refetch: fetchSettings,
   };
 }

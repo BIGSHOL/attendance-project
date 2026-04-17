@@ -52,7 +52,15 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const body = await request.json();
-  const { staff_id, blog_required, salary_type, commission_days, ratios } = body || {};
+  const {
+    staff_id,
+    blog_required,
+    salary_type,
+    commission_days,
+    ratios,
+    admin_base_amount,
+    admin_tier_id,
+  } = body || {};
 
   if (!staff_id) {
     return NextResponse.json({ error: "staff_id 필수" }, { status: 400 });
@@ -84,6 +92,14 @@ export async function POST(request: NextRequest) {
       ratios !== undefined && ratios !== null && typeof ratios === "object"
         ? ratios
         : existing?.ratios || {},
+    admin_base_amount:
+      admin_base_amount !== undefined
+        ? Math.max(0, Math.floor(Number(admin_base_amount) || 0))
+        : existing?.admin_base_amount ?? 0,
+    admin_tier_id:
+      admin_tier_id !== undefined
+        ? admin_tier_id || null
+        : existing?.admin_tier_id ?? null,
     updated_at: new Date().toISOString(),
   };
 
