@@ -10,8 +10,6 @@ export interface AttendanceEntry {
   days: string[];
   attendance: Record<string, number>; // "YYYY-MM-DD" → 0|1 (빈칸 제외)
   memos: Record<string, string>;      // "YYYY-MM-DD" → 메모 텍스트 (빈값 제외)
-  /** 이 행이 시트 "보강" 섹션에 위치하는지. 퇴원 후 보강 출석을 재원 체크 예외로 허용. */
-  isMakeup: boolean;
 }
 
 export interface ParsedAttendance {
@@ -117,24 +115,18 @@ export function parseAttendanceFromArray(
 
   // 학생 행 (6행부터)
   const entries: AttendanceEntry[] = [];
-  // 푸터 마커 (아래 섹션은 학생이 아닌 요약 정보)
+  // 푸터 마커 (아래 섹션은 학생이 아닌 요약 정보) — A열 또는 B열 둘 다 체크
+  // (선생님별로 A열 용도 다름: 이수진=빈칸, 김민주=담임 체크박스).
+  // "보강" 같은 시각적 구분 라벨은 학생 행이 아니므로 자동 skip됨 (학교/학년 비어있어서).
   const FOOTER_MARKERS = new Set(["퇴원생", "신규생", "반이동"]);
-  // "보강" 섹션 진입 플래그 — A열 또는 B열에 "보강" 라벨이 나오면 이후 학생 행은
-  // 보강 출석으로 마크 (퇴원 후 출석도 급여 집계에 포함시키기 위함).
-  // 선생님별로 A열 용도가 다름 (이수진=빈칸, 김민주=담임 체크박스). 두 컬럼 모두 체크.
-  let inMakeupSection = false;
   for (let r = 5; r < data.length; r++) {
     const row = data[r];
     if (!row) continue;
 
-    // A열 또는 B열에 섹션 마커?
+    // A열 또는 B열 푸터 마커 체크 → 파싱 종료
     const firstCol = String(row[0] || "").trim();
     const secondCol = String(row[1] || "").trim();
     if (FOOTER_MARKERS.has(firstCol) || FOOTER_MARKERS.has(secondCol)) break;
-    if (firstCol === "보강" || secondCol === "보강") {
-      inMakeupSection = true;
-      continue; // 라벨 행 자체는 학생 데이터 없음
-    }
 
     const name = secondCol; // 학생 이름은 항상 B열
     if (!name) continue;
@@ -147,8 +139,9 @@ export function parseAttendanceFromArray(
     // C열 요일 파싱 (예: "화, 금" → ["화","금"])
     const daysCell = String(row[2] || "").trim();
     const days = (daysCell.match(/[월화수목금토일]/g) || []);
-    // 보강 섹션 학생 행은 학교/학년 비어있어도 허용. 본행은 학교/학년 필수.
-    if (!inMakeupSection && !school && !grade) continue;
+    // 학교와 학년이 모두 비어 있으면 유효한 학생 행이 아님
+    // ("보강" 같은 시각적 구분용 텍스트 행도 자연스레 걸러짐)
+    if (!school && !grade) continue;
 
     const attendance: Record<string, number> = {};
     const memos: Record<string, string> = {};
@@ -165,16 +158,7 @@ export function parseAttendanceFromArray(
       }
     }
 
-    entries.push({
-      studentName: name,
-      school,
-      grade,
-      tierName,
-      days,
-      attendance,
-      memos,
-      isMakeup: inMakeupSection,
-    });
+    entries.push({ studentName: name, school, grade, tierName, days, attendance, memos });
   }
 
   // 날짜 범위 계산 (min/max) — 월 단위가 아닌 실제 탭 커버 범위 기준으로 덮어쓰기

@@ -94,10 +94,10 @@ function StudentRowImpl({
   // 급여 설정 매칭 (시트 F열 tier 오버라이드 최우선)
   const settingItem = matchSalarySetting(student, salaryConfig, undefined, tierOverrideId);
 
-  // 월 출석 합계 — 현재 보이는 날짜 + 재원기간 내에서만 집계
+  // 월 출석 합계. 재원 외 날짜 + hours > 0 은 자동 보강으로 간주해 합계 포함.
+  // (AttendancePage.actualSalaryByStudent / salary.calculateStats 와 일관)
   const monthTotal = dates.reduce((sum, d) => {
     const key = formatDateKey(d);
-    if (!isDateValidForStudent(key, student)) return sum;
     const v = attendance[key];
     return sum + (v && v > 0 ? v : 0);
   }, 0);

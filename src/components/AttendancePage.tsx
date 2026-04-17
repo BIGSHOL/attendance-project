@@ -393,7 +393,6 @@ export default function AttendancePage() {
           memos: supaData?.memos ?? s.memos ?? {},
           homework: supaData?.homework ?? s.homework ?? {},
           cellColors: supaData?.cellColors ?? s.cellColors ?? {},
-          makeups: supaData?.makeups ?? s.makeups ?? {},
         };
       })
       .filter((s) => {
@@ -696,7 +695,6 @@ export default function AttendancePage() {
           memos: rowData?.memos ?? {},
           homework: rowData?.homework ?? {},
           cellColors: rowData?.cellColors ?? {},
-          makeups: rowData?.makeups ?? {},
           // 이 행에 귀속된 수납 — inferTierForPrice 로 tier 기반 정확 매칭된 결과.
           // paidAmountByStudent / termCountMap 에서 filterPaymentsForRow 대신 이 필드를 사용.
           _payments: entry.payments,
@@ -880,13 +878,11 @@ export default function AttendancePage() {
       if (!student.attendance) continue;
 
       let classUnits = 0;
-      const studentMakeups = student.makeups || {};
       for (const [dateKey, value] of Object.entries(student.attendance)) {
         // 세션 범위(없으면 달력 월) 필터
         if (!isDateInCurrentPeriod(dateKey) || value <= 0) continue;
-        // 재원 기간 밖이면 원칙적으로 제외하되, 시트 "보강" 섹션에서 온
-        // 출석(is_makeup=true)은 예외 허용. 퇴원 후 보강 수업도 급여 반영.
-        if (!isDateValidForStudent(dateKey, student) && !studentMakeups[dateKey]) continue;
+        // 재원 외 날짜 + 출석 > 0 은 자동으로 "보강" 으로 간주해 급여 집계 포함.
+        // 시트 "보강" 섹션 라벨 유무와 무관 — hours > 0 자체가 강사의 의도적 입력.
         if (
           isAttendanceCountable(
             dateKey,

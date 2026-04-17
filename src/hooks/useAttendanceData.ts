@@ -414,13 +414,12 @@ export function useAttendanceData(
         memos: Record<string, string>;
         cellColors: Record<string, string>;
         homework: Record<string, boolean>;
-        makeups: Record<string, boolean>;
       }
     >();
     const ensure = (key: string) => {
       let d = map.get(key);
       if (!d) {
-        d = { attendance: {}, memos: {}, cellColors: {}, homework: {}, makeups: {} };
+        d = { attendance: {}, memos: {}, cellColors: {}, homework: {} };
         map.set(key, d);
       }
       return d;
@@ -435,7 +434,6 @@ export function useAttendanceData(
       if (r.memo) rd.memos[r.date] = r.memo;
       if (r.cell_color) rd.cellColors[r.date] = r.cell_color;
       if (r.homework) rd.homework[r.date] = r.homework;
-      if (r.is_makeup) rd.makeups[r.date] = true;
       // 2) 학생 전체 맵 (레거시) — rowKey 와 studentId 가 다를 때만 추가
       if (rowKey !== r.student_id) {
         const sd = ensure(r.student_id);
@@ -443,7 +441,6 @@ export function useAttendanceData(
         if (r.memo) sd.memos[r.date] = r.memo;
         if (r.cell_color) sd.cellColors[r.date] = r.cell_color;
         if (r.homework) sd.homework[r.date] = r.homework;
-        if (r.is_makeup) sd.makeups[r.date] = true;
       }
     }
 

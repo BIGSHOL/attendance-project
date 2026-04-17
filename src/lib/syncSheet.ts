@@ -120,10 +120,6 @@ export async function syncTeacherSheet(
       // 학생의 해당 시트 행(= 분반)별로 독립 저장. 김지홍 등 분반 2+ 학생 대응.
       const records: Record<string, Record<string, number>> = {};
       const memos: Record<string, Record<string, string>> = {};
-      // 보강 섹션에서 나온 출석의 date 집합 (rowKey → {date: true}).
-      // import 단계에서 attendance.is_makeup=true 로 저장되어 퇴원 후 출석도
-      // 급여 집계에 포함 가능.
-      const makeups: Record<string, Record<string, boolean>> = {};
       // 시트에만 있는 학생(Firebase 미등록) — virtual_students 에 upsert 할 목록
       const virtualToUpsert: Record<
         string,
@@ -200,16 +196,6 @@ export async function syncTeacherSheet(
           mergedAtt[date] = (mergedAtt[date] || 0) + hours;
         }
         records[rowKey] = mergedAtt;
-        // 보강 섹션 학생 행의 출석 날짜를 makeups 맵에 마크.
-        // 본행과 같은 rowKey 로 합쳐지더라도 특정 날짜가 보강이면 그 날짜는 makeup 으로 인식.
-        if (entry.isMakeup) {
-          const existingM = makeups[rowKey] || {};
-          const mergedM: Record<string, boolean> = { ...existingM };
-          for (const date of Object.keys(entry.attendance)) {
-            mergedM[date] = true;
-          }
-          makeups[rowKey] = mergedM;
-        }
         if (entry.memos && Object.keys(entry.memos).length > 0) {
           const existingMemo = memos[rowKey] || {};
           const mergedMemo: Record<string, string> = { ...existingMemo };
@@ -285,7 +271,6 @@ export async function syncTeacherSheet(
           month: tab.month,
           records,
           memos,
-          makeups,
           overwrite: true,
           startDate: parsed.minDate || undefined,
           endDate: parsed.maxDate || undefined,

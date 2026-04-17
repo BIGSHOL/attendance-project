@@ -1,6 +1,5 @@
 import type { SalarySettingItem, SalaryConfig, Student, IncentiveConfig, SalarySubject, SalaryGroup } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
-import { isDateValidForStudent } from "./studentFilter";
 
 /**
  * 날짜 문자열(YYYY-MM-DD)을 요일 라벨(일~토)로 변환
@@ -217,14 +216,11 @@ export function calculateStats(
   for (const student of students) {
     if (!student.attendance) continue;
 
-    // 이번 달(세션) 출석 합계 (급여 유형 필터링 적용)
+    // 이번 달(세션) 출석 합계 (급여 유형 필터링 적용).
+    // 재원 외 날짜 + hours > 0 은 자동 보강으로 간주해 급여 집계 포함.
     let classUnits = 0;
-    const makeupDates = student.makeups || {};
     for (const [dateKey, value] of Object.entries(student.attendance)) {
       if (!inPeriod(dateKey) || value <= 0) continue;
-      // 재원 기간 밖 출석은 원칙적으로 제외하되, 보강 섹션 출석(is_makeup)은
-      // 예외 허용. 퇴원 후 보강 수업을 급여에 반영.
-      if (!isDateValidForStudent(dateKey, student) && !makeupDates[dateKey]) continue;
       totalAttendance += value;
       if (isAttendanceCountable(dateKey, salaryType, commissionDays)) {
         classUnits += value;
