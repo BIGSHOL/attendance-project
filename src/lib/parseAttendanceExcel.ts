@@ -10,6 +10,8 @@ export interface AttendanceEntry {
   days: string[];
   attendance: Record<string, number>; // "YYYY-MM-DD" → 0|1 (빈칸 제외)
   memos: Record<string, string>;      // "YYYY-MM-DD" → 메모 텍스트 (빈값 제외)
+  /** 이 행이 시트 "보강" 섹션에 위치하는지. 퇴원 후 보강 출석을 재원 체크 예외로 허용. */
+  isMakeup: boolean;
 }
 
 export interface ParsedAttendance {
@@ -117,13 +119,20 @@ export function parseAttendanceFromArray(
   const entries: AttendanceEntry[] = [];
   // 푸터 마커 (아래 섹션은 학생이 아닌 요약 정보)
   const FOOTER_MARKERS = new Set(["퇴원생", "신규생", "반이동"]);
+  // "보강" 섹션 진입 플래그 — A열에 "보강" 라벨이 나오면 이후 학생 행은
+  // 보강 출석으로 마크 (퇴원 후 출석도 급여 집계에 포함시키기 위함).
+  let inMakeupSection = false;
   for (let r = 5; r < data.length; r++) {
     const row = data[r];
     if (!row) continue;
 
-    // A열에 푸터 마커가 나오면 학생 목록 종료
+    // A열 마커 체크
     const firstCol = String(row[0] || "").trim();
     if (FOOTER_MARKERS.has(firstCol)) break;
+    if (firstCol === "보강") {
+      inMakeupSection = true;
+      continue; // 라벨 행 자체는 학생 데이터 없음
+    }
 
     const name = String(row[1] || "").trim();
     if (!name) continue;
@@ -136,8 +145,8 @@ export function parseAttendanceFromArray(
     // C열 요일 파싱 (예: "화, 금" → ["화","금"])
     const daysCell = String(row[2] || "").trim();
     const days = (daysCell.match(/[월화수목금토일]/g) || []);
-    // 학교와 학년이 모두 비어 있으면 유효한 학생 행이 아님
-    if (!school && !grade) continue;
+    // 보강 섹션 학생 행은 학교/학년 비어있어도 허용. 본행은 학교/학년 필수.
+    if (!inMakeupSection && !school && !grade) continue;
 
     const attendance: Record<string, number> = {};
     const memos: Record<string, string> = {};
@@ -154,7 +163,16 @@ export function parseAttendanceFromArray(
       }
     }
 
-    entries.push({ studentName: name, school, grade, tierName, days, attendance, memos });
+    entries.push({
+      studentName: name,
+      school,
+      grade,
+      tierName,
+      days,
+      attendance,
+      memos,
+      isMakeup: inMakeupSection,
+    });
   }
 
   // 날짜 범위 계산 (min/max) — 월 단위가 아닌 실제 탭 커버 범위 기준으로 덮어쓰기

@@ -10,6 +10,12 @@ interface ImportRequest {
   // rowKey 는 `${studentId}|${className}` 형식 (단일 분반 학생은 className=""로 studentId 뒤에 "|" 포함 가능).
   records: Record<string, Record<string, number>>;
   memos?: Record<string, Record<string, string>>;
+  /**
+   * rowKey → { "YYYY-MM-DD": true }. 시트 "보강" 섹션에서 나온 출석 날짜 마킹.
+   * attendance.is_makeup 으로 DB 저장. 퇴원 후 출석이라도 is_makeup=true 면
+   * 급여 집계에서 재원 체크 예외 허용.
+   */
+  makeups?: Record<string, Record<string, boolean>>;
   overwrite?: boolean;
   startDate?: string;
   endDate?: string;
@@ -44,6 +50,7 @@ export async function POST(request: NextRequest) {
     month,
     records,
     memos,
+    makeups,
     overwrite,
     startDate: bodyStartDate,
     endDate: bodyEndDate,
@@ -95,6 +102,7 @@ export async function POST(request: NextRequest) {
     const { studentId, className } = splitRowKey(rowKey);
     const dateMap = records[rowKey] || {};
     const memoMap = memos?.[rowKey] || {};
+    const makeupMap = makeups?.[rowKey] || {};
     const allDates = new Set([...Object.keys(dateMap), ...Object.keys(memoMap)]);
     for (const date of allDates) {
       rows.push({
@@ -106,7 +114,7 @@ export async function POST(request: NextRequest) {
         memo: memoMap[date] || "",
         cell_color: "",
         homework: false,
-        is_makeup: false,
+        is_makeup: !!makeupMap[date],
       });
     }
   }

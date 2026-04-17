@@ -118,6 +118,8 @@ export interface Student {
   memos?: Record<string, string>;        // dateKey → 메모
   homework?: Record<string, boolean>;    // dateKey → 숙제 완료
   cellColors?: Record<string, string>;   // dateKey → 셀 색상
+  /** dateKey → 보강 여부. 퇴원 후 보강 출석을 재원 체크에서 예외 허용하는 용도. */
+  makeups?: Record<string, boolean>;
   salarySettingOverrides?: Record<string, string>; // className → salarySettingId
 }
 

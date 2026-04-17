@@ -219,10 +219,12 @@ export function calculateStats(
 
     // 이번 달(세션) 출석 합계 (급여 유형 필터링 적용)
     let classUnits = 0;
+    const makeupDates = student.makeups || {};
     for (const [dateKey, value] of Object.entries(student.attendance)) {
       if (!inPeriod(dateKey) || value <= 0) continue;
-      // 재원 기간 밖 출석은 급여/집계에서 제외 (퇴원 후 남은 레코드 방지)
-      if (!isDateValidForStudent(dateKey, student)) continue;
+      // 재원 기간 밖 출석은 원칙적으로 제외하되, 보강 섹션 출석(is_makeup)은
+      // 예외 허용. 퇴원 후 보강 수업을 급여에 반영.
+      if (!isDateValidForStudent(dateKey, student) && !makeupDates[dateKey]) continue;
       totalAttendance += value;
       if (isAttendanceCountable(dateKey, salaryType, commissionDays)) {
         classUnits += value;
