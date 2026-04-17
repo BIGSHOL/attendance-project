@@ -6,14 +6,19 @@ interface ImportRequest {
   teacherId: string;
   year: number;
   month: number;
-  // studentId → { "YYYY-MM-DD": number }
+  // rowKey → { "YYYY-MM-DD": number }
+  // rowKey 는 `${studentId}|${className}` 형식 (단일 분반 학생은 className=""로 studentId 뒤에 "|" 포함 가능).
   records: Record<string, Record<string, number>>;
-  // studentId → { "YYYY-MM-DD": 메모 }
   memos?: Record<string, Record<string, string>>;
   overwrite?: boolean;
-  /** 덮어쓰기 범위 (YYYY-MM-DD). 지정 시 month 기반 대신 이 범위로 삭제 */
   startDate?: string;
   endDate?: string;
+}
+
+function splitRowKey(key: string): { studentId: string; className: string } {
+  const idx = key.indexOf("|");
+  if (idx < 0) return { studentId: key, className: "" };
+  return { studentId: key.slice(0, idx), className: key.slice(idx + 1) };
 }
 
 export async function POST(request: NextRequest) {
@@ -69,10 +74,11 @@ export async function POST(request: NextRequest) {
       .lte("date", delEnd);
   }
 
-  // 데이터 생성
+  // 데이터 생성 — rowKey 는 "studentId|className" 포맷
   const rows: {
     teacher_id: string;
     student_id: string;
+    class_name: string;
     date: string;
     hours: number;
     memo: string;
@@ -81,19 +87,20 @@ export async function POST(request: NextRequest) {
     is_makeup: boolean;
   }[] = [];
 
-  // 출석값이 있는 셀 + 메모만 있는 셀 모두 포함
-  const studentIds = new Set([
+  const rowKeys = new Set([
     ...Object.keys(records),
     ...Object.keys(memos || {}),
   ]);
-  for (const studentId of studentIds) {
-    const dateMap = records[studentId] || {};
-    const memoMap = memos?.[studentId] || {};
+  for (const rowKey of rowKeys) {
+    const { studentId, className } = splitRowKey(rowKey);
+    const dateMap = records[rowKey] || {};
+    const memoMap = memos?.[rowKey] || {};
     const allDates = new Set([...Object.keys(dateMap), ...Object.keys(memoMap)]);
     for (const date of allDates) {
       rows.push({
         teacher_id: teacherId,
         student_id: studentId,
+        class_name: className,
         date,
         hours: Number(dateMap[date]) || 0,
         memo: memoMap[date] || "",
@@ -115,18 +122,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ count: 0 });
   }
 
-  // 배치 삽입
+  // 배치 upsert — (teacher_id, student_id, date, class_name) UNIQUE 충돌 시 UPDATE
   const batchSize = 100;
+  let upsertedTotal = 0;
   for (let i = 0; i < rows.length; i += batchSize) {
     const batch = rows.slice(i, i + batchSize);
-    const { error } = await supabase.from("attendance").insert(batch);
+    const { data: upserted, error } = await supabase
+      .from("attendance")
+      .upsert(batch, {
+        onConflict: "teacher_id,student_id,date,class_name",
+        ignoreDuplicates: false,
+      })
+      .select("id");
     if (error) {
+      console.error(`[import] upsert 실패 (batch ${i}):`, error);
       return NextResponse.json(
         { error: `저장 실패: ${error.message}` },
         { status: 500 }
       );
     }
+    upsertedTotal += upserted?.length || 0;
   }
+  console.log(`[import] upsert 완료: ${upsertedTotal}/${rows.length}`);
 
   return NextResponse.json({ count: rows.length });
 }

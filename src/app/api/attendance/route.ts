@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/apiAuth";
 interface AttendanceUpsertBody {
   teacher_id: string;
   student_id: string;
+  /** 분반 구분 (예: "화,금" / "토"). 단일 분반이면 빈 문자열. */
+  class_name?: string;
   date: string;
   hours?: number | null;
   memo?: string;
@@ -49,15 +51,23 @@ export async function GET(request: NextRequest) {
     endDate = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
   }
 
-  const { data, error } = await supabase
-    .from("attendance")
-    .select("*")
-    .eq("teacher_id", teacherId)
-    .gte("date", startDate)
-    .lte("date", endDate);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data || []);
+  // PostgREST max-rows=1000 제한 우회용 페이지네이션
+  const pageSize = 1000;
+  const accumulated: Record<string, unknown>[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("attendance")
+      .select("*")
+      .eq("teacher_id", teacherId)
+      .gte("date", startDate)
+      .lte("date", endDate)
+      .range(offset, offset + pageSize - 1);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!data || data.length === 0) break;
+    accumulated.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return NextResponse.json(accumulated);
 }
 
 /**
@@ -72,6 +82,7 @@ export async function PATCH(request: NextRequest) {
 
   const body = (await request.json()) as AttendanceUpsertBody;
   const { teacher_id, student_id, date } = body;
+  const class_name = body.class_name ?? "";
 
   if (!teacher_id || !student_id || !date) {
     return NextResponse.json(
@@ -80,12 +91,13 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
-  // 기존 행 조회
+  // 기존 행 조회 (class_name 포함)
   const { data: existing } = await supabase
     .from("attendance")
     .select("*")
     .eq("teacher_id", teacher_id)
     .eq("student_id", student_id)
+    .eq("class_name", class_name)
     .eq("date", date)
     .maybeSingle();
 
@@ -129,6 +141,7 @@ export async function PATCH(request: NextRequest) {
   const insertRow = {
     teacher_id,
     student_id,
+    class_name,
     date,
     hours: body.hours ?? 0,
     memo: body.memo ?? "",

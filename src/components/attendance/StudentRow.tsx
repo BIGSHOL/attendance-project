@@ -320,7 +320,8 @@ function StudentRowImpl({
           : null;
 
         // 배경색 결정
-        // 우선순위: 재원 외 > 커스텀색 > 결석(빨강) > 공휴일(연한 빨강, 수업 없음) > 수업일(주황) > 주말 회색
+        // 우선순위: 재원 외 > 커스텀색 > 결석(빨강) > 공휴일(연한 빨강, 수업 없음) >
+        //          보강(수강일 외 출석, 연한 주황) > 수업일(주황) > 주말 회색
         let bgColor = "";
         let stripePattern = false;
         if (!isValid) {
@@ -331,6 +332,8 @@ function StudentRowImpl({
           bgColor = "#ef4444"; // 결석: 빨강
         } else if (holidayName) {
           bgColor = "#fecaca"; // 공휴일: 연한 빨강 (수업 없음)
+        } else if (value && value > 0 && !isScheduledDay) {
+          bgColor = "#fde68a"; // 보강(수강일 외 출석): 연한 노랑으로 수강일과 구분
         } else if (isScheduledDay) {
           bgColor = "#fed7aa"; // 수업일: 주황 (출석 기입 여부와 상관없이 항상 표시)
         } else if (highlightWeekends && (isSunday || isSaturday)) {

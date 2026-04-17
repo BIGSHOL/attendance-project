@@ -76,21 +76,40 @@ export function parseAttendanceFromArray(
   // 탭이 커버할 수 있는 합리적 범위: 직전 달 ~ 두 달 뒤 (세션이 한 달 이상 걸치는 경우까지)
   const tabStart = new Date(year, month - 2, 1); // 한 달 전
   const tabEnd = new Date(year, month + 2, 0); // 두 달 뒤 말일
+  const formatDate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // 빈 헤더 컬럼도 복원: 직전 유효 날짜 + 1일씩 부여.
+  // Google Sheets 가 시트 설정/조건부 포맷/수식 계산 이슈로 헤더 텍스트를
+  // CSV export 에서 빈 값으로 반환하는 케이스 대응 (예: 4/1, 4/2 컬럼).
+  let lastDate: Date | null = null;
   for (let c = 17; c < header.length; c++) {
     const cell = String(header[c] || "").trim();
     const m = cell.match(dateHeaderPattern);
-    if (!m) continue;
-    const mm = parseInt(m[1]);
-    const dd = parseInt(m[2]);
-    // 엑셀 월보다 작으면 다음해로 보정 (12월 → 1월 넘어갈 때)
-    // 단, 탭 월과의 차이가 6개월 이상일 때만 해 넘김 간주 (e.g. month=12, mm=1 → 다음해)
-    let y = year;
-    if (mm < month && month - mm >= 6) y = year + 1;
-    else if (mm > month && mm - month >= 6) y = year - 1;
-    const parsed = new Date(y, mm - 1, dd);
-    if (parsed < tabStart || parsed > tabEnd) continue; // 범위 밖이면 스킵
-    const date = `${y}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
-    dateColMap.push({ colIdx: c, date });
+    if (m) {
+      const mm = parseInt(m[1]);
+      const dd = parseInt(m[2]);
+      // 엑셀 월보다 작으면 다음해로 보정 (12월 → 1월 넘어갈 때)
+      // 단, 탭 월과의 차이가 6개월 이상일 때만 해 넘김 간주 (e.g. month=12, mm=1 → 다음해)
+      let y = year;
+      if (mm < month && month - mm >= 6) y = year + 1;
+      else if (mm > month && mm - month >= 6) y = year - 1;
+      const parsed = new Date(y, mm - 1, dd);
+      if (parsed < tabStart || parsed > tabEnd) continue;
+      dateColMap.push({ colIdx: c, date: formatDate(parsed) });
+      lastDate = parsed;
+    } else if (cell === "" && lastDate) {
+      // 빈 헤더: 직전 날짜 + 1일로 유추 (범위 내에서만)
+      const nextDate: Date = new Date(lastDate.getTime() + 24 * 60 * 60 * 1000);
+      if (nextDate < tabStart || nextDate > tabEnd) {
+        // 범위 밖이면 더 이상 확장하지 않고 종료
+        break;
+      }
+      dateColMap.push({ colIdx: c, date: formatDate(nextDate) });
+      lastDate = nextDate;
+    } else {
+      // 날짜도 아니고 빈값도 아닌 다른 텍스트 (합계, 메모 컬럼 등) → 여기서 종료
+      break;
+    }
   }
   const dateColumns = dateColMap.map((d) => d.date);
 

@@ -116,8 +116,24 @@ export async function syncTeacherSheet(
         `[sync] ${tab.sheetName} 파싱 완료: 학생 ${parsed.entries.length}명, 메모 총 ${rawMemoCount}개 (${parsed.minDate}~${parsed.maxDate})`
       );
 
+      // rowKey = `${studentId}|${className}`. className 은 시트 C열 요일 정렬키("화,금").
+      // 학생의 해당 시트 행(= 분반)별로 독립 저장. 김지홍 등 분반 2+ 학생 대응.
       const records: Record<string, Record<string, number>> = {};
       const memos: Record<string, Record<string, string>> = {};
+      // 시트에만 있는 학생(Firebase 미등록) — virtual_students 에 upsert 할 목록
+      const virtualToUpsert: Record<
+        string,
+        {
+          id: string;
+          name: string;
+          school: string;
+          grade: string;
+          teacher_staff_id: string;
+          class_name: string;
+          days: string[];
+          subject: string;
+        }
+      > = {};
 
       for (const entry of parsed.entries) {
         const entrySchool = normalizeSchoolName(entry.school || "");
@@ -131,30 +147,58 @@ export async function syncTeacherSheet(
           // 이름만 매칭
           match = students.find((s) => s.name === entry.studentName);
         }
-        if (!match) {
-          monthResult.unmatched++;
-          continue;
+        // 시트 우선 원칙:
+        //  1) Firebase 에 없음 → virtual 학생으로 등록
+        //  2) Firebase 에 있지만 이 선생님 담당이 아님 (시트에만 담당으로 기재)
+        //     → virtual 학생으로 등록 (원본 Firebase 학생은 그대로 두고 별도 가상 학생 추가)
+        const isThisTeacher = !!match?.enrollments?.some(
+          (e) => e.teacher === teacherName || e.staffId === teacherName
+        );
+        if (!match || !isThisTeacher) {
+          const virtualId = `virtual_${entry.studentName}_${entrySchool || "unknown"}_${entry.grade || "unknown"}`;
+          virtualToUpsert[virtualId] = {
+            id: virtualId,
+            name: entry.studentName,
+            school: entrySchool,
+            grade: entry.grade,
+            teacher_staff_id: teacherName,
+            class_name: entry.tierName || "",
+            days: entry.days || [],
+            subject: "math",
+          };
+          match = {
+            id: virtualId,
+            name: entry.studentName,
+            school: entrySchool,
+            grade: entry.grade,
+          } as Student;
         }
         monthResult.matched++;
-        // 같은 학생이 같은 탭(월)에 여러 분반으로 등장 가능 (예: 김지홍 = 화금 + 목).
-        // 덮어쓰기 대신 병합하여 모든 요일의 출석/메모를 보존한다.
-        records[match.id] = { ...(records[match.id] || {}), ...entry.attendance };
+        // 시트 F열 tier(entry.tierName)를 class_name 으로 사용해 분반별 독립 저장.
+        // 요일 기반 키는 실제 출석 요일과 어긋날 수 있어 포기 — tier 는 시트에서
+        // 사용자가 직접 지정한 확정 분반 식별자이므로 가장 안정적.
+        // 학생이 분반 2+ 라면 각 시트 행이 서로 다른 tier 를 가지므로 충돌 없음.
+        const className = (entry.tierName || "").trim();
+        const rowKey = className ? `${match.id}|${className}` : match.id;
+        records[rowKey] = { ...(records[rowKey] || {}), ...entry.attendance };
         if (entry.memos && Object.keys(entry.memos).length > 0) {
-          memos[match.id] = { ...(memos[match.id] || {}), ...entry.memos };
+          memos[rowKey] = { ...(memos[rowKey] || {}), ...entry.memos };
           monthResult.memoCount += Object.keys(entry.memos).length;
         }
 
-        // F열 tier → SalaryConfig.items[].name 정확 매칭. 분반(요일)별 저장.
+        // F열 tier → SalaryConfig.items[].name 정확 매칭.
+        // class_name / rowKey 는 tierName 기반 (attendance 테이블과 통일).
+        // 이렇게 해야 studentRows.id (`${studentId}|${tierName}`) 와 tier_overrides 의
+        // `(student_id, class_name)` 이 같은 키로 일치해 matchSalarySetting 이 tier 를 찾음.
         if (salaryConfig && entry.tierName) {
           const item = salaryConfig.items.find((i) => i.name === entry.tierName);
           if (item) {
-            const daysKey = (entry.days || []).slice().sort().join(",");
-            const key = `${match.id}|${daysKey}`;
+            const key = `${match.id}|${entry.tierName}`;
             tierOverrides[key] = {
               student_id: match.id,
               salary_item_id: item.id,
               tier_name: entry.tierName,
-              class_name: daysKey,
+              class_name: entry.tierName,
             };
             monthResult.tierMatched++;
           } else {
@@ -168,6 +212,29 @@ export async function syncTeacherSheet(
         `[sync] ${tab.sheetName} 매칭 완료: 학생 ${monthResult.matched}/${monthResult.total}, ` +
           `매칭된 메모 ${monthResult.memoCount}개, memos 키=${Object.keys(memos).length}명`
       );
+
+      // 2-a. 시트에만 있는 학생(virtual) upsert — attendance 저장 전에 선행.
+      const virtualList = Object.values(virtualToUpsert);
+      if (virtualList.length > 0) {
+        try {
+          const vres = await fetch("/api/virtual-students", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ students: virtualList }),
+          });
+          if (!vres.ok) {
+            const err = await vres.json().catch(() => ({}));
+            console.warn("[sync] virtual_students 저장 실패:", err.error);
+          } else {
+            console.log(
+              `[sync] ${tab.sheetName} virtual_students upsert: ${virtualList.length}건 ` +
+                `(${virtualList.map((v) => v.name).join(", ")})`
+            );
+          }
+        } catch (e) {
+          console.warn("[sync] virtual_students 저장 중 오류:", (e as Error).message);
+        }
+      }
 
       // 3. Import API로 저장 (탭이 커버하는 날짜 범위만 덮어쓰기)
       const importRes = await fetch("/api/attendance/import", {

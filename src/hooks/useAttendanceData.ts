@@ -8,6 +8,7 @@ export interface AttendanceRow {
   id: string;
   teacher_id: string;
   student_id: string;
+  class_name: string;
   date: string;
   hours: number;
   memo: string;
@@ -19,11 +20,26 @@ export interface AttendanceRow {
 interface UpsertPayload {
   teacher_id: string;
   student_id: string;
+  class_name?: string;
   date: string;
   hours?: number | null;
   memo?: string;
   cell_color?: string | null;
   homework?: boolean;
+}
+
+/**
+ * rowKey = `${studentId}|${className}` 또는 단일 분반이면 studentId.
+ * studentRows 에서 쓰는 가상 id 포맷과 일치.
+ */
+function parseRowKey(rowKey: string): { studentId: string; className: string } {
+  const idx = rowKey.indexOf("|");
+  if (idx < 0) return { studentId: rowKey, className: "" };
+  return { studentId: rowKey.slice(0, idx), className: rowKey.slice(idx + 1) };
+}
+
+function makeRowKey(studentId: string, className: string): string {
+  return className ? `${studentId}|${className}` : studentId;
 }
 
 export interface EditingPeer {
@@ -45,7 +61,8 @@ async function patchAttendance(payload: UpsertPayload): Promise<AttendanceRow | 
   return data as AttendanceRow;
 }
 
-const cellKey = (studentId: string, date: string) => `${studentId}|${date}`;
+// presence/편집 추적 key. rowKey 에 "|" 가 포함될 수 있어 "::" 구분자 사용.
+const cellKey = (rowKey: string, date: string) => `${rowKey}::${date}`;
 
 export function useAttendanceData(
   teacherId: string,
@@ -148,8 +165,9 @@ export function useAttendanceData(
         if (!row?.date) return;
         // 현재 기간 밖이면 무시
         if (row.date < periodStart || row.date > periodEnd) return;
-        // 본인이 편집 중인 셀이면 무시 (입력 충돌 방지)
-        const key = cellKey(row.student_id, row.date);
+        // 본인이 편집 중인 셀이면 무시 (입력 충돌 방지) — class_name 포함 rowKey 기준
+        const rowKey = makeRowKey(row.student_id, row.class_name || "");
+        const key = cellKey(rowKey, row.date);
         if (editingByMeRef.current.has(key)) return;
 
         setRecords((prev) => {
@@ -164,7 +182,7 @@ export function useAttendanceData(
       }
     );
 
-    // Presence 구독 — 다른 사용자가 편집 중인 셀 추적
+    // Presence 구독 — 다른 사용자가 편집 중인 셀 추적 (rowKey::date 포맷)
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState() as Record<
         string,
@@ -173,9 +191,13 @@ export function useAttendanceData(
       const next = new Map<string, EditingPeer>();
       for (const presences of Object.values(state)) {
         for (const p of presences) {
-          if (p.email === myEmail) continue; // 본인 제외
+          if (p.email === myEmail) continue;
           for (const c of p.cells || []) {
-            const [studentId, date] = c.split("|");
+            const sep = c.lastIndexOf("::");
+            if (sep < 0) continue;
+            const rowKey = c.slice(0, sep);
+            const date = c.slice(sep + 2);
+            const { studentId } = parseRowKey(rowKey);
             if (!studentId || !date) continue;
             next.set(c, { email: p.email, name: p.name, studentId, date });
           }
@@ -214,8 +236,8 @@ export function useAttendanceData(
   }, [teacherId]);
 
   const setEditingCell = useCallback(
-    async (studentId: string, date: string, editing: boolean) => {
-      const key = cellKey(studentId, date);
+    async (rowKey: string, date: string, editing: boolean) => {
+      const key = cellKey(rowKey, date);
       if (editing) editingByMeRef.current.add(key);
       else editingByMeRef.current.delete(key);
 
@@ -234,16 +256,20 @@ export function useAttendanceData(
     [myEmail, myName]
   );
 
-  // 공통 낙관적 업데이트 + 서버 upsert
+  // 공통 낙관적 업데이트 + 서버 upsert (rowKey = studentId|className 기반)
   const optimisticUpdate = useCallback(
     async (
-      studentId: string,
+      rowKey: string,
       date: string,
       patch: Partial<Pick<AttendanceRow, "hours" | "memo" | "cell_color" | "homework">>,
       payload: UpsertPayload
     ) => {
+      const { studentId, className } = parseRowKey(rowKey);
       const existing = recordsRef.current.find(
-        (r) => r.student_id === studentId && r.date === date
+        (r) =>
+          r.student_id === studentId &&
+          (r.class_name || "") === className &&
+          r.date === date
       );
 
       const isDelete =
@@ -283,49 +309,87 @@ export function useAttendanceData(
   );
 
   const upsertAttendance = useCallback(
-    (studentId: string, date: string, hours: number | null) =>
-      optimisticUpdate(
-        studentId,
+    (rowKey: string, date: string, hours: number | null) => {
+      const { studentId, className } = parseRowKey(rowKey);
+      return optimisticUpdate(
+        rowKey,
         date,
         { hours: hours ?? 0 },
-        { teacher_id: teacherId, student_id: studentId, date, hours }
-      ),
+        {
+          teacher_id: teacherId,
+          student_id: studentId,
+          class_name: className,
+          date,
+          hours,
+        }
+      );
+    },
     [optimisticUpdate, teacherId]
   );
 
   const updateMemo = useCallback(
-    (studentId: string, date: string, memo: string) =>
-      optimisticUpdate(
-        studentId,
+    (rowKey: string, date: string, memo: string) => {
+      const { studentId, className } = parseRowKey(rowKey);
+      return optimisticUpdate(
+        rowKey,
         date,
         { memo },
-        { teacher_id: teacherId, student_id: studentId, date, memo }
-      ),
+        {
+          teacher_id: teacherId,
+          student_id: studentId,
+          class_name: className,
+          date,
+          memo,
+        }
+      );
+    },
     [optimisticUpdate, teacherId]
   );
 
   const updateCellColor = useCallback(
-    (studentId: string, date: string, cellColor: string | null) =>
-      optimisticUpdate(
-        studentId,
+    (rowKey: string, date: string, cellColor: string | null) => {
+      const { studentId, className } = parseRowKey(rowKey);
+      return optimisticUpdate(
+        rowKey,
         date,
         { cell_color: cellColor || "" },
-        { teacher_id: teacherId, student_id: studentId, date, cell_color: cellColor }
-      ),
+        {
+          teacher_id: teacherId,
+          student_id: studentId,
+          class_name: className,
+          date,
+          cell_color: cellColor,
+        }
+      );
+    },
     [optimisticUpdate, teacherId]
   );
 
   const updateHomework = useCallback(
-    (studentId: string, date: string, homework: boolean) =>
-      optimisticUpdate(
-        studentId,
+    (rowKey: string, date: string, homework: boolean) => {
+      const { studentId, className } = parseRowKey(rowKey);
+      return optimisticUpdate(
+        rowKey,
         date,
         { homework },
-        { teacher_id: teacherId, student_id: studentId, date, homework }
-      ),
+        {
+          teacher_id: teacherId,
+          student_id: studentId,
+          class_name: className,
+          date,
+          homework,
+        }
+      );
+    },
     [optimisticUpdate, teacherId]
   );
 
+  /**
+   * 데이터 맵. 두 수준의 key 로 조회 가능:
+   *   - 학생 단위 (studentId) — 해당 학생의 **모든** 분반 출석을 합침 (레거시 호환)
+   *   - rowKey (studentId|className) — 해당 분반 전용 출석만
+   * AttendancePage 의 studentRows 분할된 rowId 로 조회하면 분반별 독립 데이터.
+   */
   const studentDataMap = useMemo(() => {
     const map = new Map<
       string,
@@ -336,17 +400,32 @@ export function useAttendanceData(
         homework: Record<string, boolean>;
       }
     >();
-
-    for (const r of records) {
-      let d = map.get(r.student_id);
+    const ensure = (key: string) => {
+      let d = map.get(key);
       if (!d) {
         d = { attendance: {}, memos: {}, cellColors: {}, homework: {} };
-        map.set(r.student_id, d);
+        map.set(key, d);
       }
-      if (r.hours > 0 || r.hours === 0) d.attendance[r.date] = r.hours;
-      if (r.memo) d.memos[r.date] = r.memo;
-      if (r.cell_color) d.cellColors[r.date] = r.cell_color;
-      if (r.homework) d.homework[r.date] = r.homework;
+      return d;
+    };
+
+    for (const r of records) {
+      const cn = r.class_name || "";
+      const rowKey = makeRowKey(r.student_id, cn);
+      // 1) 분반별 rowKey 맵
+      const rd = ensure(rowKey);
+      if (r.hours > 0 || r.hours === 0) rd.attendance[r.date] = r.hours;
+      if (r.memo) rd.memos[r.date] = r.memo;
+      if (r.cell_color) rd.cellColors[r.date] = r.cell_color;
+      if (r.homework) rd.homework[r.date] = r.homework;
+      // 2) 학생 전체 맵 (레거시) — rowKey 와 studentId 가 다를 때만 추가
+      if (rowKey !== r.student_id) {
+        const sd = ensure(r.student_id);
+        if (r.hours > 0 || r.hours === 0) sd.attendance[r.date] = r.hours;
+        if (r.memo) sd.memos[r.date] = r.memo;
+        if (r.cell_color) sd.cellColors[r.date] = r.cell_color;
+        if (r.homework) sd.homework[r.date] = r.homework;
+      }
     }
 
     return map;

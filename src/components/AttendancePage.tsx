@@ -26,6 +26,7 @@ import {
   calculateStudentSalary,
   getEffectiveRatio,
   isAttendanceCountable,
+  gradeToGroup,
 } from "@/lib/salary";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth } from "@/lib/studentFilter";
@@ -336,16 +337,17 @@ export default function AttendancePage() {
         const supaData = dataMap.get(s.id);
         // 선택된 선생님과 매칭되는 모든 enrollments (재수강 · 반이동 대응).
         // 원본 DB 에 필드가 전부 빈 쓰레기 enrollment 가 있으면 isTeacherMatch 가
-        // 이름 매칭 "" === "" 로 통과시키므로, start/end 중 하나라도 있는 것만 취함.
-        // (반이동 직후 startDate 가 빈 값으로 저장되는 Firebase 이슈 대응 —
+        // 이름 매칭 "" === "" 로 통과시키므로, className 이 있고 교사 매칭되는 것만 취함.
+        // (반이동 직후 startDate/endDate 가 빈 값으로 저장되는 Firebase 이슈 대응 —
         //  같은 선생님 직전 enrollment 의 endDate 를 startDate 로 유추.)
         const rawTeacherEnrollments =
           s.enrollments?.filter(
-            (e) => (e.startDate || e.endDate) && isTeacherMatch(e, selectedTeacher)
+            (e) => (e.className || e.startDate || e.endDate) && isTeacherMatch(e, selectedTeacher)
           ) || [];
         const teacherEnrollments = rawTeacherEnrollments.map((e) => {
           if (e.startDate) return e;
           // startDate 비어있으면 같은 선생님 직전 enrollment endDate 로 유추
+          // (CR1D 처럼 월목 반이 Firebase 에 start/end 둘 다 빈 값으로 저장된 케이스 대응)
           const priorEnd = rawTeacherEnrollments
             .filter((x) => x !== e && x.endDate)
             .map((x) => x.endDate || "")
@@ -378,20 +380,31 @@ export default function AttendancePage() {
         };
       })
       .filter((s) => {
+        // 세션 범위 기반 집계 (없으면 월 prefix 폴백) — isDateInCurrentPeriod 을
+        // 여기 인라인으로 계산해 useMemo 순환 참조 회피.
+        const currentMonthSession = sessionPeriods.find((sp) => sp.month === month);
+        const inPeriod = currentMonthSession
+          ? (dk: string) => isDateInSession(dk, currentMonthSession)
+          : (dk: string) => dk.startsWith(ymPrefix);
+        const periodAttendanceTotal = Object.entries(s.attendance || {}).reduce(
+          (sum, [key, v]) => sum + (inPeriod(key) && v > 0 ? v : 0),
+          0
+        );
         const monthAttendanceTotal = Object.entries(s.attendance || {}).reduce(
           (sum, [key, v]) => sum + (key.startsWith(ymPrefix) && v > 0 ? v : 0),
           0
         );
-        // 토글: 이번 달 출석이 0이면 전부 숨김
-        if (hideZeroAttendance && monthAttendanceTotal === 0) return false;
+        const effectiveAttendance = Math.max(periodAttendanceTotal, monthAttendanceTotal);
+        // 토글: 이번 세션(또는 월) 출석이 0이면 전부 숨김
+        if (hideZeroAttendance && effectiveAttendance === 0) return false;
         // 토글 OFF이어도, 이번 달 신입/퇴원 뱃지 대상이면서 출석 0인 학생은 숨김
         // (수업을 1회도 하지 않은 학생은 신입도 퇴원도 아니므로 노출 제외)
         const isNew = isNewInMonth(s, year, month);
         const isLeaving = isLeavingInMonth(s, year, month);
-        if (isNew || isLeaving) return monthAttendanceTotal > 0;
+        if (isNew || isLeaving) return effectiveAttendance > 0;
         return true;
       });
-  }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month, hideZeroAttendance]);
+  }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month, hideZeroAttendance, sessionPeriods]);
 
   // 수납 데이터 (등록차수 계산용)
   const { payments: monthPayments } = usePaymentsForMonth(year, month);
@@ -484,70 +497,114 @@ export default function AttendancePage() {
         return false;
       });
 
-      // 수납 엔진: 역산된 "단가"를 그룹 키로 사용.
-      // 같은 단가 = 같은 tier = 병합. 다른 단가 = 분반 다름 = 분리.
-      // 단가 역산 실패 시 payment_name prefix 폴백.
-      const byClass = new Map<string, { daySet: Set<string>; payments: typeof teacherPayments; label: string }>();
+      // DB 에 저장된 이 학생의 class_name 집합 (시트 F열 tier 기반)
+      const dbClassNames = new Set<string>();
+      for (const key of studentDataMap.keys()) {
+        if (key === s.id) dbClassNames.add("");
+        else if (key.startsWith(s.id + "|")) dbClassNames.add(key.slice(s.id.length + 1));
+      }
+      const studentGroup = gradeToGroup(s.grade);
+
+      // 수납의 추정 단가에 대응하는 tier(salary item name) 찾기.
+      // 우선순위:
+      //  0) 학생의 DB class_name 이 유일하면 무조건 그걸 사용 (시트 우선 원칙) —
+      //     수납 단가와 시트 tier 단가가 다른 경우에도 시트를 따라감.
+      //  1) 단가 매칭 후보 중 DB class_name 과 일치
+      //  2) 학생 group 과 일치
+      //  3) 후보 첫 번째.
+      const nonEmptyDbClassNames = [...dbClassNames].filter((c) => c);
+      const inferTierForPrice = (price: number | null): string | null => {
+        // DB 에 이 학생 분반이 딱 1개면 모든 수납을 그리로 귀속
+        if (nonEmptyDbClassNames.length === 1) return nonEmptyDbClassNames[0];
+        if (price === null) return null;
+        const candidates = (salaryConfig.items || []).filter(
+          (i) => (i.baseTuition || i.unitPrice) === price
+        );
+        if (candidates.length === 0) return null;
+        for (const c of candidates) {
+          if (dbClassNames.has(c.name)) return c.name;
+        }
+        const fromGroup = candidates.find((c) => c.group === studentGroup);
+        if (fromGroup) return fromGroup.name;
+        return candidates[0].name;
+      };
+
+      // 수납 엔진: tier(시트 F열) 를 그룹 키로 사용. 같은 tier 병합, 다른 tier 분리.
+      // tier 추정 실패 시 price 또는 payment_name prefix 폴백.
+      const byClass = new Map<
+        string,
+        {
+          tierName: string | null;
+          daySet: Set<string>;
+          payments: typeof teacherPayments;
+          label: string;
+        }
+      >();
       for (const p of teacherPayments) {
         const price = inferUnitPrice(p.charge_amount || 0);
-        const classKey = price !== null ? `price:${price}` : paymentClassKey(p.payment_name || "");
+        const tierName = inferTierForPrice(price);
+        const classKey =
+          tierName || (price !== null ? `price:${price}` : paymentClassKey(p.payment_name || ""));
         if (!classKey) continue;
         const entry = byClass.get(classKey) || {
+          tierName,
           daySet: new Set<string>(),
           payments: [],
-          label: price !== null ? `${price.toLocaleString()}원 수업` : paymentClassKey(p.payment_name || ""),
+          label:
+            tierName ||
+            (price !== null
+              ? `${price.toLocaleString()}원 수업`
+              : paymentClassKey(p.payment_name || "")),
         };
         for (const d of extractPaymentDays(p.payment_name || "")) entry.daySet.add(d);
         entry.payments.push(p);
         byClass.set(classKey, entry);
       }
 
-      // 분반이 1개 이하 → 분리 안 하지만, 단일 수납 존재 시 row.days 를 수납 요일로 재설정.
-      // 이유: 학생 enrollment 가 "월화목금" 합집합이라도 실제 수납 요일(payment_name)이
-      // "화금"이면 filterPaymentsForRow 의 요일 세트 비교에서 매칭이 깨져 0원 처리됨.
-      // 수납 요일로 맞춰 출석도 해당 요일만 집계.
-      if (byClass.size <= 1) {
-        const only = Array.from(byClass.values())[0];
-        if (only) {
-          const days = Array.from(only.daySet).sort();
-          if (days.length > 0) {
-            const filteredAttendance: Record<string, number> = {};
-            for (const [dk, v] of Object.entries(s.attendance || {})) {
-              const dow = ["일", "월", "화", "수", "목", "금", "토"][
-                new Date(dk).getDay()
-              ];
-              if (days.includes(dow)) filteredAttendance[dk] = v;
-            }
-            rows.push({ ...s, days, attendance: filteredAttendance });
-            continue;
-          }
+      // DB 에만 있고 수납에 없는 분반도 행으로 추가 (수납 전/퇴원 과도기 대응)
+      for (const dbCn of dbClassNames) {
+        if (!dbCn) continue;
+        if (!byClass.has(dbCn)) {
+          byClass.set(dbCn, {
+            tierName: dbCn,
+            daySet: new Set<string>(),
+            payments: [],
+            label: dbCn,
+          });
         }
+      }
+
+      // 분반이 없으면 수납·DB 모두 없는 학생 → 그대로 추가
+      if (byClass.size === 0) {
         rows.push(s);
         continue;
       }
 
-      // 2개 이상 분반 → 행 분리 (같은 분반의 여러 요일 수납은 합쳐짐)
-      for (const [, { daySet, label }] of byClass) {
-        const days = Array.from(daySet).sort();
-        const daysKey = days.join(",");
-        const filteredAttendance: Record<string, number> = {};
-        for (const [dk, v] of Object.entries(s.attendance || {})) {
-          const dow = ["일", "월", "화", "수", "목", "금", "토"][
-            new Date(dk).getDay()
-          ];
-          if (days.includes(dow)) filteredAttendance[dk] = v;
-        }
+      // tier 기반 행 분할. class_name 이 DB 에 있는 그대로 rowKey 에 반영되어
+      // 사용자가 어느 요일 셀을 클릭해도 그 행의 class_name 으로 저장됨.
+      // 요일 필터 제거 — 각 분반은 DB 에서 자기 class_name 의 출석만 반환하므로
+      // 다른 행에 중복 노출 없음. 수강일 외 보강도 시트 그대로 재현 가능.
+      for (const [, entry] of byClass) {
+        const tierName = entry.tierName || "";
+        const rowKey = tierName ? `${s.id}|${tierName}` : s.id;
+        const rowData = studentDataMap.get(rowKey);
+        const paymentDays = Array.from(entry.daySet).sort();
+        const displayDays = new Set<string>(paymentDays);
+        for (const d of s.days || []) displayDays.add(d);
         rows.push({
           ...s,
-          id: `${s.id}|${daysKey}`,
-          group: label,
-          days,
-          attendance: filteredAttendance,
+          id: rowKey,
+          group: entry.label,
+          days: Array.from(displayDays).sort(),
+          attendance: rowData?.attendance ?? {},
+          memos: rowData?.memos ?? {},
+          homework: rowData?.homework ?? {},
+          cellColors: rowData?.cellColors ?? {},
         });
       }
     }
     return rows;
-  }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices]);
+  }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices, studentDataMap, salaryConfig]);
 
   /**
    * 이번 월에 대응하는 세션 범위 predicate.
@@ -892,44 +949,37 @@ export default function AttendancePage() {
   );
 
   /**
-   * studentRows 는 `{원본ID}|{className}` 형식의 가상 id 를 가짐.
-   * 실제 저장/편집은 원본 학생 id 로 보내야 하므로 prefix 를 벗겨낸다.
+   * studentRows 는 `{원본ID}|{className}` 형식의 rowKey 를 가짐 (분반 구분).
+   * upsert/update 호출 시 rowKey 를 그대로 전달하여 DB 에 class_name 별 독립 저장.
    */
-  const realStudentId = (rowId: string) =>
-    rowId.includes("|") ? rowId.split("|")[0] : rowId;
-
   const handleAttendanceChange = useCallback(
-    (studentId: string, dateKey: string, value: number | null) => {
-      const realId = realStudentId(studentId);
-      markEditing(realId, dateKey);
-      upsertAttendance(realId, dateKey, value);
+    (rowKey: string, dateKey: string, value: number | null) => {
+      markEditing(rowKey, dateKey);
+      upsertAttendance(rowKey, dateKey, value);
     },
     [upsertAttendance, markEditing]
   );
 
   const handleMemoChange = useCallback(
-    (studentId: string, dateKey: string, memo: string) => {
-      const realId = realStudentId(studentId);
-      markEditing(realId, dateKey);
-      updateMemo(realId, dateKey, memo);
+    (rowKey: string, dateKey: string, memo: string) => {
+      markEditing(rowKey, dateKey);
+      updateMemo(rowKey, dateKey, memo);
     },
     [updateMemo, markEditing]
   );
 
   const handleCellColorChange = useCallback(
-    (studentId: string, dateKey: string, color: string | null) => {
-      const realId = realStudentId(studentId);
-      markEditing(realId, dateKey);
-      updateCellColor(realId, dateKey, color);
+    (rowKey: string, dateKey: string, color: string | null) => {
+      markEditing(rowKey, dateKey);
+      updateCellColor(rowKey, dateKey, color);
     },
     [updateCellColor, markEditing]
   );
 
   const handleHomeworkChange = useCallback(
-    (studentId: string, dateKey: string, done: boolean) => {
-      const realId = realStudentId(studentId);
-      markEditing(realId, dateKey);
-      updateHomework(realId, dateKey, done);
+    (rowKey: string, dateKey: string, done: boolean) => {
+      markEditing(rowKey, dateKey);
+      updateHomework(rowKey, dateKey, done);
     },
     [updateHomework, markEditing]
   );
