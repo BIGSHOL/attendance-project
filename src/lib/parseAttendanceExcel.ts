@@ -119,22 +119,24 @@ export function parseAttendanceFromArray(
   const entries: AttendanceEntry[] = [];
   // 푸터 마커 (아래 섹션은 학생이 아닌 요약 정보)
   const FOOTER_MARKERS = new Set(["퇴원생", "신규생", "반이동"]);
-  // "보강" 섹션 진입 플래그 — A열에 "보강" 라벨이 나오면 이후 학생 행은
+  // "보강" 섹션 진입 플래그 — A열 또는 B열에 "보강" 라벨이 나오면 이후 학생 행은
   // 보강 출석으로 마크 (퇴원 후 출석도 급여 집계에 포함시키기 위함).
+  // 선생님별로 A열 용도가 다름 (이수진=빈칸, 김민주=담임 체크박스). 두 컬럼 모두 체크.
   let inMakeupSection = false;
   for (let r = 5; r < data.length; r++) {
     const row = data[r];
     if (!row) continue;
 
-    // A열 마커 체크
+    // A열 또는 B열에 섹션 마커?
     const firstCol = String(row[0] || "").trim();
-    if (FOOTER_MARKERS.has(firstCol)) break;
-    if (firstCol === "보강") {
+    const secondCol = String(row[1] || "").trim();
+    if (FOOTER_MARKERS.has(firstCol) || FOOTER_MARKERS.has(secondCol)) break;
+    if (firstCol === "보강" || secondCol === "보강") {
       inMakeupSection = true;
       continue; // 라벨 행 자체는 학생 데이터 없음
     }
 
-    const name = String(row[1] || "").trim();
+    const name = secondCol; // 학생 이름은 항상 B열
     if (!name) continue;
     // 숫자만 있는 이름은 학생이 아님 (푸터 카운트 셀 등)
     if (/^\d+(\.\d+)?$/.test(name)) continue;
