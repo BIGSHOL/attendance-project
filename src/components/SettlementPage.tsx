@@ -33,6 +33,7 @@ export default function SettlementPage() {
   const [tab, setTab] = useLocalStorage<"settlement" | "hours">("settlement.tab", "settlement");
   const [hoursSubjectFilter, setHoursSubjectFilter] = useLocalStorage<string[]>("settlement.hoursSubjects", []);
   const [hoursSearch, setHoursSearch] = useLocalStorage<string>("settlement.hoursSearch", "");
+  const [hoursOnlyDiff, setHoursOnlyDiff] = useLocalStorage<boolean>("settlement.hoursOnlyDiff", false);
   const { config: salaryConfig } = useSalaryConfig();
 
   const { teachers, loading: staffLoading } = useStaff();
@@ -792,6 +793,21 @@ export default function SettlementPage() {
                   </button>
                 );
               })}
+
+              <div className="mx-1 h-4 w-px bg-zinc-200 dark:bg-zinc-700" />
+
+              <button
+                onClick={() => setHoursOnlyDiff(!hoursOnlyDiff)}
+                className={`px-2 py-1 text-xs rounded-sm border transition-colors ${
+                  hoursOnlyDiff
+                    ? "bg-amber-100 border-amber-400 text-amber-700 dark:bg-amber-900 dark:border-amber-600 dark:text-amber-300"
+                    : "bg-white border-zinc-300 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
+                }`}
+                title="청구 대비 실제 출석 차이가 있는 건만 표시"
+              >
+                <span className="mr-1">{hoursOnlyDiff ? "☑" : "☐"}</span>
+                차이 있는 건만
+              </button>
             </div>
           );
         })()}
@@ -815,6 +831,7 @@ export default function SettlementPage() {
               {studentChecks
                 .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
                 .filter((r) => !hoursSearch.trim() || r.student.name.toLowerCase().includes(hoursSearch.trim().toLowerCase()))
+                .filter((r) => !hoursOnlyDiff || Math.abs(r.diffSessions) > 0.001)
                 .map((r, idx) => {
                 const noPrice = r.unitPrice <= 0;
                 const noPay = !r.hasPayment;
