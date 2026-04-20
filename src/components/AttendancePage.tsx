@@ -801,8 +801,27 @@ export default function AttendancePage() {
   // 행별 등록차수: (이 수강에 해당하는 수납 합계) / (이 수강의 학생 단가)
   const termCountMap = useMemo(() => {
     const map = new Map<string, number>();
-    if (!selectedTeacher || monthPayments.length === 0) return map;
+    if (!selectedTeacher) return map;
 
+    // 영어 강사: allocated_units 가 있으면 그대로 사용, 없으면 paid/unit_price.
+    // virtual 학생이 allStudents 에 없어 findStudentPayments 매칭 실패하는 문제 회피.
+    if (isEnglishTeacher && teacherShares.length > 0) {
+      for (const sh of teacherShares) {
+        const key = sh.class_name
+          ? `${sh.student_id}|${sh.class_name}`
+          : sh.student_id;
+        let term = 0;
+        if (typeof sh.allocated_units === "number" && sh.allocated_units > 0) {
+          term = Math.round(sh.allocated_units);
+        } else if (sh.unit_price && sh.unit_price > 0 && sh.allocated_paid > 0) {
+          term = Math.round(sh.allocated_paid / sh.unit_price);
+        }
+        if (term > 0) map.set(key, (map.get(key) || 0) + term);
+      }
+      return map;
+    }
+
+    if (monthPayments.length === 0) return map;
     const opts = {
       teacherId: selectedTeacher.id,
       teacherName: selectedTeacher.name,
@@ -840,15 +859,31 @@ export default function AttendancePage() {
       if (term > 0) map.set(row.id, term);
     }
     return map;
-  }, [studentRows, monthPayments, selectedTeacher, salaryConfig, tierOverrides]);
+  }, [studentRows, monthPayments, selectedTeacher, salaryConfig, tierOverrides, isEnglishTeacher, teacherShares]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading;
 
   // 행(수강)별 이번 달 수납 합계 — 수강 요일 세트와 일치하는 수납만 집계
   const paidAmountByStudent = useMemo(() => {
     const map = new Map<string, number>();
-    if (!selectedTeacher || monthPayments.length === 0) return map;
+    if (!selectedTeacher) return map;
 
+    // 영어 강사: teacherShares 를 직접 row.id (`{studentId}|{className}`) 키로 매핑.
+    // findStudentPayments 는 name/studentCode 매칭이라 virtual 학생 (Firebase 미등록)
+    // 의 경우 allStudents 에 없어 student_name="" 로 변환되어 매칭 실패.
+    // shares 는 이미 (studentId, className) 튜플을 가지고 있어 직접 키로 쓰면 정확.
+    if (isEnglishTeacher && teacherShares.length > 0) {
+      for (const sh of teacherShares) {
+        const key = sh.class_name
+          ? `${sh.student_id}|${sh.class_name}`
+          : sh.student_id;
+        const prev = map.get(key) || 0;
+        map.set(key, prev + (sh.allocated_paid || 0));
+      }
+      return map;
+    }
+
+    if (monthPayments.length === 0) return map;
     const opts = {
       teacherId: selectedTeacher.id,
       teacherName: selectedTeacher.name,
@@ -871,7 +906,7 @@ export default function AttendancePage() {
       if (total > 0) map.set(row.id, total);
     }
     return map;
-  }, [studentRows, monthPayments, selectedTeacher]);
+  }, [studentRows, monthPayments, selectedTeacher, isEnglishTeacher, teacherShares]);
 
   // 행별 유닛단가 오버라이드 (영어 payment_shares.unit_price).
   // 같은 tier 이름이어도 학년별로 단가가 다른 시트 대응 — e.g.
