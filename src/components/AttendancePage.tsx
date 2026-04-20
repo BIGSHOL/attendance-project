@@ -539,51 +539,54 @@ export default function AttendancePage() {
     };
 
     // 영어 교사 전용 — shares 기반 직접 구성.
-    //   그룹 라벨(row.group) 은 payments 테이블에서 학생별로 실제 수납명을 찾아 사용.
-    //   분반 분리가 자연스럽게 이뤄짐(예: "의치대 중등" → "의치대 중등 월목 MC1J").
-    //   attendance/메모 lookup key 는 `{student_id}|{share.class_name}` — DB 의 tier 기준
-    //   (shares.class_name == sync 에서 저장한 시트 F열 tier).
+    //   그룹 라벨(row.group) 은 payments 테이블에서 (학생 × 이 선생님) 수납을
+    //   매칭해 payment_name 을 사용. 시트 F열 tier 와 payments.payment_name 은
+    //   포맷이 달라(예: 시트 "중등 2T" vs payments "중등E_중2 심화 Jane 월수목 16:20-18:10")
+    //   startsWith 매칭으로는 안 되므로 teacher_name 매칭으로 학생당 1건을 선택.
+    //   attendance/메모 lookup key 는 `{student_id}|{share.class_name}` — DB 의 tier 기준.
     if (isEnglishTeacher && teacherShares.length > 0) {
-      // 학생 id 로 rawMonthPayments 에서 payment_name 매칭 (studentCode 또는 name+school).
-      // 한 학생 × 한 tier 에 대해 매칭된 payment_name 을 저장.
-      const paymentNameByKey = new Map<string, string>();
       const normSchool = (s: string | undefined) =>
         (s || "")
           .trim()
           .replace(/초등학교$/, "초")
           .replace(/중학교$/, "중")
           .replace(/고등학교$/, "고");
-      for (const p of rawMonthPayments) {
-        if (!p.payment_name) continue;
-        // 학생 id 찾기 (all 학생 대상 — Firebase + virtual)
-        let sid: string | undefined;
-        for (const stu of allStudents) {
-          if (p.student_code && stu.studentCode && stu.studentCode === p.student_code) {
-            sid = stu.id; break;
-          }
-          if (
-            p.student_name &&
-            stu.name === p.student_name &&
-            normSchool(p.school) === normSchool(stu.school)
-          ) {
-            sid = stu.id; break;
-          }
-        }
-        if (!sid) continue;
-        // payment_name 이 어떤 share.class_name 으로 시작하는지 찾아 해당 키에 등록
-        for (const sh of teacherShares) {
-          if (sh.student_id !== sid) continue;
-          if (!sh.class_name) continue;
-          if (p.payment_name.startsWith(sh.class_name)) {
-            paymentNameByKey.set(`${sid}|${sh.class_name}`, p.payment_name);
-            break;
-          }
-        }
-      }
-
       // 학생 id → Student 메타 lookup (이름/학교/학년 표시용)
       const studentById = new Map<string, Student>();
       for (const stu of allStudents) studentById.set(stu.id, stu);
+
+      const teacherFullName = selectedTeacher.name;
+      const teacherEng = selectedTeacher.englishName;
+      // 이 선생님의 payment 만 미리 필터
+      const teacherPayments = rawMonthPayments.filter((p) => {
+        if (!p.payment_name) return false;
+        const tn = p.teacher_name || "";
+        return (
+          (!!teacherFullName && tn.includes(teacherFullName)) ||
+          (!!teacherEng && tn.includes(teacherEng))
+        );
+      });
+      // share.student_id 를 키로 payment_name 매핑.
+      // sh.student_id 가 Firebase / virtual 여부와 관계없이, studentById 로 메타를 얻어
+      // 이름+학교 또는 studentCode 로 teacherPayments 에서 1건을 찾는다.
+      const paymentNameByShareStudent = new Map<string, string>();
+      for (const sh of teacherShares) {
+        if (paymentNameByShareStudent.has(sh.student_id)) continue;
+        const stu = studentById.get(sh.student_id);
+        if (!stu) continue;
+        const match = teacherPayments.find((p) => {
+          if (p.student_code && stu.studentCode && stu.studentCode === p.student_code)
+            return true;
+          return (
+            !!p.student_name &&
+            p.student_name === stu.name &&
+            normSchool(p.school) === normSchool(stu.school)
+          );
+        });
+        if (match?.payment_name) {
+          paymentNameByShareStudent.set(sh.student_id, match.payment_name);
+        }
+      }
 
       const engRows: Student[] = [];
       for (const sh of teacherShares) {
@@ -593,11 +596,10 @@ export default function AttendancePage() {
         // DB attendance/메모 key 는 tier 기반 유지 (sync 에서 그렇게 저장했으므로)
         const attendanceKey = tierName ? `${stu.id}|${tierName}` : stu.id;
         const rowData = studentDataMap.get(attendanceKey);
-        // UI row id 는 payment_name 기반으로 고유화 (분반 분리 지원)
-        const paymentName = paymentNameByKey.get(`${stu.id}|${tierName}`);
-        const rowId = paymentName
-          ? `${stu.id}|${paymentName}`
-          : attendanceKey;
+        // UI row id 는 DB 키 (`{student_id}|{tier}`) 와 일치시켜 단순화.
+        // paymentName 은 학생 단위로 1개 (같은 선생님에게 여러 tier 수강은 드묾).
+        const paymentName = paymentNameByShareStudent.get(sh.student_id);
+        const rowId = attendanceKey;
         const groupLabel = paymentName || tierName || "미분류";
 
         // 표시 요일: 출석 날짜들에서 도출 (없으면 share.allocated_units 없을 때 빈 값)
