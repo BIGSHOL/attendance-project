@@ -322,6 +322,16 @@ export default function SettlementPage() {
 
       let baseSalary = 0;
 
+      // 선생님 subject → subjectHint 도출 (출석부 탭 selectedSubject 와 동일 의미)
+      const teacherSubjectHint: "math" | "english" | "other" | undefined =
+        teacherSubjectSet.has("english")
+          ? "english"
+          : teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")
+            ? "math"
+            : teacherSubjectSet.size > 0
+              ? "other"
+              : undefined;
+
       // 공통 계산 헬퍼 — 한 "행(row)" = 학생×분반 단위의 급여.
       // 영어는 share 단위로, 수학/기타는 학생 단위로 loop.
       const computeRow = (params: {
@@ -339,7 +349,8 @@ export default function SettlementPage() {
         const overrideId =
           tierOverrides[`${teacher.id}|${student.id}|${className}`] ??
           tierOverrides[`${teacher.id}|${student.id}`];
-        const settingItem = matchSalarySetting(student, effectiveConfig, undefined, overrideId);
+        // subjectHint — 선생님 subjects 기반 (출석부 탭의 selectedSubject 와 동일)
+        const settingItem = matchSalarySetting(student, effectiveConfig, teacherSubjectHint, overrideId);
         const baseRatio = settingItem
           ? getEffectiveRatio(settingItem, effectiveConfig, teacher.name)
           : undefined;
