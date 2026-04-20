@@ -255,14 +255,14 @@ export async function syncTeacherSheet(
 
         // payment_shares 누적 — 영어 강사 시트의 각 학생 행 J/K/L/O 열.
         // 부담임 학생의 부분 귀속액을 보존해 실급여 계산에 반영.
-        // subject 가 english 가 아닌 경우도 일단 수집은 해둠 (수학은 UI 계산에서
-        // 기존 payments 를 사용하므로 무해).
+        // teacher_staff_id 는 **staff.id (teacherId)** 로 저장 — usePaymentShares
+        // 조회 시 동일 키로 lookup.
         if (entry.paymentInfo) {
           const className = (entry.tierName || "").trim();
           shares.push({
             student_id: match.id,
             month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
-            teacher_staff_id: teacherName,
+            teacher_staff_id: teacherId,
             class_name: className,
             allocated_charge: Math.floor(entry.paymentInfo.charge ?? 0),
             allocated_paid: Math.floor(entry.paymentInfo.paid ?? 0),
@@ -332,7 +332,7 @@ export async function syncTeacherSheet(
             body: JSON.stringify({
               shares,
               replaceScope: {
-                teacher_id: teacherName,
+                teacher_id: teacherId,
                 month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
               },
             }),
