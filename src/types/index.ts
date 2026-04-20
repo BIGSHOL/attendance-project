@@ -261,33 +261,35 @@ export const INITIAL_SALARY_CONFIG: SalaryConfig = {
     mkItem("math-mid-sp-2", "중등특강2", "math", "특강", C.mathSp, 36000),
 
     // ===== 영어 =====
+    // 영어는 수학과 단위(U=40분) 체계가 달라 단가도 다르다.
+    // Apps Script `getFixedUnitPrice` 규칙 + Sarah 시트 26.03 I열 관찰값 기준.
     // 초등
-    mkItem("eng-elem-3t", "초등 3T", "english", "초등", C.engElem, 21250),
-    mkItem("eng-elem-2t", "초등 2T", "english", "초등", C.engElem, 22500),
-    mkItem("eng-eie-phonics", "EIE파닉스", "english", "초등", C.engElem, 6750),
+    mkItem("eng-elem-3t", "초등 3T", "english", "초등", C.engElem, 12000),
+    mkItem("eng-elem-2t", "초등 2T", "english", "초등", C.engElem, 12000),
+    mkItem("eng-eie-phonics", "EIE파닉스", "english", "초등", C.engElem, 6250),
     mkItem("eng-eie-rookies", "EIE루키스", "english", "초등", C.engElem, 7500),
     mkItem("eng-eie-readers", "EIE리더스", "english", "초등", C.engElem, 7500),
-    mkItem("eng-elem-med", "의치대 초등", "english", "초등", C.engElem, 25000),
-    mkItem("eng-elem-bridge", "초등브릿지", "english", "초등", C.engElem, 7083),
+    mkItem("eng-elem-med", "의치대 초등", "english", "초등", C.engElem, 12500),
+    mkItem("eng-elem-bridge", "초등브릿지", "english", "초등", C.engElem, 12000),
     // 중등
-    mkItem("eng-mid-3t", "중등 3T", "english", "중등", C.engMid, 24000),
-    mkItem("eng-mid-2t", "중등 2T", "english", "중등", C.engMid, 25000),
-    mkItem("eng-mid-med", "의치대 중등", "english", "중등", C.engMid, 25000),
+    mkItem("eng-mid-3t", "중등 3T", "english", "중등", C.engMid, 12000),
+    mkItem("eng-mid-2t", "중등 2T", "english", "중등", C.engMid, 12000),
+    mkItem("eng-mid-med", "의치대 중등", "english", "중등", C.engMid, 12500),
     mkItem("eng-mid-bridge", "중등브릿지", "english", "중등", C.engMid, 8000),
-    mkItem("eng-mid-top", "중등TOP", "english", "중등", C.engMid, 25000),
+    mkItem("eng-mid-top", "중등TOP", "english", "중등", C.engMid, 12500),
     // 고등
-    mkItem("eng-high-3t", "고등 3T", "english", "고등", C.engHigh, 27250),
-    mkItem("eng-high-2t", "고등 2T", "english", "고등", C.engHigh, 29250),
-    mkItem("eng-high-med", "의치대 고등", "english", "고등", C.engHigh, 27250),
-    mkItem("eng-high-bridge", "고등브릿지", "english", "고등", C.engHigh, 8750),
+    mkItem("eng-high-3t", "고등 3T", "english", "고등", C.engHigh, 13625),
+    mkItem("eng-high-2t", "고등 2T", "english", "고등", C.engHigh, 13625),
+    mkItem("eng-high-med", "의치대 고등", "english", "고등", C.engHigh, 13625),
+    mkItem("eng-high-bridge", "고등브릿지", "english", "고등", C.engHigh, 13625),
     // 특강
-    mkItem("eng-elem-sp", "초등특강", "english", "특강", C.engSp, 21250),
-    mkItem("eng-mid-sp", "중등특강", "english", "특강", C.engSp, 24000),
-    mkItem("eng-h1-sp", "고1특강", "english", "특강", C.engSp, 27250),
-    mkItem("eng-h2-sp", "고2특강", "english", "특강", C.engSp, 31250),
-    mkItem("eng-elem-writ-sp", "초등영작특강", "english", "특강", C.engSp, 24000),
-    mkItem("eng-mid-writ-sp", "중등영작특강", "english", "특강", C.engSp, 25000),
-    mkItem("eng-high-writ-sp", "고등영작특강", "english", "특강", C.engSp, 27250),
+    mkItem("eng-elem-sp", "초등특강", "english", "특강", C.engSp, 12000),
+    mkItem("eng-mid-sp", "중등특강", "english", "특강", C.engSp, 12000),
+    mkItem("eng-h1-sp", "고1특강", "english", "특강", C.engSp, 13625),
+    mkItem("eng-h2-sp", "고2특강", "english", "특강", C.engSp, 13625),
+    mkItem("eng-elem-writ-sp", "초등영작특강", "english", "특강", C.engSp, 12000),
+    mkItem("eng-mid-writ-sp", "중등영작특강", "english", "특강", C.engSp, 12500),
+    mkItem("eng-high-writ-sp", "고등영작특강", "english", "특강", C.engSp, 13625),
 
     // ===== 기타 =====
     mkItem("other-mid-kor-re", "중등국어(재)", "other", "중등", C.otherMid, 25000),

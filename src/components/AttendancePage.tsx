@@ -1038,7 +1038,8 @@ export default function AttendancePage() {
         allStudents,
         "2026-03",
         exactMonth,
-        salaryConfig
+        salaryConfig,
+        selectedTeacher.subjects?.[0]
       );
       setSyncResult(result);
       if (result.success) {

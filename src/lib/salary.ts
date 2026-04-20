@@ -336,7 +336,9 @@ export function matchSalarySetting(
 }
 
 /**
- * 선생님별 비율 적용: 기본 item.ratio에 teacherRatios 오버라이드가 있으면 교체
+ * 선생님별 비율 적용: 기본 item.ratio에 teacherRatios 오버라이드가 있으면 교체.
+ * teacherRatios 키가 "강보경(Sarah)" 같이 영어명 병기 포맷일 때 staff.name("강보경")
+ * 으로 직접 매칭 안되므로 prefix fallback 으로 "{name}(…)" 키도 조회.
  */
 export function getEffectiveRatio(
   item: SalarySettingItem,
@@ -344,7 +346,14 @@ export function getEffectiveRatio(
   teacherName?: string
 ): number {
   if (teacherName && salaryConfig.teacherRatios && item.subject && item.group) {
-    const perTeacher = salaryConfig.teacherRatios[teacherName];
+    let perTeacher = salaryConfig.teacherRatios[teacherName];
+    if (!perTeacher) {
+      // "이름(영어)" 형식 fallback
+      const entry = Object.entries(salaryConfig.teacherRatios).find(
+        ([k]) => k.startsWith(teacherName + "(") || k === teacherName
+      );
+      if (entry) perTeacher = entry[1];
+    }
     const perSubject = perTeacher?.[item.subject];
     const override = perSubject?.[item.group];
     if (typeof override === "number") return override;

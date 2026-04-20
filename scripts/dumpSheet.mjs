@@ -76,8 +76,9 @@ if (targetGid !== null) {
 }
 console.log(`\n=== 선택 탭: ${targetTitle} ===`);
 
-// 3. 값+메모
-const range = `${targetTitle}!A1:AZ200`;
+// 3. 값+메모 (범위 인자 4번째, 기본 1000행)
+const maxRow = process.argv[4] || "1000";
+const range = `${targetTitle}!A1:AZ${maxRow}`;
 const url =
   `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}` +
   `?ranges=${encodeURIComponent(range)}&includeGridData=true`;

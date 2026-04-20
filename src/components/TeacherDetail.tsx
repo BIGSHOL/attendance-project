@@ -381,7 +381,8 @@ export default function TeacherDetail({ teacherId }: Props) {
                       students,
                       "2026-03",
                       exactMonth,
-                      salaryConfig
+                      salaryConfig,
+                      teacher.subjects?.[0]
                     );
                     setSyncResult(result);
                     if (result.success) await markSynced(teacherId);
@@ -409,7 +410,8 @@ export default function TeacherDetail({ teacherId }: Props) {
                       students,
                       "2026-03",
                       undefined,
-                      salaryConfig
+                      salaryConfig,
+                      teacher.subjects?.[0]
                     );
                     setSyncResult(result);
                     if (result.success) await markSynced(teacherId);

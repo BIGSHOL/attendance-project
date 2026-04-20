@@ -40,7 +40,12 @@ export async function syncTeacherSheet(
   minMonth = "2026-03",
   exactMonth?: string,
   /** F열 tier 매칭용 — 있으면 학생 tier 오버라이드를 저장 */
-  salaryConfig?: SalaryConfig
+  salaryConfig?: SalaryConfig,
+  /**
+   * 선생님의 주 과목 (예: "english", "math"). virtual_students 저장 시 사용.
+   * 미전달 시 "math" 로 폴백.
+   */
+  teacherSubject?: string
 ): Promise<TeacherSyncResult> {
   const result: TeacherSyncResult = {
     teacherId,
@@ -168,7 +173,7 @@ export async function syncTeacherSheet(
             teacher_staff_id: teacherName,
             class_name: entry.tierName || "",
             days: entry.days || [],
-            subject: "math",
+            subject: teacherSubject || "math",
           };
           match = {
             id: virtualId,
@@ -216,7 +221,11 @@ export async function syncTeacherSheet(
         // 이렇게 해야 studentRows.id (`${studentId}|${tierName}`) 와 tier_overrides 의
         // `(student_id, class_name)` 이 같은 키로 일치해 matchSalarySetting 이 tier 를 찾음.
         if (salaryConfig && entry.tierName) {
-          const item = salaryConfig.items.find((i) => i.name === entry.tierName);
+          // 수학/영어 모두 같은 이름 tier 가 있을 수 있어 subject 필터 우선.
+          const item =
+            salaryConfig.items.find(
+              (i) => i.name === entry.tierName && i.subject === teacherSubject
+            ) || salaryConfig.items.find((i) => i.name === entry.tierName);
           if (item) {
             const key = `${match.id}|${entry.tierName}`;
             tierOverrides[key] = {

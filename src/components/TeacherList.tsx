@@ -219,6 +219,7 @@ export default function TeacherList() {
   const handleSync = async (teacherId: string, teacherName: string, sheetUrl: string) => {
     setSyncingId(teacherId);
     try {
+      const teacher = teachers.find((t) => t.id === teacherId);
       const result = await syncTeacherSheet(
         teacherId,
         teacherName,
@@ -226,7 +227,8 @@ export default function TeacherList() {
         students,
         "2026-03",
         undefined,
-        salaryConfig
+        salaryConfig,
+        teacher?.subjects?.[0]
       );
       setSyncResults((prev) => ({ ...prev, [teacherId]: result }));
       if (result.success) await markSynced(teacherId);
