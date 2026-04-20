@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, Fragment } from "react";
+import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
 import { useAllAttendance } from "@/hooks/useAllAttendance";
@@ -23,6 +23,7 @@ import {
   calculateFinalSalary,
   isAttendanceCountable,
   subjectToSalarySubject,
+  getEffectiveRatio,
 } from "@/lib/salary";
 import { toSubjectLabel } from "@/lib/labelMap";
 
@@ -66,6 +67,32 @@ export default function SettlementPage() {
   const { isBlogRequired, getSalary } = useTeacherSettings();
   const { payments: monthPayments, loading: paymentsLoading } = usePaymentsForMonth(year, month);
   const { overrides: tierOverrides } = useAllTierOverrides();
+
+  // 월 전체 payment_shares — 영어 선생님의 강사별 귀속 수납. 출석부 탭과 동일 공식 적용.
+  const [allShares, setAllShares] = useState<Array<{
+    student_id: string;
+    teacher_staff_id: string;
+    class_name: string;
+    allocated_paid: number;
+    allocated_charge: number;
+    allocated_units: number | null;
+    unit_price: number | null;
+  }>>([]);
+  useEffect(() => {
+    const ym = `${year}-${String(month).padStart(2, "0")}`;
+    let cancelled = false;
+    fetch(`/api/payment-shares?month=${ym}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setAllShares(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAllShares([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [year, month]);
 
   // 선생님 id → 급여 유형 매핑
   // 우선순위: teacher_settings(staff_id) → user_roles fallback → 기본 commission
@@ -170,10 +197,43 @@ export default function SettlementPage() {
         ? settlement.salaryConfig
         : salaryConfig;
 
-      // 담당 학생 목록 (해당 월 기준 재원 중인 학생만) + 해당 학생의 과목 집합
-      const teacherStudents = students.filter((s) =>
-        s.enrollments?.some((e) => isTeacherMatch(e, teacher) && isActiveInMonth(e))
-      );
+      // 영어 선생님: payment_shares 로 학생별 귀속액 재구성 (출석부 탭과 동일 공식).
+      const isEnglishTeacher = !!teacher.subjects?.includes("english");
+      const teacherShares = isEnglishTeacher
+        ? allShares.filter((sh) => sh.teacher_staff_id === teacher.id)
+        : [];
+      const paidByStudent = new Map<string, number>();
+      const unitPriceByStudent = new Map<string, number>();
+      if (isEnglishTeacher) {
+        for (const sh of teacherShares) {
+          paidByStudent.set(
+            sh.student_id,
+            (paidByStudent.get(sh.student_id) || 0) + (sh.allocated_paid || 0)
+          );
+          if (sh.unit_price && !unitPriceByStudent.has(sh.student_id)) {
+            unitPriceByStudent.set(sh.student_id, sh.unit_price);
+          }
+        }
+      }
+
+      // 담당 학생 목록.
+      // 영어 선생님: teacherShares.student_id 기준 — 출석부 탭과 동일 (학생 × 분반 단위).
+      //   학생 대상이 Firebase + virtual 중복되지 않도록 shares 가 권위.
+      // 수학/기타: 기존대로 enrollments 매칭 + isActiveInMonth.
+      const studentById = new Map(students.map((s) => [s.id, s]));
+      const teacherStudents = isEnglishTeacher
+        ? (() => {
+            const uniqueIds = new Set(teacherShares.map((sh) => sh.student_id));
+            const list: Student[] = [];
+            for (const id of uniqueIds) {
+              const stu = studentById.get(id);
+              if (stu) list.push(stu);
+            }
+            return list;
+          })()
+        : students.filter((s) =>
+            s.enrollments?.some((e) => isTeacherMatch(e, teacher) && isActiveInMonth(e))
+          );
       // 학생 id → subjects (이 선생님이 해당 학생에게 가르치는 과목들)
       const studentSubjects = new Map<string, Set<string>>();
       for (const s of teacherStudents) {
@@ -244,16 +304,42 @@ export default function SettlementPage() {
         let studentBase = 0;
         if (classUnits > 0) {
           const settingItem = matchSalarySetting(student, effectiveConfig, undefined, tierOverrides[`${teacher.id}|${student.id}`]);
-          const paidAmount =
-            studentPayments.length > 0
-              ? studentPayments.reduce((a, p) => a + (p.charge_amount || 0), 0)
-              : null;
+          // 영어 교사 — payment_shares 우선, 없으면 payments (fallback)
+          // 수학/기타 — payments.charge_amount 합
+          let paidAmount: number | null = null;
+          let unitPriceOverride: number | undefined;
+          if (isEnglishTeacher) {
+            const shared = paidByStudent.get(student.id);
+            if (shared !== undefined) {
+              paidAmount = shared;
+              unitPriceOverride = unitPriceByStudent.get(student.id);
+            } else if (studentPayments.length > 0) {
+              paidAmount = studentPayments.reduce(
+                (a, p) => a + (p.charge_amount || 0),
+                0
+              );
+            }
+          } else if (studentPayments.length > 0) {
+            paidAmount = studentPayments.reduce(
+              (a, p) => a + (p.charge_amount || 0),
+              0
+            );
+          }
+          // teacherRatios 오버라이드 반영 (출석부 탭과 동일)
+          const baseRatio = settingItem
+            ? getEffectiveRatio(settingItem, effectiveConfig, teacher.name)
+            : undefined;
+          const effectiveSetting =
+            settingItem && baseRatio !== undefined
+              ? { ...settingItem, ratio: baseRatio }
+              : settingItem;
           studentBase = calculateStudentSalary(
-            settingItem,
+            effectiveSetting,
             effectiveConfig.academyFee,
             classUnits,
             paidAmount,
-            blogPenalty
+            blogPenalty,
+            unitPriceOverride
           );
         }
         baseSalary += studentBase;
@@ -298,7 +384,7 @@ export default function SettlementPage() {
         subjects,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares]);
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {
