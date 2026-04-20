@@ -15,6 +15,7 @@ import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
+import { isDateInSession } from "@/lib/sessionUtils";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -252,6 +253,24 @@ export default function SettlementPage() {
       const blogRequired = isBlogRequired(teacher.id);
       const blogPenalty = blogRequired && !hasPostForTeacher(teacher.id);
 
+      // 이 선생님의 과목에 맞는 세션 범위 — 출석부 탭 세션모드와 동일.
+      // 복수 과목이면 자신의 과목 세션 합집합. 세션 없으면 달력 월 prefix fallback.
+      const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+      const teacherSubjectSet = new Set(teacher.subjects || []);
+      const teacherSessions: typeof mathSessions = [];
+      if (teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")) {
+        const ms = mathSessions.find((s) => s.month === month);
+        if (ms) teacherSessions.push(ms);
+      }
+      if (teacherSubjectSet.has("english")) {
+        const es = englishSessions.find((s) => s.month === month);
+        if (es) teacherSessions.push(es);
+      }
+      const isDateInTeacherPeriod = (dateKey: string): boolean => {
+        if (teacherSessions.length === 0) return dateKey.startsWith(monthStr);
+        return teacherSessions.some((s) => isDateInSession(dateKey, s));
+      };
+
       // 학생별 시수 (전체/countable)
       const studentUnitMap = new Map<string, number>();
       const studentTotalMap = new Map<string, number>();
@@ -261,6 +280,8 @@ export default function SettlementPage() {
       for (const r of attendanceRecords) {
         if (r.teacher_id !== teacher.id) continue;
         if (r.hours <= 0) continue;
+        // 이 선생님 과목 세션 범위 밖은 제외 (출석부 탭 세션모드와 동일)
+        if (!isDateInTeacherPeriod(r.date)) continue;
         totalAttendance += r.hours;
         studentTotalMap.set(r.student_id, (studentTotalMap.get(r.student_id) || 0) + r.hours);
         if (isAttendanceCountable(r.date, salaryType, commissionDays)) {
@@ -384,7 +405,7 @@ export default function SettlementPage() {
         subjects,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions]);
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {

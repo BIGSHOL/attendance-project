@@ -287,12 +287,13 @@ export default function AttendancePage() {
       .filter((t) => {
         if (!t.subjects || t.subjects.length === 0) return false;
         if (!t.subjects.includes(selectedSubject)) return false;
-        if ((teacherStudentCount.get(t.id) ?? 0) === 0) return false;
+        // 담당학생 0 제외 하지 않음 — 과학/신규 선생님(hours>0 기록 이전)도 드롭다운에 노출.
+        // 선택 시 학생 0 이면 "동기화 필요" UI 로 사용자가 상태를 알 수 있음.
         if (hiddenTeacherIds.has(t.id)) return false;
         return true;
       })
       .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  }, [teachers, selectedSubject, teacherStudentCount, hiddenTeacherIds, isTeacher, userRole]);
+  }, [teachers, selectedSubject, hiddenTeacherIds, isTeacher, userRole]);
 
   // 첫 번째 선생님 자동 선택
   useEffect(() => {
