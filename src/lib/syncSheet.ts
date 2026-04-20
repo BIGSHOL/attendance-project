@@ -125,6 +125,19 @@ export async function syncTeacherSheet(
       // 학생의 해당 시트 행(= 분반)별로 독립 저장. 김지홍 등 분반 2+ 학생 대응.
       const records: Record<string, Record<string, number>> = {};
       const memos: Record<string, Record<string, string>> = {};
+      // payment_shares 로 저장할 강사 귀속 수납 레코드 (영어 선생님 전용).
+      // 각 학생 행의 J/K/L/O 열 정보를 그대로 귀속액으로 기록.
+      const shares: Array<{
+        student_id: string;
+        month: string;
+        teacher_staff_id: string;
+        class_name: string;
+        allocated_charge: number;
+        allocated_paid: number;
+        allocated_units?: number;
+        unit_price?: number;
+        source: string;
+      }> = [];
       // 시트에만 있는 학생(Firebase 미등록) — virtual_students 에 upsert 할 목록
       const virtualToUpsert: Record<
         string,
@@ -239,6 +252,25 @@ export async function syncTeacherSheet(
             monthResult.tierUnmatched++;
           }
         }
+
+        // payment_shares 누적 — 영어 강사 시트의 각 학생 행 J/K/L/O 열.
+        // 부담임 학생의 부분 귀속액을 보존해 실급여 계산에 반영.
+        // subject 가 english 가 아닌 경우도 일단 수집은 해둠 (수학은 UI 계산에서
+        // 기존 payments 를 사용하므로 무해).
+        if (entry.paymentInfo) {
+          const className = (entry.tierName || "").trim();
+          shares.push({
+            student_id: match.id,
+            month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
+            teacher_staff_id: teacherName,
+            class_name: className,
+            allocated_charge: Math.floor(entry.paymentInfo.charge ?? 0),
+            allocated_paid: Math.floor(entry.paymentInfo.paid ?? 0),
+            allocated_units: entry.paymentInfo.units,
+            unit_price: entry.paymentInfo.unitPrice,
+            source: `sheet:${tab.sheetName}`,
+          });
+        }
       }
 
       // 매칭 후 메모 카운트 — 서버에 보낼 실제 메모 개수
@@ -288,6 +320,35 @@ export async function syncTeacherSheet(
       if (!importRes.ok) {
         const err = await importRes.json();
         monthResult.error = err.error || "저장 실패";
+      }
+
+      // 3-b. payment_shares upsert — 영어 강사 시트의 학생 행별 귀속 수납.
+      // 재동기화 시 이 강사·월 범위의 기존 shares(is_manual=false) 자동 삭제 후 재삽입.
+      if (shares.length > 0) {
+        try {
+          const shareRes = await fetch("/api/payment-shares", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shares,
+              replaceScope: {
+                teacher_id: teacherName,
+                month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
+              },
+            }),
+          });
+          if (!shareRes.ok) {
+            const err = await shareRes.json().catch(() => ({}));
+            console.warn("[sync] payment_shares 저장 실패:", err.error);
+          } else {
+            const body = await shareRes.json().catch(() => ({}));
+            console.log(
+              `[sync] ${tab.sheetName} payment_shares upsert: ${body.upserted || 0}건`
+            );
+          }
+        } catch (e) {
+          console.warn("[sync] payment_shares 저장 중 오류:", (e as Error).message);
+        }
       }
     } catch (e) {
       monthResult.error = (e as Error).message;

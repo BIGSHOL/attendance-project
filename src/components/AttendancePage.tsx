@@ -18,6 +18,7 @@ import type { MonthlySettlement, Student, Teacher, AttendanceViewMode, SessionPe
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useHolidays } from "@/hooks/useHolidays";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
+import { usePaymentShares } from "@/hooks/usePaymentShares";
 import { expandSessionDatesContiguous, isDateInSession } from "@/lib/sessionUtils";
 import {
   calculateStats,
@@ -423,7 +424,43 @@ export default function AttendancePage() {
   }, [allStudents, selectedTeacherId, selectedTeacher, isTeacherMatch, studentDataMap, year, month, hideZeroAttendance, sessionPeriods]);
 
   // 수납 데이터 (등록차수 계산용)
-  const { payments: monthPayments } = usePaymentsForMonth(year, month);
+  const { payments: rawMonthPayments } = usePaymentsForMonth(year, month);
+  // 영어 선생님의 경우 payment_shares (강사별 학생 수납 분배) 를 추가 로드.
+  // shares 는 기존 PaymentLite 포맷으로 변환해 monthPayments 에 합쳐 사용.
+  const isEnglishTeacher = !!selectedTeacher?.subjects?.includes("english");
+  const { shares: teacherShares } = usePaymentShares(
+    isEnglishTeacher ? selectedTeacherId : "",
+    year,
+    month
+  );
+  const monthPayments = useMemo<PaymentLite[]>(() => {
+    if (!isEnglishTeacher || teacherShares.length === 0) return rawMonthPayments;
+    // shares → PaymentLite 변환. 기존 findStudentPayments 매칭을 위해 이름/학교 채움.
+    const byId = new Map<string, { name: string; school?: string; grade?: string; studentCode?: string }>();
+    for (const s of allStudents) {
+      byId.set(s.id, { name: s.name, school: s.school, grade: s.grade, studentCode: s.studentCode });
+    }
+    const billingMonth = `${year}${String(month).padStart(2, "0")}`;
+    const converted: PaymentLite[] = teacherShares.map((sh) => {
+      const stu = byId.get(sh.student_id);
+      return {
+        id: sh.id,
+        student_code: stu?.studentCode || "",
+        student_name: stu?.name || "",
+        school: stu?.school,
+        grade: stu?.grade,
+        billing_month: billingMonth,
+        // payment_name 에 class_name 을 넣어 inferTierForPrice 에서 학생 DB class 로 매칭
+        payment_name: sh.class_name,
+        charge_amount: sh.allocated_paid, // 납입 기준으로 처리 (기존 로직과 호환)
+        discount_amount: Math.max(0, sh.allocated_charge - sh.allocated_paid),
+        paid_amount: sh.allocated_paid,
+        teacher_name: selectedTeacher?.name,
+        teacher_staff_id: sh.teacher_staff_id,
+      };
+    });
+    return converted;
+  }, [isEnglishTeacher, teacherShares, rawMonthPayments, allStudents, year, month, selectedTeacher?.name]);
 
   /**
    * 수납명 끝의 요일 문자열을 배열로 추출.

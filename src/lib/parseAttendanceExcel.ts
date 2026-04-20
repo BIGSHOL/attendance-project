@@ -10,6 +10,20 @@ export interface AttendanceEntry {
   days: string[];
   attendance: Record<string, number>; // "YYYY-MM-DD" → 0|1 (빈칸 제외)
   memos: Record<string, string>;      // "YYYY-MM-DD" → 메모 텍스트 (빈값 제외)
+  /**
+   * 급여 정보 (시트 헤더 기준 J/K/L/O 열).
+   * 영어 선생님의 payment_shares 저장용. 수학은 `payments` 테이블 사용하므로 참고만.
+   *   - unitPrice: J열 [9] 유닛단가
+   *   - charge:    K열 [10] 발행예정금액 (이 강사 귀속 청구액)
+   *   - paid:      L열 [11] 납입금액     (이 강사 귀속 실납입액)
+   *   - units:     O열 [14] 등록차수     (이 강사 담당 유닛 수)
+   */
+  paymentInfo?: {
+    unitPrice?: number;
+    charge?: number;
+    paid?: number;
+    units?: number;
+  };
 }
 
 export interface ParsedAttendance {
@@ -158,7 +172,34 @@ export function parseAttendanceFromArray(
       }
     }
 
-    entries.push({ studentName: name, school, grade, tierName, days, attendance, memos });
+    // J/K/L/O 열 급여 정보 (숫자만 추출, 원 기호 등 무시)
+    const numFromCell = (v: unknown): number | undefined => {
+      if (v === undefined || v === null || v === "") return undefined;
+      const n = parseFloat(String(v).replace(/[^\d.-]/g, ""));
+      return isNaN(n) ? undefined : n;
+    };
+    const paymentInfo = {
+      unitPrice: numFromCell(row[9]),
+      charge: numFromCell(row[10]),
+      paid: numFromCell(row[11]),
+      units: numFromCell(row[14]),
+    };
+    const hasPaymentInfo =
+      paymentInfo.unitPrice !== undefined ||
+      paymentInfo.charge !== undefined ||
+      paymentInfo.paid !== undefined ||
+      paymentInfo.units !== undefined;
+
+    entries.push({
+      studentName: name,
+      school,
+      grade,
+      tierName,
+      days,
+      attendance,
+      memos,
+      ...(hasPaymentInfo ? { paymentInfo } : {}),
+    });
   }
 
   // 날짜 범위 계산 (min/max) — 월 단위가 아닌 실제 탭 커버 범위 기준으로 덮어쓰기
