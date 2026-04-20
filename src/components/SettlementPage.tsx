@@ -198,16 +198,15 @@ export default function SettlementPage() {
         ? settlement.salaryConfig
         : salaryConfig;
 
-      // 영어 선생님: payment_shares 로 학생×분반 귀속액 재구성 (출석부 탭과 동일 공식).
+      // payment_shares 경로 — 영어/수학/과학 무관. sync 된 모든 선생님이 shares 저장됨.
       // 키는 `{student_id}|{class_name}` 으로 분반까지 분리 — 같은 학생이 여러 tier
       // 수강하는 경우 각 share 마다 독립 계산되어 출석부 탭과 완벽 일치.
+      const teacherShares = allShares.filter((sh) => sh.teacher_staff_id === teacher.id);
+      const useSharePath = teacherShares.length > 0;
       const isEnglishTeacher = !!teacher.subjects?.includes("english");
-      const teacherShares = isEnglishTeacher
-        ? allShares.filter((sh) => sh.teacher_staff_id === teacher.id)
-        : [];
       const paidByRow = new Map<string, number>();
       const unitPriceByRow = new Map<string, number>();
-      if (isEnglishTeacher) {
+      if (useSharePath) {
         for (const sh of teacherShares) {
           const key = sh.class_name
             ? `${sh.student_id}|${sh.class_name}`
@@ -220,11 +219,11 @@ export default function SettlementPage() {
       }
 
       // 담당 학생 목록.
-      // 영어 선생님: teacherShares.student_id 기준 — 출석부 탭과 동일 (학생 × 분반 단위).
+      // sync 된 선생님 (shares 있음): teacherShares.student_id 기준 — 출석부 탭과 동일.
       //   학생 대상이 Firebase + virtual 중복되지 않도록 shares 가 권위.
-      // 수학/기타: 기존대로 enrollments 매칭 + isActiveInMonth.
+      // 미동기화 선생님: enrollments 매칭 + isActiveInMonth fallback.
       const studentById = new Map(students.map((s) => [s.id, s]));
-      const teacherStudents = isEnglishTeacher
+      const teacherStudents = useSharePath
         ? (() => {
             const uniqueIds = new Set(teacherShares.map((sh) => sh.student_id));
             const list: Student[] = [];
@@ -369,8 +368,14 @@ export default function SettlementPage() {
         return { studentBase, classUnits, totalUnits };
       };
 
-      if (isEnglishTeacher && teacherShares.length > 0) {
-        // share 단위 loop — 출석부 탭 studentRows 와 1:1 대응
+      if (useSharePath) {
+        // share 단위 loop — 출석부 탭 studentRows 와 1:1 대응.
+        // 영어/수학/과학 무관 — shares 에 이 선생님의 분반별 할당 수납 정보가 있으면 사용.
+        const subjectForShares = isEnglishTeacher
+          ? "english"
+          : teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")
+            ? "math"
+            : "other";
         for (const sh of teacherShares) {
           const student = studentById.get(sh.student_id);
           if (!student) continue;
@@ -389,8 +394,7 @@ export default function SettlementPage() {
             unitPriceOverride,
           });
           baseSalary += studentBase;
-          // subject 집계 — 영어 share 는 모두 "english"
-          const row = ensureSub("english");
+          const row = ensureSub(subjectForShares);
           row.studentCount += 1;
           row.totalAttendance += totalUnits;
           row.countableAttendance += classUnits;
