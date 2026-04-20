@@ -11,7 +11,7 @@ import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
@@ -116,7 +116,12 @@ export default function SettlementPage() {
     return true;
   };
 
+  // 과목 필터 (TeacherList 스타일) — 빈 Set 은 전체 선택으로 간주
+  const [checkedSubjects, setCheckedSubjects] = useLocalStorageSet("settlement.subjects");
+
   // 표시할 선생님 (숨김 제외, 담당학생 0 제외, 과목 없음 제외)
+  // 과목 필터는 여기선 적용 안함 (allSubjects 집계에 영향 주지 않도록).
+  // 실제 표시 목록은 아래 settlements 에서 과목 필터 적용.
   const visibleTeachers = useMemo(() => {
     return teachers.filter((t) => {
       if (!t.subjects || t.subjects.length === 0) return false;
@@ -128,6 +133,33 @@ export default function SettlementPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teachers, students, hiddenTeacherIds, year, month]);
+
+  // visibleTeachers 에서 나타나는 모든 과목 집합
+  const allSubjects = useMemo(() => {
+    const set = new Set<string>();
+    visibleTeachers.forEach((t) => t.subjects?.forEach((s) => set.add(s)));
+    return Array.from(set).sort();
+  }, [visibleTeachers]);
+
+  // 빈 Set → 전체 선택. 사용자가 하나라도 체크/해제하면 그 상태로 유지.
+  const effectiveCheckedSubjects = useMemo(
+    () => (checkedSubjects.size === 0 ? new Set(allSubjects) : checkedSubjects),
+    [checkedSubjects, allSubjects]
+  );
+
+  const toggleSubject = (subject: string) => {
+    const next = new Set(effectiveCheckedSubjects);
+    if (next.has(subject)) next.delete(subject);
+    else next.add(subject);
+    setCheckedSubjects(next);
+  };
+  const toggleAllSubjects = () => {
+    if (effectiveCheckedSubjects.size === allSubjects.length) {
+      setCheckedSubjects(new Set()); // 빈 → 전체
+    } else {
+      setCheckedSubjects(new Set(allSubjects));
+    }
+  };
 
   // 선생님별 정산 계산 (+ 과목별 breakdown)
   const settlements = useMemo(() => {
@@ -267,9 +299,17 @@ export default function SettlementPage() {
     });
   }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month]);
 
-  // 합계
+  // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
+  const filteredSettlements = useMemo(() => {
+    if (effectiveCheckedSubjects.size === allSubjects.length) return settlements;
+    return settlements.filter((s) =>
+      (s.teacher.subjects || []).some((sub) => effectiveCheckedSubjects.has(sub))
+    );
+  }, [settlements, effectiveCheckedSubjects, allSubjects]);
+
+  // 합계 (필터 반영)
   const totals = useMemo(() => {
-    return settlements.reduce(
+    return filteredSettlements.reduce(
       (acc, s) => ({
         studentCount: acc.studentCount + s.studentCount,
         totalAttendance: acc.totalAttendance + s.totalAttendance,
@@ -278,7 +318,7 @@ export default function SettlementPage() {
       }),
       { studentCount: 0, totalAttendance: 0, baseSalary: 0, finalSalary: 0 }
     );
-  }, [settlements]);
+  }, [filteredSettlements]);
 
   // 학생별 시수 검증: 과목별로 납부액 vs 실제 수강 시수 × 기준단가
   const studentChecks = useMemo(() => {
@@ -457,7 +497,7 @@ export default function SettlementPage() {
         <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
           월별 정산
           <span className="ml-2 text-sm font-normal text-zinc-500">
-            ({settlements.length}명)
+            ({filteredSettlements.length}명)
           </span>
         </h2>
 
@@ -507,9 +547,36 @@ export default function SettlementPage() {
 
       {tab === "settlement" && (
       <>
+      {/* 과목 필터 (체크박스 토글) — TeacherList 동일 스타일 */}
+      <div className="flex items-center gap-2 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
+        <button
+          onClick={toggleAllSubjects}
+          className="text-xs px-2 py-1 rounded-sm border border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          {effectiveCheckedSubjects.size === allSubjects.length ? "전체 해제" : "전체 선택"}
+        </button>
+        {allSubjects.map((s) => {
+          const checked = effectiveCheckedSubjects.has(s);
+          return (
+            <button
+              key={s}
+              onClick={() => toggleSubject(s)}
+              className={`text-xs px-2.5 py-1 rounded-sm border transition-colors ${
+                checked
+                  ? "bg-blue-100 border-blue-400 text-blue-700 dark:bg-blue-900 dark:border-blue-600 dark:text-blue-300"
+                  : "bg-white border-zinc-300 text-zinc-400 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-500"
+              }`}
+            >
+              <span className="mr-1">{checked ? "☑" : "☐"}</span>
+              {toSubjectLabel(s)}
+            </button>
+          );
+        })}
+      </div>
+
       {/* 전체 합계 카드 */}
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <StatCard label="선생님" value={`${settlements.length}명`} />
+        <StatCard label="선생님" value={`${filteredSettlements.length}명`} />
         <StatCard label="총 담당학생" value={`${totals.studentCount}명`} />
         <StatCard label="총 출석" value={`${totals.totalAttendance}회`} />
         <StatCard label="총 지급액" value={`${totals.finalSalary.toLocaleString()}원`} highlight />
@@ -533,7 +600,7 @@ export default function SettlementPage() {
             </tr>
           </thead>
           <tbody>
-            {settlements.map((s, idx) => {
+            {filteredSettlements.map((s, idx) => {
               const incentiveTotal = s.finalSalary - s.baseSalary;
               return (
                 <Fragment key={s.teacher.id}>
@@ -637,7 +704,7 @@ export default function SettlementPage() {
             })}
 
             {/* 합계 행 */}
-            {settlements.length > 0 && (
+            {filteredSettlements.length > 0 && (
               <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-bold dark:border-zinc-600 dark:bg-zinc-800/50">
                 <td colSpan={4} className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
                   합계
@@ -663,7 +730,7 @@ export default function SettlementPage() {
           </tbody>
         </table>
 
-        {settlements.length === 0 && (
+        {filteredSettlements.length === 0 && (
           <div className="flex items-center justify-center h-32 text-zinc-400 text-sm">
             표시할 정산 데이터가 없습니다.
           </div>
