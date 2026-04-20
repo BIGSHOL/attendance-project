@@ -127,7 +127,7 @@ export default function AttendancePage() {
 
   // 데이터
   const { teachers, loading: staffLoading } = useStaff();
-  const { students: allStudents, loading: studentsLoading } = useStudents();
+  const { students: allStudents, loading: studentsLoading, refetch: refetchStudents } = useStudents();
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { userRole, isAdmin, isTeacher } = useUserRole();
   const { users: userRoles } = useAllUserRoles();
@@ -428,7 +428,7 @@ export default function AttendancePage() {
   // 영어 선생님의 경우 payment_shares (강사별 학생 수납 분배) 를 추가 로드.
   // shares 는 기존 PaymentLite 포맷으로 변환해 monthPayments 에 합쳐 사용.
   const isEnglishTeacher = !!selectedTeacher?.subjects?.includes("english");
-  const { shares: teacherShares } = usePaymentShares(
+  const { shares: teacherShares, refetch: refetchShares } = usePaymentShares(
     isEnglishTeacher ? selectedTeacherId : "",
     year,
     month
@@ -537,6 +537,110 @@ export default function AttendancePage() {
         (s) => s === "math" || s === "highmath"
       ),
     };
+
+    // 영어 교사 전용 — shares 기반 직접 구성.
+    //   그룹 라벨(row.group) 은 payments 테이블에서 학생별로 실제 수납명을 찾아 사용.
+    //   분반 분리가 자연스럽게 이뤄짐(예: "의치대 중등" → "의치대 중등 월목 MC1J").
+    //   attendance/메모 lookup key 는 `{student_id}|{share.class_name}` — DB 의 tier 기준
+    //   (shares.class_name == sync 에서 저장한 시트 F열 tier).
+    if (isEnglishTeacher && teacherShares.length > 0) {
+      // 학생 id 로 rawMonthPayments 에서 payment_name 매칭 (studentCode 또는 name+school).
+      // 한 학생 × 한 tier 에 대해 매칭된 payment_name 을 저장.
+      const paymentNameByKey = new Map<string, string>();
+      const normSchool = (s: string | undefined) =>
+        (s || "")
+          .trim()
+          .replace(/초등학교$/, "초")
+          .replace(/중학교$/, "중")
+          .replace(/고등학교$/, "고");
+      for (const p of rawMonthPayments) {
+        if (!p.payment_name) continue;
+        // 학생 id 찾기 (all 학생 대상 — Firebase + virtual)
+        let sid: string | undefined;
+        for (const stu of allStudents) {
+          if (p.student_code && stu.studentCode && stu.studentCode === p.student_code) {
+            sid = stu.id; break;
+          }
+          if (
+            p.student_name &&
+            stu.name === p.student_name &&
+            normSchool(p.school) === normSchool(stu.school)
+          ) {
+            sid = stu.id; break;
+          }
+        }
+        if (!sid) continue;
+        // payment_name 이 어떤 share.class_name 으로 시작하는지 찾아 해당 키에 등록
+        for (const sh of teacherShares) {
+          if (sh.student_id !== sid) continue;
+          if (!sh.class_name) continue;
+          if (p.payment_name.startsWith(sh.class_name)) {
+            paymentNameByKey.set(`${sid}|${sh.class_name}`, p.payment_name);
+            break;
+          }
+        }
+      }
+
+      // 학생 id → Student 메타 lookup (이름/학교/학년 표시용)
+      const studentById = new Map<string, Student>();
+      for (const stu of allStudents) studentById.set(stu.id, stu);
+
+      const engRows: Student[] = [];
+      for (const sh of teacherShares) {
+        const stu = studentById.get(sh.student_id);
+        if (!stu) continue; // 매칭 안 되면 skip (보통 발생 안 함)
+        const tierName = sh.class_name || "";
+        // DB attendance/메모 key 는 tier 기반 유지 (sync 에서 그렇게 저장했으므로)
+        const attendanceKey = tierName ? `${stu.id}|${tierName}` : stu.id;
+        const rowData = studentDataMap.get(attendanceKey);
+        // UI row id 는 payment_name 기반으로 고유화 (분반 분리 지원)
+        const paymentName = paymentNameByKey.get(`${stu.id}|${tierName}`);
+        const rowId = paymentName
+          ? `${stu.id}|${paymentName}`
+          : attendanceKey;
+        const groupLabel = paymentName || tierName || "미분류";
+
+        // 표시 요일: 출석 날짜들에서 도출 (없으면 share.allocated_units 없을 때 빈 값)
+        const attendanceDayLabels = new Set<string>();
+        for (const dateKey of Object.keys(rowData?.attendance || {})) {
+          const v = rowData?.attendance[dateKey] ?? 0;
+          if (v <= 0) continue;
+          const d = new Date(dateKey);
+          if (!isNaN(d.getTime())) {
+            attendanceDayLabels.add(["일","월","화","수","목","금","토"][d.getDay()]);
+          }
+        }
+
+        // share 를 PaymentLite 로 변환 (termCountMap / paidAmountByStudent 가 _payments 사용 가능)
+        const sharePaymentLite: PaymentLite = {
+          id: sh.id,
+          student_code: stu.studentCode || "",
+          student_name: stu.name,
+          school: stu.school,
+          grade: stu.grade,
+          billing_month: `${year}${String(month).padStart(2, "0")}`,
+          payment_name: paymentName || tierName,
+          charge_amount: sh.allocated_paid,
+          discount_amount: Math.max(0, sh.allocated_charge - sh.allocated_paid),
+          paid_amount: sh.allocated_paid,
+          teacher_name: selectedTeacher.name,
+          teacher_staff_id: sh.teacher_staff_id,
+        };
+
+        engRows.push({
+          ...stu,
+          id: rowId,
+          group: groupLabel,
+          days: Array.from(attendanceDayLabels).sort(),
+          attendance: rowData?.attendance ?? {},
+          memos: rowData?.memos ?? {},
+          homework: rowData?.homework ?? {},
+          cellColors: rowData?.cellColors ?? {},
+          _payments: [sharePaymentLite],
+        } as Student & { _payments: PaymentLite[] });
+      }
+      return engRows;
+    }
 
     const rows: Student[] = [];
     for (const s of filteredStudents) {
@@ -739,7 +843,7 @@ export default function AttendancePage() {
       }
     }
     return rows;
-  }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices, studentDataMap, salaryConfig]);
+  }, [filteredStudents, monthPayments, selectedTeacher, knownUnitPrices, studentDataMap, salaryConfig, isEnglishTeacher, teacherShares, rawMonthPayments, allStudents, year, month]);
 
   /**
    * 급여 계산 범위 predicate.
@@ -1137,13 +1241,19 @@ export default function AttendancePage() {
       setSyncResult(result);
       if (result.success) {
         await markSynced(selectedTeacherId);
-        // 동기화 결과 반영: 출석/메모 + tier 오버라이드 DB 재조회
-        await Promise.all([refetchAttendance(), refetchTierOverrides()]);
+        // 동기화 결과 반영: 출석/메모 + tier 오버라이드 + payment_shares +
+        // virtual_students(=allStudents) 모두 재조회. F5 없이 UI 자동 갱신.
+        await Promise.all([
+          refetchAttendance(),
+          refetchTierOverrides(),
+          refetchShares(),
+          refetchStudents(),
+        ]);
       }
     } finally {
       setSyncing(false);
     }
-  }, [syncing, selectedTeacherId, selectedTeacher, currentSheetUrl, year, month, allStudents, markSynced, refetchAttendance, salaryConfig, refetchTierOverrides]);
+  }, [syncing, selectedTeacherId, selectedTeacher, currentSheetUrl, year, month, allStudents, markSynced, refetchAttendance, salaryConfig, refetchTierOverrides, refetchShares, refetchStudents]);
 
   // Supabase 연동 핸들러 — 편집 시 presence broadcast (다른 사용자에게 "편집 중" 표시)
   // 변경 후 2초간 본인 편집 셀로 잠가서 realtime 에코로 인한 깜빡임 방지

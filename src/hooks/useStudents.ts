@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Student } from "@/types";
-import { cachedFetch, getCached } from "@/lib/fetchCache";
+import { cachedFetch, getCached, invalidateCache } from "@/lib/fetchCache";
 
 const URL_KEY = "/api/students";
 
@@ -28,5 +28,16 @@ export function useStudents() {
     };
   }, []);
 
-  return { students, loading };
+  // sync 후 virtual_students 가 업데이트 되었을 때 캐시 무효화 + 재조회
+  const refetch = useCallback(async () => {
+    invalidateCache(URL_KEY);
+    try {
+      const data = await cachedFetch<Student[]>(URL_KEY);
+      setStudents(data);
+    } catch (e) {
+      console.error("[useStudents refetch]", e);
+    }
+  }, []);
+
+  return { students, loading, refetch };
 }
