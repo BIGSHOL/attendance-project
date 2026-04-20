@@ -812,19 +812,20 @@ export default function SettlementPage() {
           );
         })()}
         <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
+          {/* table-fixed + th 에 명시적 너비 — 필터로 행 수가 달라져도 컬럼 너비 유지 */}
+          <table className="w-full min-w-[960px] table-fixed text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
             <thead>
               <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
-                <th className="px-3 py-3 text-left font-medium text-zinc-500">#</th>
-                <th className="px-3 py-3 text-left font-medium text-zinc-500">학생</th>
-                <th className="px-3 py-3 text-left font-medium text-zinc-500">과목</th>
-                <th className="px-3 py-3 text-left font-medium text-zinc-500">선생님</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">기준단가</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">청구액</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">예상시수</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">실제시수</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">차이 (회)</th>
-                <th className="px-3 py-3 text-right font-medium text-zinc-500">차이 (원)</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500 w-[48px]">#</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500 w-[180px]">학생</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500 w-[80px]">과목</th>
+                <th className="px-3 py-3 text-left font-medium text-zinc-500 w-[160px]">선생님</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[96px]">기준단가</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[112px]">청구액</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[80px]">예상시수</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[80px]">실제시수</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[88px]">차이 (회)</th>
+                <th className="px-3 py-3 text-right font-medium text-zinc-500 w-[112px]">차이 (원)</th>
               </tr>
             </thead>
             <tbody>
