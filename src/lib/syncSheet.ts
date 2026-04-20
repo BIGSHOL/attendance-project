@@ -263,15 +263,26 @@ export async function syncTeacherSheet(
         // teacher_staff_id 는 **staff.id (teacherId)** 로 저장 — usePaymentShares
         // 조회 시 동일 키로 lookup.
         //
-        // allocated_paid 원칙:
-        //   시트의 실급여 공식 = M열[12] 급여정산용 × (1-수수료) × 비율
-        //   → allocated_paid 는 salaryBase (M열) 를 우선, 없으면 paid (L열) 사용.
-        //   "학생 확인" 등 L열이 텍스트인 담임 행도 M열은 수업차수×단가로 계산되어 있어
-        //   급여 계산이 정확하다.
+        // allocated_paid 원칙 — 시트의 실급여 공식 추정:
+        //   실급여 = min(L열[11] 납입, M열[12] 급여정산용) × (1-수수료) × 비율
+        //
+        //   케이스별:
+        //     (a) 정액 수업 (담임): paid == salaryBase → min 이 둘 중 하나.
+        //         예) 중등브릿지 담임 학생 128,000 납입 = 128,000 급여정산용.
+        //     (b) 미납/할인: paid < salaryBase → paid 기준 (학원 실입금 만큼만 지급).
+        //         예) Sarah 초등브릿지 "이지호" 200,000 납입 < 300,000 급여정산용.
+        //     (c) 부담임 / 공유 수강: paid > salaryBase → salaryBase 기준
+        //         (시트 [11] 에는 학생 전체 수납이 들어있고 이 강사 귀속은 [12] 만큼).
+        //         예) Sarah EIE루키스 "강민승" 270,000 납입 > 15,000 급여정산용.
+        //     (d) "학생 확인" 등 paid 가 텍스트: salaryBase 사용 (paid=undefined).
+        //         예) 추민아 중등 2T 담임 row.
         if (entry.paymentInfo) {
           const className = (entry.tierName || "").trim();
+          const { paid, salaryBase } = entry.paymentInfo;
           const effectivePaid =
-            entry.paymentInfo.salaryBase ?? entry.paymentInfo.paid ?? 0;
+            paid !== undefined && salaryBase !== undefined
+              ? Math.min(paid, salaryBase)
+              : (salaryBase ?? paid ?? 0);
           shares.push({
             student_id: match.id,
             month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
