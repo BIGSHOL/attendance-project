@@ -198,21 +198,23 @@ export default function SettlementPage() {
         ? settlement.salaryConfig
         : salaryConfig;
 
-      // 영어 선생님: payment_shares 로 학생별 귀속액 재구성 (출석부 탭과 동일 공식).
+      // 영어 선생님: payment_shares 로 학생×분반 귀속액 재구성 (출석부 탭과 동일 공식).
+      // 키는 `{student_id}|{class_name}` 으로 분반까지 분리 — 같은 학생이 여러 tier
+      // 수강하는 경우 각 share 마다 독립 계산되어 출석부 탭과 완벽 일치.
       const isEnglishTeacher = !!teacher.subjects?.includes("english");
       const teacherShares = isEnglishTeacher
         ? allShares.filter((sh) => sh.teacher_staff_id === teacher.id)
         : [];
-      const paidByStudent = new Map<string, number>();
-      const unitPriceByStudent = new Map<string, number>();
+      const paidByRow = new Map<string, number>();
+      const unitPriceByRow = new Map<string, number>();
       if (isEnglishTeacher) {
         for (const sh of teacherShares) {
-          paidByStudent.set(
-            sh.student_id,
-            (paidByStudent.get(sh.student_id) || 0) + (sh.allocated_paid || 0)
-          );
-          if (sh.unit_price && !unitPriceByStudent.has(sh.student_id)) {
-            unitPriceByStudent.set(sh.student_id, sh.unit_price);
+          const key = sh.class_name
+            ? `${sh.student_id}|${sh.class_name}`
+            : sh.student_id;
+          paidByRow.set(key, (paidByRow.get(key) || 0) + (sh.allocated_paid || 0));
+          if (sh.unit_price && !unitPriceByRow.has(key)) {
+            unitPriceByRow.set(key, sh.unit_price);
           }
         }
       }
@@ -271,9 +273,12 @@ export default function SettlementPage() {
         return teacherSessions.some((s) => isDateInSession(dateKey, s));
       };
 
-      // 학생별 시수 (전체/countable)
+      // 학생별 시수 (전체/countable).
+      // 영어 교사: 학생×분반(class_name) 단위로도 별도 집계 — 출석부 탭과 동일.
       const studentUnitMap = new Map<string, number>();
       const studentTotalMap = new Map<string, number>();
+      const rowUnitMap = new Map<string, number>(); // `{sid}|{class_name}`
+      const rowTotalMap = new Map<string, number>();
       let totalAttendance = 0;
       let countableAttendance = 0;
 
@@ -282,11 +287,15 @@ export default function SettlementPage() {
         if (r.hours <= 0) continue;
         // 이 선생님 과목 세션 범위 밖은 제외 (출석부 탭 세션모드와 동일)
         if (!isDateInTeacherPeriod(r.date)) continue;
+        const cn = r.class_name || "";
+        const rowKey = cn ? `${r.student_id}|${cn}` : r.student_id;
         totalAttendance += r.hours;
         studentTotalMap.set(r.student_id, (studentTotalMap.get(r.student_id) || 0) + r.hours);
+        rowTotalMap.set(rowKey, (rowTotalMap.get(rowKey) || 0) + r.hours);
         if (isAttendanceCountable(r.date, salaryType, commissionDays)) {
           countableAttendance += r.hours;
           studentUnitMap.set(r.student_id, (studentUnitMap.get(r.student_id) || 0) + r.hours);
+          rowUnitMap.set(rowKey, (rowUnitMap.get(rowKey) || 0) + r.hours);
         }
       }
 
@@ -312,65 +321,99 @@ export default function SettlementPage() {
       };
 
       let baseSalary = 0;
-      for (const student of teacherStudents) {
-        const subs = Array.from(studentSubjects.get(student.id) || []);
-        if (subs.length === 0) continue;
-        const classUnits = studentUnitMap.get(student.id) || 0;
-        const totalUnits = studentTotalMap.get(student.id) || 0;
 
-        // 여러 과목이면 시수/급여를 균등 분배
-        const share = 1 / subs.length;
-        const studentPayments = findStudentPayments(student, monthPayments);
+      // 공통 계산 헬퍼 — 한 "행(row)" = 학생×분반 단위의 급여.
+      // 영어는 share 단위로, 수학/기타는 학생 단위로 loop.
+      const computeRow = (params: {
+        student: Student;
+        className: string;  // "" 이면 분반 미지정
+        classUnits: number;
+        totalUnits: number;
+        paidAmount: number | null;
+        unitPriceOverride: number | undefined;
+      }) => {
+        const { student, className, classUnits, totalUnits, paidAmount, unitPriceOverride } = params;
+        if (classUnits <= 0) return { studentBase: 0, classUnits: 0, totalUnits: 0 };
+        // tier override 키: 출석부 탭과 동일 — `{teacher_id}|{student_id}|{class_name}`
+        // useAllTierOverrides 가 이 키로 저장. 레거시는 `{teacher_id}|{student_id}`.
+        const overrideId =
+          tierOverrides[`${teacher.id}|${student.id}|${className}`] ??
+          tierOverrides[`${teacher.id}|${student.id}`];
+        const settingItem = matchSalarySetting(student, effectiveConfig, undefined, overrideId);
+        const baseRatio = settingItem
+          ? getEffectiveRatio(settingItem, effectiveConfig, teacher.name)
+          : undefined;
+        const effectiveSetting =
+          settingItem && baseRatio !== undefined
+            ? { ...settingItem, ratio: baseRatio }
+            : settingItem;
+        const studentBase = calculateStudentSalary(
+          effectiveSetting,
+          effectiveConfig.academyFee,
+          classUnits,
+          paidAmount,
+          blogPenalty,
+          unitPriceOverride
+        );
+        return { studentBase, classUnits, totalUnits };
+      };
 
-        let studentBase = 0;
-        if (classUnits > 0) {
-          const settingItem = matchSalarySetting(student, effectiveConfig, undefined, tierOverrides[`${teacher.id}|${student.id}`]);
-          // 영어 교사 — payment_shares 우선, 없으면 payments (fallback)
-          // 수학/기타 — payments.charge_amount 합
-          let paidAmount: number | null = null;
-          let unitPriceOverride: number | undefined;
-          if (isEnglishTeacher) {
-            const shared = paidByStudent.get(student.id);
-            if (shared !== undefined) {
-              paidAmount = shared;
-              unitPriceOverride = unitPriceByStudent.get(student.id);
-            } else if (studentPayments.length > 0) {
-              paidAmount = studentPayments.reduce(
-                (a, p) => a + (p.charge_amount || 0),
-                0
-              );
-            }
-          } else if (studentPayments.length > 0) {
-            paidAmount = studentPayments.reduce(
-              (a, p) => a + (p.charge_amount || 0),
-              0
-            );
-          }
-          // teacherRatios 오버라이드 반영 (출석부 탭과 동일)
-          const baseRatio = settingItem
-            ? getEffectiveRatio(settingItem, effectiveConfig, teacher.name)
-            : undefined;
-          const effectiveSetting =
-            settingItem && baseRatio !== undefined
-              ? { ...settingItem, ratio: baseRatio }
-              : settingItem;
-          studentBase = calculateStudentSalary(
-            effectiveSetting,
-            effectiveConfig.academyFee,
+      if (isEnglishTeacher && teacherShares.length > 0) {
+        // share 단위 loop — 출석부 탭 studentRows 와 1:1 대응
+        for (const sh of teacherShares) {
+          const student = studentById.get(sh.student_id);
+          if (!student) continue;
+          const className = sh.class_name || "";
+          const rowKey = className ? `${sh.student_id}|${className}` : sh.student_id;
+          const classUnits = rowUnitMap.get(rowKey) || 0;
+          const totalUnits = rowTotalMap.get(rowKey) || 0;
+          const paidAmount = sh.allocated_paid ?? null;
+          const unitPriceOverride = sh.unit_price ?? undefined;
+          const { studentBase } = computeRow({
+            student,
+            className,
             classUnits,
+            totalUnits,
             paidAmount,
-            blogPenalty,
-            unitPriceOverride
-          );
+            unitPriceOverride,
+          });
+          baseSalary += studentBase;
+          // subject 집계 — 영어 share 는 모두 "english"
+          const row = ensureSub("english");
+          row.studentCount += 1;
+          row.totalAttendance += totalUnits;
+          row.countableAttendance += classUnits;
+          row.baseSalary += studentBase;
         }
-        baseSalary += studentBase;
-
-        for (const sub of subs) {
-          const row = ensureSub(sub);
-          row.studentCount += share;
-          row.totalAttendance += totalUnits * share;
-          row.countableAttendance += classUnits * share;
-          row.baseSalary += studentBase * share;
+      } else {
+        // 수학/기타 — 기존 student 단위 loop
+        for (const student of teacherStudents) {
+          const subs = Array.from(studentSubjects.get(student.id) || []);
+          if (subs.length === 0) continue;
+          const classUnits = studentUnitMap.get(student.id) || 0;
+          const totalUnits = studentTotalMap.get(student.id) || 0;
+          const share = 1 / subs.length;
+          const studentPayments = findStudentPayments(student, monthPayments);
+          const paidAmount =
+            studentPayments.length > 0
+              ? studentPayments.reduce((a, p) => a + (p.charge_amount || 0), 0)
+              : null;
+          const { studentBase } = computeRow({
+            student,
+            className: "",
+            classUnits,
+            totalUnits,
+            paidAmount,
+            unitPriceOverride: undefined,
+          });
+          baseSalary += studentBase;
+          for (const sub of subs) {
+            const row = ensureSub(sub);
+            row.studentCount += share;
+            row.totalAttendance += totalUnits * share;
+            row.countableAttendance += classUnits * share;
+            row.baseSalary += studentBase * share;
+          }
         }
       }
 
@@ -384,8 +427,10 @@ export default function SettlementPage() {
         }))
         .sort((a, b) => b.baseSalary - a.baseSalary);
 
+      // 출석부 탭과 동일 — 최종 합계는 정수 내림
+      const baseSalaryInt = Math.floor(baseSalary);
       const finalSalary = calculateFinalSalary(
-        baseSalary,
+        baseSalaryInt,
         effectiveConfig.incentives,
         settlement
       );
@@ -395,7 +440,7 @@ export default function SettlementPage() {
         studentCount: teacherStudents.length,
         totalAttendance,
         countableAttendance,
-        baseSalary,
+        baseSalary: baseSalaryInt,
         finalSalary,
         settlement,
         salaryType,
