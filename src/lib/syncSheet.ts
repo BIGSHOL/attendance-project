@@ -177,13 +177,18 @@ export async function syncTeacherSheet(
           (e) => e.teacher === teacherName || e.staffId === teacherName
         );
         if (!match || !isThisTeacher) {
-          const virtualId = `virtual_${entry.studentName}_${entrySchool || "unknown"}_${entry.grade || "unknown"}`;
+          // virtualId 에 teacherId 를 포함해 "학생 × 교사" 단위로 고유화.
+          // 같은 이름/학교/학년의 학생이 여러 교사에게 수강하는 경우
+          // (영어 부담임, 초등 복수 과목 담당 등), 예전 포맷
+          // `virtual_{name}_{school}_{grade}` 은 upsert 시 teacher_staff_id 가
+          // 마지막 sync 로 덮어써져 다른 교사의 UI 에서 학생이 사라지는 버그 발생.
+          const virtualId = `virtual_${teacherId}_${entry.studentName}_${entrySchool || "unknown"}_${entry.grade || "unknown"}`;
           virtualToUpsert[virtualId] = {
             id: virtualId,
             name: entry.studentName,
             school: entrySchool,
             grade: entry.grade,
-            teacher_staff_id: teacherName,
+            teacher_staff_id: teacherId,
             class_name: entry.tierName || "",
             days: entry.days || [],
             subject: teacherSubject || "math",

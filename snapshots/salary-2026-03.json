@@ -1,0 +1,190 @@
+{
+  "month": "2026-03",
+  "capturedAt": "2026-04-20T06:59:44.286Z",
+  "tolerance": 50,
+  "teachers": {
+    "paQsIdpb9lPhTlvkM10P": {
+      "teacherId": "paQsIdpb9lPhTlvkM10P",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1ltWBCTOyJvz6-TKlL-3NiPRFh0ZmuY4br85ZpD0V15E%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "j2pjsycRa6AGk878sEN1": {
+      "teacherId": "j2pjsycRa6AGk878sEN1",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1-HHJ7EfjpW3VO_TZKmao3GFLVJPJOfxsGxC_H1tBW5c%2Fedit&month=2026-03 → 404: {\"error\":\"'26.3' 탭 없음\",\"availableTabs\":[\"데이터\",\"실결제_25.08\",\"실결제_25.07\",\"실결제_25.06\",\"실결제_25.05\",\"사용법\",\"시간표\",\"25.03(w박)\",\"25.05\",\"25.04\",\"25.03\",\"25.02\",\"25.08\",\"25.07\"]}",
+      "status": "ERR"
+    },
+    "Sam 김태건": {
+      "teacherId": "Sam 김태건",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1IsbsUlXgQfKVTQ-USjGrI4rKTNZn08hb-ckpgZxOI8E%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "Florence": {
+      "teacherId": "Florence",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1wYNUsOnoMC6kKl2ID8uGzvbfuyeGPUqkma6eje0Mes0%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "Kristine": {
+      "teacherId": "Kristine",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1k4UmMIeBtrzYn67yA3AhRgW8kE3v9pwUmoGEC_OYjJ0%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "Kelly": {
+      "teacherId": "Kelly",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1ua1aC1CJFDrJ6XzLztOBTEHELuhla6RwzHSZzKGuDyM%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "RtoDwL6qsMGY1msDnn62": {
+      "teacherId": "RtoDwL6qsMGY1msDnn62",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F16D_WWseKPc4ZvgM7XxDHDLCI82K6ZZnf6RWiSc5f5E0%2Fedit&month=2026-03 → 500: {\"error\":\"메타 조회 실패 (403): {\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The caller does not have permission\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\"}",
+      "status": "ERR"
+    },
+    "Yoojin 정유진": {
+      "teacherId": "Yoojin 정유진",
+      "error": "/api/admin/verify-salary?sheet_url=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1nWcqKWQYaA6NSTAmKTO-PNi_DnYKaCZydu7_gVS3XZs%2Fedit&month=2026-03 → 404: {\"error\":\"'26.3' 탭 없음\",\"availableTabs\":[\"데이터\",\"실결제_25.08\",\"사용법\",\"시간표\",\"시트7\",\"26.04\",\"25.09\",\"25.08\"]}",
+      "status": "ERR"
+    },
+    "강보경(Sarah)": {
+      "teacherName": "강보경(Sarah)",
+      "teacherId": "Sarah 강보경",
+      "subject": "english",
+      "sheetTotal": 4244695,
+      "uiTotal": 4334092,
+      "diff": 89397,
+      "studentCount": 78,
+      "sharesCount": 78,
+      "status": "FAIL"
+    },
+    "권나현": {
+      "teacherName": "권나현",
+      "teacherId": "AF6OIGsFXZujsq1toCQm",
+      "subject": "english",
+      "sheetTotal": 0,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 38,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "김민주": {
+      "teacherName": "김민주",
+      "teacherId": "김민주",
+      "subject": "english",
+      "sheetTotal": 4451381,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 68,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "김윤하": {
+      "teacherName": "김윤하",
+      "teacherId": "김윤하",
+      "subject": "english",
+      "sheetTotal": 4204345,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 67,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "김은정": {
+      "teacherName": "김은정",
+      "teacherId": "김은정",
+      "subject": "english",
+      "sheetTotal": 3564797,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 60,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "김화영": {
+      "teacherName": "김화영",
+      "teacherId": "김화영",
+      "subject": "math",
+      "sheetTotal": 4544392,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 39,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "신명진(GINA)": {
+      "teacherName": "신명진(GINA)",
+      "teacherId": "Gina 신명진",
+      "subject": "english",
+      "sheetTotal": 5832223,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 100,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "이성우": {
+      "teacherName": "이성우",
+      "teacherId": "이성우",
+      "subject": "math",
+      "sheetTotal": 462105,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 43,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "이수진": {
+      "teacherName": "이수진",
+      "teacherId": "kugdbOm9Lcjm3lJ7fjyO",
+      "subject": "math",
+      "sheetTotal": 4120612,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 42,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "이영현(Ellen)": {
+      "teacherName": "이영현(Ellen)",
+      "teacherId": "Ellen 이영현",
+      "subject": "english",
+      "sheetTotal": 0,
+      "uiTotal": 2854891,
+      "diff": 2854891,
+      "studentCount": 67,
+      "sharesCount": 67,
+      "status": "FAIL"
+    },
+    "정은지": {
+      "teacherName": "정은지",
+      "teacherId": "Charlie 정은지",
+      "subject": "english",
+      "sheetTotal": 0,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 47,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    },
+    "추민아(Jane)": {
+      "teacherName": "추민아(Jane)",
+      "teacherId": "Jane 추민아",
+      "subject": "english",
+      "sheetTotal": 4954485,
+      "uiTotal": 4906076,
+      "diff": -48409,
+      "studentCount": 73,
+      "sharesCount": 73,
+      "status": "WARN"
+    },
+    "허은진": {
+      "teacherName": "허은진",
+      "teacherId": "허은진",
+      "subject": "english",
+      "sheetTotal": 0,
+      "uiTotal": null,
+      "diff": null,
+      "studentCount": 34,
+      "sharesCount": 0,
+      "status": "UI_NA"
+    }
+  }
+}
