@@ -29,6 +29,8 @@ export interface AttendanceEntry {
     charge?: number;
     paid?: number;
     salaryBase?: number;
+    /** N열 [13] 실급여 — 시트가 최종 계산한 값 (담임/부담임 구분 참고). 0 이면 급여 대상 아님. */
+    salary?: number;
     units?: number;
     classUnits?: number;
   };
@@ -191,6 +193,7 @@ export function parseAttendanceFromArray(
       charge: numFromCell(row[10]),
       paid: numFromCell(row[11]),
       salaryBase: numFromCell(row[12]),
+      salary: numFromCell(row[13]),
       units: numFromCell(row[14]),
       classUnits: numFromCell(row[15]),
     };

@@ -158,6 +158,18 @@ export async function syncTeacherSheet(
         // 행정급여는 TeacherDetail 설정 필드(admin_base_amount + admin_tier_id)로
         // 처리되므로 시트의 플레이스홀더 행은 DB 에 저장하지 않는다.
         if (/^행정\d*$/.test(entry.studentName?.trim() || "")) continue;
+        // 수학 선생님 시트의 부담임 학생 ([0]=FALSE, [13] 실급여=0) 은 sync skip.
+        // 시트가 이미 급여 대상 아님을 선언. UI 에서 해당 학생을 노출하거나
+        // attendance × 단가 × 50% 로 자동 급여 계산하면 과대 집계 (이성우 3.5M 과잉).
+        // 영어 선생님은 부담임도 [13]>0 (EIE 15,000원 등) 이므로 영향 없음.
+        if (
+          teacherSubject !== "english" &&
+          entry.paymentInfo &&
+          entry.paymentInfo.salary !== undefined &&
+          entry.paymentInfo.salary === 0
+        ) {
+          continue;
+        }
         const entrySchool = normalizeSchoolName(entry.school || "");
         // 이름 + 학교 정규화 매칭
         let match = students.find(
