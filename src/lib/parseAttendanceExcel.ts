@@ -11,16 +11,18 @@ export interface AttendanceEntry {
   attendance: Record<string, number>; // "YYYY-MM-DD" → 0|1 (빈칸 제외)
   memos: Record<string, string>;      // "YYYY-MM-DD" → 메모 텍스트 (빈값 제외)
   /**
-   * 급여 정보 (시트 헤더 기준 J/K/L/M/O 열).
+   * 급여 정보 (시트 헤더 기준 J/K/L/M/O/P 열).
    * 영어 선생님의 payment_shares 저장용. 수학은 `payments` 테이블 사용하므로 참고만.
    *   - unitPrice:  J열 [9]  유닛단가
    *   - charge:     K열 [10] 발행예정금액 (이 강사 귀속 청구액)
    *   - paid:       L열 [11] 납입금액     (이 강사 귀속 실납입액; "학생 확인" 등 텍스트면 undefined)
    *   - salaryBase: M열 [12] 급여 정산용  (= 수업차수 × 유닛단가; paid 가 텍스트여도 늘 숫자)
-   *   - units:      O열 [14] 등록차수     (이 강사 담당 유닛 수)
+   *   - units:      O열 [14] 등록차수. 계약직 시트는 "학생 확인" 이라 P열 [15] 수업차수 fallback.
+   *   - classUnits: P열 [15] 수업차수     (실제 집계된 수업 횟수; 계약직 선생님 시트의 계산 baseline)
    *
-   * 시트 공식: 실급여 = salaryBase × (1 − 수수료) × 비율
-   * → payment_shares.allocated_paid 는 salaryBase 를 우선 사용 (없으면 paid).
+   * 시트 공식: 실급여 = min(paid, salaryBase) × (1 − 수수료) × 비율
+   * → payment_shares.allocated_paid 는 둘 다 있으면 min, 아니면 salaryBase/paid 순.
+   *    둘 다 0/undefined 면 syncSheet 에서 tier.baseTuition × classUnits 로 fallback.
    */
   paymentInfo?: {
     unitPrice?: number;
@@ -28,6 +30,7 @@ export interface AttendanceEntry {
     paid?: number;
     salaryBase?: number;
     units?: number;
+    classUnits?: number;
   };
 }
 
@@ -189,13 +192,15 @@ export function parseAttendanceFromArray(
       paid: numFromCell(row[11]),
       salaryBase: numFromCell(row[12]),
       units: numFromCell(row[14]),
+      classUnits: numFromCell(row[15]),
     };
     const hasPaymentInfo =
       paymentInfo.unitPrice !== undefined ||
       paymentInfo.charge !== undefined ||
       paymentInfo.paid !== undefined ||
       paymentInfo.salaryBase !== undefined ||
-      paymentInfo.units !== undefined;
+      paymentInfo.units !== undefined ||
+      paymentInfo.classUnits !== undefined;
 
     entries.push({
       studentName: name,

@@ -278,11 +278,35 @@ export async function syncTeacherSheet(
         //         예) 추민아 중등 2T 담임 row.
         if (entry.paymentInfo) {
           const className = (entry.tierName || "").trim();
-          const { paid, salaryBase } = entry.paymentInfo;
-          const effectivePaid =
+          const { paid, salaryBase, unitPrice, units, classUnits } = entry.paymentInfo;
+          let effectivePaid =
             paid !== undefined && salaryBase !== undefined
               ? Math.min(paid, salaryBase)
               : (salaryBase ?? paid ?? 0);
+
+          // Fallback — 계약직(정은지/이영현 등) 시트 대응.
+          // paid/salaryBase 모두 비어있거나 0 이면 tier 단가 × 수업차수 로 재구성.
+          // 우선순위: (a) 행의 unitPrice × units  (b) tier.baseTuition × classUnits
+          const fallbackUnits = units ?? classUnits;
+          let effectiveUnitPrice = unitPrice;
+          if (!effectiveUnitPrice || effectiveUnitPrice <= 0) {
+            const tierItem = salaryConfig?.items.find(
+              (i) =>
+                i.name === className && i.subject === (teacherSubject || "english")
+            );
+            if (tierItem?.baseTuition && tierItem.baseTuition > 0) {
+              effectiveUnitPrice = tierItem.baseTuition;
+            }
+          }
+          if (
+            effectivePaid === 0 &&
+            effectiveUnitPrice &&
+            effectiveUnitPrice > 0 &&
+            fallbackUnits &&
+            fallbackUnits > 0
+          ) {
+            effectivePaid = effectiveUnitPrice * fallbackUnits;
+          }
           shares.push({
             student_id: match.id,
             month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
@@ -290,8 +314,8 @@ export async function syncTeacherSheet(
             class_name: className,
             allocated_charge: Math.floor(entry.paymentInfo.charge ?? 0),
             allocated_paid: Math.floor(effectivePaid),
-            allocated_units: entry.paymentInfo.units,
-            unit_price: entry.paymentInfo.unitPrice,
+            allocated_units: fallbackUnits,
+            unit_price: effectiveUnitPrice,
             source: `sheet:${tab.sheetName}`,
           });
         }
