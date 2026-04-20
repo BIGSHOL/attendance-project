@@ -79,26 +79,41 @@ export function applyBlogPenalty(ratio: number, blogPenalty: boolean): number {
  * @param classUnits 출석 횟수 (양수 합계)
  * @param paidAmount 학생 납입금 (없으면 출석 기반 계산)
  * @param blogPenalty 블로그 패널티 적용 여부 (true 시 비율제 ratio -2%)
+ * @param unitPriceOverride 학생별 유닛단가 오버라이드 (영어 payment_shares.unit_price 등).
+ *   설정되면 settingItem.baseTuition 대신 이 값으로 grossByAttendance 계산.
+ *   같은 tier 이름이어도 학년별로 단가가 다른 영어 시트 대응.
  */
 export function calculateStudentSalary(
   settingItem: SalarySettingItem | undefined,
   academyFee: number,
   classUnits: number,
   paidAmount?: number | null,
-  blogPenalty: boolean = false
+  blogPenalty: boolean = false,
+  unitPriceOverride?: number
 ): number {
   if (!settingItem || classUnits <= 0) return 0;
 
   // 블로그 패널티 적용된 실질 비율
   const effectiveRatio = applyBlogPenalty(settingItem.ratio, blogPenalty);
 
+  // 유효 유닛단가: 오버라이드 우선, 없으면 tier 의 baseTuition
+  const effectiveUnitPrice =
+    unitPriceOverride && unitPriceOverride > 0
+      ? unitPriceOverride
+      : settingItem.baseTuition;
+
   // 납입금 없으면 출석 × 단가 — 소수 1자리 내림
   if (paidAmount === undefined || paidAmount === null) {
+    if (unitPriceOverride && unitPriceOverride > 0 && settingItem.type !== "fixed") {
+      // 오버라이드 단가로 직접 계산
+      const gross = effectiveUnitPrice * classUnits;
+      return floor1(gross * (1 - academyFee / 100) * (effectiveRatio / 100));
+    }
     return floor1(classUnits * calculateClassRate(settingItem, academyFee, effectiveRatio));
   }
 
   if (settingItem.type === "fixed") {
-    const unitPrice = settingItem.baseTuition || settingItem.fixedRate;
+    const unitPrice = effectiveUnitPrice || settingItem.fixedRate;
     const coveredSessions = Math.min(
       classUnits,
       unitPrice > 0 ? Math.floor(paidAmount / unitPrice) : classUnits
@@ -107,8 +122,7 @@ export function calculateStudentSalary(
   }
 
   // 비율제 — 소수 1자리 내림. 최종 합산 시 정수 내림.
-  const unitPrice = settingItem.baseTuition;
-  const grossByAttendance = floor1(unitPrice * classUnits);
+  const grossByAttendance = floor1(effectiveUnitPrice * classUnits);
   const effectiveBase = Math.min(paidAmount, grossByAttendance);
   return floor1(effectiveBase * (1 - academyFee / 100) * (effectiveRatio / 100));
 }
@@ -200,7 +214,12 @@ export function calculateStats(
    * 제공되면 이 predicate 가 true 인 날짜만 집계. (예: 3월 세션 = 3/6~4/2)
    * 미제공 시 `YYYY-MM` prefix 매칭 기본 동작.
    */
-  isDateInPeriod?: (dateKey: string) => boolean
+  isDateInPeriod?: (dateKey: string) => boolean,
+  /**
+   * 학생 id → 유닛단가 오버라이드 (영어 payment_shares.unit_price 등).
+   * 같은 tier 이름이어도 학년별로 단가가 다른 시트 대응.
+   */
+  unitPriceByStudent?: Map<string, number>
 ): {
   totalSalary: number;
   totalAttendance: number;
@@ -239,12 +258,14 @@ export function calculateStats(
         paidAmountByStudent !== undefined
           ? paidAmountByStudent.get(student.id) ?? 0
           : null;
+      const unitPriceOverride = unitPriceByStudent?.get(student.id);
       totalSalary += calculateStudentSalary(
         effectiveSetting,
         salaryConfig.academyFee,
         classUnits,
         paidAmount,
-        blogPenalty
+        blogPenalty,
+        unitPriceOverride
       );
     }
   }

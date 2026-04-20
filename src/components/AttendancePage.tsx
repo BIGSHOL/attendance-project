@@ -873,6 +873,23 @@ export default function AttendancePage() {
     return map;
   }, [studentRows, monthPayments, selectedTeacher]);
 
+  // 행별 유닛단가 오버라이드 (영어 payment_shares.unit_price).
+  // 같은 tier 이름이어도 학년별로 단가가 다른 시트 대응 — e.g.
+  // "중등브릿지" 초등=8000, 중등=12000 / "중등 2T" 중1=12000, 중2·3=12500.
+  // studentRows.id = `${studentId}|${className}` 키 체계에 맞춤.
+  const unitPriceByStudent = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!isEnglishTeacher || teacherShares.length === 0) return map;
+    for (const sh of teacherShares) {
+      if (!sh.unit_price || sh.unit_price <= 0) continue;
+      const key = sh.class_name
+        ? `${sh.student_id}|${sh.class_name}`
+        : sh.student_id;
+      map.set(key, sh.unit_price);
+    }
+    return map;
+  }, [isEnglishTeacher, teacherShares]);
+
   // 통계 — 행 단위로 집계해 합산 (학생 수는 고유 학생 기준)
   const stats = useMemo(
     () => calculateStats(
@@ -891,9 +908,10 @@ export default function AttendancePage() {
       blogPenalty,
       tierOverrides,
       paidAmountByStudent,
-      isDateInCurrentPeriod
+      isDateInCurrentPeriod,
+      unitPriceByStudent
     ),
-    [studentRows, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod]
+    [studentRows, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod, unitPriceByStudent]
   );
 
   /**
@@ -946,12 +964,14 @@ export default function AttendancePage() {
       const effective = { ...settingItem, ratio: baseRatio };
       // 수납액이 없으면 0으로 취급 — 수납 없이 급여 지급 불가
       const paid = paidAmountByStudent.get(student.id) ?? 0;
+      const unitPriceOverride = unitPriceByStudent.get(student.id);
       const salary = calculateStudentSalary(
         effective,
         salaryConfig.academyFee,
         classUnits,
         paid,
-        blogPenalty
+        blogPenalty,
+        unitPriceOverride
       );
       // 0도 맵에 기록해야 "수납 없음 → 실급여 0" 셀에 표시됨
       map.set(student.id, salary);
@@ -969,6 +989,7 @@ export default function AttendancePage() {
     tierOverrides,
     paidAmountByStudent,
     isDateInCurrentPeriod,
+    unitPriceByStudent,
   ]);
 
   const finalSalary = useMemo(

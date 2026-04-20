@@ -253,19 +253,27 @@ export async function syncTeacherSheet(
           }
         }
 
-        // payment_shares 누적 — 영어 강사 시트의 각 학생 행 J/K/L/O 열.
+        // payment_shares 누적 — 영어 강사 시트의 각 학생 행 J/K/L/M/O 열.
         // 부담임 학생의 부분 귀속액을 보존해 실급여 계산에 반영.
         // teacher_staff_id 는 **staff.id (teacherId)** 로 저장 — usePaymentShares
         // 조회 시 동일 키로 lookup.
+        //
+        // allocated_paid 원칙:
+        //   시트의 실급여 공식 = M열[12] 급여정산용 × (1-수수료) × 비율
+        //   → allocated_paid 는 salaryBase (M열) 를 우선, 없으면 paid (L열) 사용.
+        //   "학생 확인" 등 L열이 텍스트인 담임 행도 M열은 수업차수×단가로 계산되어 있어
+        //   급여 계산이 정확하다.
         if (entry.paymentInfo) {
           const className = (entry.tierName || "").trim();
+          const effectivePaid =
+            entry.paymentInfo.salaryBase ?? entry.paymentInfo.paid ?? 0;
           shares.push({
             student_id: match.id,
             month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
             teacher_staff_id: teacherId,
             class_name: className,
             allocated_charge: Math.floor(entry.paymentInfo.charge ?? 0),
-            allocated_paid: Math.floor(entry.paymentInfo.paid ?? 0),
+            allocated_paid: Math.floor(effectivePaid),
             allocated_units: entry.paymentInfo.units,
             unit_price: entry.paymentInfo.unitPrice,
             source: `sheet:${tab.sheetName}`,
