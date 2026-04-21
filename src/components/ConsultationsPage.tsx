@@ -8,7 +8,9 @@ import { useConsultations } from "@/hooks/useConsultations";
 import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
+import ConsultationSettings from "@/components/consultation/ConsultationSettings";
 import { useUserRole } from "@/hooks/useUserRole";
+import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 import type { Student, Teacher, Consultation } from "@/types";
 
@@ -173,7 +175,8 @@ export default function ConsultationsPage() {
   // 상담 상세 팝업 선택 상태
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
-  const { userRole, isTeacher } = useUserRole();
+  const { userRole, isTeacher, isAdmin } = useUserRole();
+  const { hiddenTeacherIds, toggleHidden } = useHiddenTeachers();
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
@@ -242,18 +245,24 @@ export default function ConsultationsPage() {
 
   // 담임 목록 (담임 학생이 1명 이상인 선생님만)
   const homerooms = useMemo(() => {
-    const result = Array.from(studentsByHomeroom.keys()).map((name) => {
-      const teacher = staffByKey.get(name);
-      const subjects = teacher?.subjects ?? [];
-      const subjectLabel = subjects.length > 0 ? subjects.map(toSubjectLabel).join("/") : "";
-      return {
-        name,
-        subject: subjectLabel,
-        studentCount: studentsByHomeroom.get(name)?.length ?? 0,
-      };
-    });
+    const result = Array.from(studentsByHomeroom.keys())
+      .map((name) => {
+        const teacher = staffByKey.get(name);
+        return { name, teacher };
+      })
+      // 설정에서 숨김 처리한 선생님 제외
+      .filter(({ teacher }) => !(teacher && hiddenTeacherIds.has(teacher.id)))
+      .map(({ name, teacher }) => {
+        const subjects = teacher?.subjects ?? [];
+        const subjectLabel = subjects.length > 0 ? subjects.map(toSubjectLabel).join("/") : "";
+        return {
+          name,
+          subject: subjectLabel,
+          studentCount: studentsByHomeroom.get(name)?.length ?? 0,
+        };
+      });
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [studentsByHomeroom, staffByKey]);
+  }, [studentsByHomeroom, staffByKey, hiddenTeacherIds]);
 
   const isAllView = selectedHomeroom === ALL_TEACHERS;
 
@@ -466,6 +475,15 @@ export default function ConsultationsPage() {
             onChange={(e) => setSelectedMonth(e.target.value)}
             className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
           />
+
+          {/* 관리자+: 담임 목록 표시 설정 */}
+          {isAdmin && (
+            <ConsultationSettings
+              teachers={teachers}
+              hiddenTeacherIds={hiddenTeacherIds}
+              onToggle={toggleHidden}
+            />
+          )}
         </div>
       </div>
 
