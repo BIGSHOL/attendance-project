@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Pagination from "./Pagination";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { toSubjectLabel } from "@/lib/labelMap";
 
 interface AuditLog {
   id: string;
@@ -67,10 +68,27 @@ const FIELD_LABELS: Record<string, string> = {
   blog_required: "블로그 의무",
   commission_days: "비율제 요일",
   admin_allowance: "행정수당",
+  admin_base_amount: "행정 기본급",
+  admin_tier_id: "행정 등급",
+  admin_tier_name: "행정 등급",
   ratios: "과목별 비율",
   base_amount: "기본 금액",
   base_salary: "기본급",
   final_salary: "최종 지급액",
+  blog_amount: "블로그 인센티브",
+  blog_rate: "블로그 인센티브(%)",
+  blog_type: "블로그 인센티브 유형",
+  retention_amount: "퇴원율 달성 수당",
+  retention_target_rate: "목표 퇴원율(%)",
+  academy_fee: "카드·행정 수수료(%)",
+  items: "급여 항목",
+  fixed_rate: "고정급 (1회)",
+  base_tuition: "기본 수업료",
+  ratio: "비율(%)",
+  teacher_ratios: "선생님별 비율",
+  incentives: "인센티브",
+  salary_config: "급여 설정",
+  effective_from: "적용 시작일",
   // 학생
   student_id: "학생",
   student_name: "학생명",
@@ -100,6 +118,24 @@ const FIELD_LABELS: Record<string, string> = {
   memo: "메모",
   teacher_staff_id: "담당 선생님",
   teacher_name: "담당 선생님명",
+  // payment_shares
+  allocated_paid: "귀속 납부액",
+  allocated_charge: "귀속 청구액",
+  allocated_units: "귀속 수업 수",
+  // 시트
+  sheet_url: "시트 URL",
+  sheet_id: "시트 ID",
+  last_synced_at: "마지막 동기화",
+  synced_by: "동기화 실행자",
+  // 등록/재학
+  enrollment_id: "등록ID",
+  class_days: "수업 요일",
+  schedule: "시간표",
+  on_hold: "휴원 여부",
+  days: "요일",
+  group: "반",
+  main_classes: "담임 수업",
+  slot_classes: "부담임 수업",
   // 출석
   teacher_id: "선생님ID",
   date: "날짜",
@@ -273,65 +309,116 @@ function FieldRow({
   );
 }
 
+// 대표 이름 후보 (insert/delete 요약에 쓸 식별자)
+const NAME_KEYS = [
+  "name",
+  "student_name",
+  "teacher_name",
+  "staff_name",
+  "title",
+  "email",
+  "class_name",
+  "tier_name",
+  "payment_name",
+];
+
+function summarize(changes: Record<string, unknown>, action: string): string {
+  if (action === "bulk") return "일괄 처리";
+  if (action === "insert" || action === "delete") {
+    const actionLabel = ACTION_LABELS[action] ?? action;
+    const snapshot = (changes.after || changes.before || {}) as Record<string, unknown>;
+    for (const key of NAME_KEYS) {
+      const v = snapshot[key];
+      if (v) return `${actionLabel} · ${formatValue(v, key)}`;
+    }
+    return actionLabel;
+  }
+  // update: { field: { from, to } }
+  const fields = Object.keys(changes);
+  if (fields.length === 0) return "수정";
+  const labels = fields.slice(0, 2).map(toFieldLabel);
+  const remaining = fields.length - labels.length;
+  return `${labels.join(", ")}${remaining > 0 ? ` 외 ${remaining}건` : ""} 수정`;
+}
+
 function ChangesCell({ changes, action }: { changes: Record<string, unknown>; action: string }) {
   const [expanded, setExpanded] = useState(false);
+  const summary = summarize(changes, action);
 
-  if (action === "bulk") {
+  if (!expanded) {
     return (
-      <div className="text-xs">
-        {Object.entries(changes).map(([k, v]) => (
-          <FieldRow key={k} field={k} value={v} />
-        ))}
+      <div className="flex items-center gap-2 text-xs">
+        <span className="truncate text-zinc-700 dark:text-zinc-300" title={summary}>
+          {summary}
+        </span>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex-shrink-0 text-blue-600 hover:underline dark:text-blue-400"
+        >
+          자세히
+        </button>
       </div>
     );
   }
 
-  if (action === "insert" || action === "delete") {
+  // 펼친 상태: 상세 렌더
+  let body: React.ReactNode;
+  if (action === "bulk") {
+    body = (
+      <>
+        {Object.entries(changes).map(([k, v]) => (
+          <FieldRow key={k} field={k} value={v} />
+        ))}
+      </>
+    );
+  } else if (action === "insert" || action === "delete") {
     const snapshot = (changes.after || changes.before || {}) as Record<string, unknown>;
-    // 중요 필드 우선, 저우선순위는 뒤로
-    const allEntries = Object.entries(snapshot).sort(([a], [b]) => {
+    const sorted = Object.entries(snapshot).sort(([a], [b]) => {
       const aLow = LOW_PRIORITY_FIELDS.has(a) ? 1 : 0;
       const bLow = LOW_PRIORITY_FIELDS.has(b) ? 1 : 0;
       return aLow - bLow;
     });
-    const visibleCount = 4;
-    const entries = expanded ? allEntries : allEntries.slice(0, visibleCount);
-    const remaining = allEntries.length - visibleCount;
-    return (
-      <div className="text-xs">
-        {entries.map(([k, v]) => (
+    body = (
+      <>
+        {sorted.map(([k, v]) => (
           <FieldRow key={k} field={k} value={v} muted={LOW_PRIORITY_FIELDS.has(k)} />
         ))}
-        {remaining > 0 && (
-          <button
-            onClick={() => setExpanded((x) => !x)}
-            className="mt-0.5 text-blue-600 hover:underline dark:text-blue-400"
-          >
-            {expanded ? "접기" : `+${remaining}개 더 보기`}
-          </button>
-        )}
+      </>
+    );
+  } else {
+    // update
+    const fields = Object.entries(changes) as [string, { from: unknown; to: unknown }][];
+    body = (
+      <div className="space-y-0.5">
+        {fields.map(([field, diff]) => (
+          <div key={field} className="flex flex-wrap items-baseline gap-1">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+              {toFieldLabel(field)}:
+            </span>
+            <span className="text-rose-600 line-through dark:text-rose-400">
+              {formatValue(diff?.from, field)}
+            </span>
+            <span className="text-zinc-400">→</span>
+            <span className="text-emerald-700 dark:text-emerald-400">
+              {formatValue(diff?.to, field)}
+            </span>
+          </div>
+        ))}
       </div>
     );
   }
 
-  // update: { field: { from, to } }
-  const fields = Object.entries(changes) as [string, { from: unknown; to: unknown }][];
   return (
-    <div className="space-y-0.5 text-xs">
-      {fields.map(([field, diff]) => (
-        <div key={field} className="flex flex-wrap items-baseline gap-1">
-          <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-            {toFieldLabel(field)}:
-          </span>
-          <span className="text-rose-600 line-through dark:text-rose-400">
-            {formatValue(diff?.from, field)}
-          </span>
-          <span className="text-zinc-400">→</span>
-          <span className="text-emerald-700 dark:text-emerald-400">
-            {formatValue(diff?.to, field)}
-          </span>
-        </div>
-      ))}
+    <div className="text-xs">
+      {body}
+      <button
+        type="button"
+        onClick={() => setExpanded(false)}
+        className="mt-1 text-blue-600 hover:underline dark:text-blue-400"
+      >
+        접기
+      </button>
     </div>
   );
 }

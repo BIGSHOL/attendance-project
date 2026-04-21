@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
@@ -9,6 +9,7 @@ import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
+import Pagination from "@/components/Pagination";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
@@ -400,6 +401,29 @@ export default function ConsultationsPage() {
       return a.name.localeCompare(b.name);
     });
   }, [scopedStudents, matrixByStudent]);
+
+  // 학생 목록 페이지네이션: 페이지 크기 = 월 일수 (좌측 날짜 행 수와 일치)
+  const pageSize = useMemo(() => {
+    const [y, m] = selectedMonth.split("-").map(Number);
+    return new Date(y, m, 0).getDate();
+  }, [selectedMonth]);
+  const [studentsPage, setStudentsPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(sortedStudents.length / pageSize));
+
+  useEffect(() => {
+    // 월/담임/과목 바뀌면 1페이지로 리셋
+    setStudentsPage(1);
+  }, [selectedMonth, selectedHomeroom]);
+
+  useEffect(() => {
+    // 현재 페이지가 전체 페이지 초과 시 조정
+    if (studentsPage > totalPages) setStudentsPage(totalPages);
+  }, [studentsPage, totalPages]);
+
+  const pagedStudents = useMemo(
+    () => sortedStudents.slice((studentsPage - 1) * pageSize, studentsPage * pageSize),
+    [sortedStudents, studentsPage, pageSize]
+  );
 
   const totalConsultations = scopedConsultations.length;
   const counseledStudentIds = new Set(scopedConsultations.map((c) => c.studentId));
@@ -799,7 +823,7 @@ export default function ConsultationsPage() {
                         return (
                           <tr
                             key={d}
-                            className={`border-b border-zinc-100 dark:border-zinc-800 ${
+                            className={`h-7 border-b border-zinc-100 dark:border-zinc-800 ${
                               isWeekend ? "bg-zinc-50/50 dark:bg-zinc-950/50" : ""
                             }`}
                           >
@@ -876,7 +900,7 @@ export default function ConsultationsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedStudents.map((s) => {
+                      {pagedStudents.map((s) => {
                         const bucket = matrixByStudent.get(s.id);
                         if (!bucket) return null;
                         const highlight = bucket.total >= 3;
@@ -886,7 +910,7 @@ export default function ConsultationsPage() {
                         return (
                           <tr
                             key={s.id}
-                            className={`border-b border-zinc-100 dark:border-zinc-800 ${
+                            className={`h-7 border-b border-zinc-100 dark:border-zinc-800 ${
                               nothing
                                 ? "bg-amber-50 dark:bg-amber-950/30"
                                 : highlight
@@ -909,7 +933,10 @@ export default function ConsultationsPage() {
                               {s.grade || "—"}
                             </td>
                             {isAllView && (
-                              <td className="px-2 py-1 text-zinc-500 whitespace-nowrap">
+                              <td
+                                className="max-w-[140px] truncate px-2 py-1 text-zinc-500"
+                                title={hr}
+                              >
                                 {hr}
                               </td>
                             )}
@@ -971,6 +998,24 @@ export default function ConsultationsPage() {
                     </tbody>
                   </table>
                 </div>
+                {/* 학생 목록 페이지네이션 — 좌측 날짜 수 기준 */}
+                {totalPages > 1 && (
+                  <div className="flex-shrink-0 border-t border-zinc-200 dark:border-zinc-800">
+                    <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span>
+                        {(studentsPage - 1) * pageSize + 1}–
+                        {Math.min(studentsPage * pageSize, sortedStudents.length)} /
+                        {" "}
+                        {sortedStudents.length}명
+                      </span>
+                      <Pagination
+                        currentPage={studentsPage}
+                        totalPages={totalPages}
+                        onPageChange={setStudentsPage}
+                      />
+                    </div>
+                  </div>
+                )}
               </section>
             </div>
           )}
