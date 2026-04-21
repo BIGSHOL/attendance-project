@@ -7,6 +7,7 @@ import { useStudents } from "@/hooks/useStudents";
 import { useConsultations } from "@/hooks/useConsultations";
 import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
+import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import type { Student, Teacher, Consultation } from "@/types";
 
 // ─── 헬퍼 ───────────────────────────────────────────
@@ -31,35 +32,91 @@ function daysInMonth(yyyyMM: string): string[] {
 }
 
 /**
- * 학생의 담임 선생님 이름 결정:
- *   1) mainClasses와 일치하는 enrollment의 teacher
- *   2) 없으면 첫 번째 active enrollment의 teacher
- *   3) 모두 없으면 null
+ * enrollment가 해당 월 범위 내에 active 상태인지 판정
+ *   startDate <= 월말 && (endDate 없음 || endDate >= 월초)
+ *   날짜 없으면 active 처리 (ijw-calander의 "재원중" 표시와 일관)
  */
-function getHomeroomTeacher(student: Student, staffByKey: Map<string, Teacher>): string | null {
-  if (!student.enrollments || student.enrollments.length === 0) return null;
+function isEnrollmentActiveInMonth(
+  e: { startDate?: string; endDate?: string },
+  monthStart: string,
+  monthEnd: string
+): boolean {
+  if (e.startDate && e.startDate > monthEnd) return false;
+  if (e.endDate && e.endDate < monthStart) return false;
+  return true;
+}
 
-  const mainClassSet = new Set(student.mainClasses || []);
-  const resolveTeacher = (e: Student["enrollments"] extends (infer U)[] | undefined ? U : never) => {
-    if (e.teacher) return e.teacher;
+/**
+ * 학생의 수업 담당 선생님 전체 목록 (중복 제거)
+ *   ijw-calander의 "담당" 개념과 일치 — 한 학생이 수학/영어 등 과목별로 여러 선생님 가짐
+ *   onHold 는 무시 (ijw-calander UI에선 "재원중"으로 표시되는 케이스 존재)
+ *   월 범위를 벗어난 enrollment만 제외
+ */
+function getTeachersOfStudent(
+  student: Student,
+  staffByKey: Map<string, Teacher>,
+  monthStart: string,
+  monthEnd: string
+): string[] {
+  if (!student.enrollments || student.enrollments.length === 0) return [];
+  const names = new Set<string>();
+  for (const e of student.enrollments) {
+    if (!isEnrollmentActiveInMonth(e, monthStart, monthEnd)) continue;
+    if (e.teacher) {
+      names.add(e.teacher);
+      continue;
+    }
     if (e.staffId) {
       const t = staffByKey.get(e.staffId);
-      if (t) return t.name;
+      if (t) names.add(t.name);
     }
-    return null;
-  };
-
-  const homeroomE = student.enrollments.find(
-    (e) => e.className && mainClassSet.has(e.className)
-  );
-  if (homeroomE) {
-    const t = resolveTeacher(homeroomE);
-    if (t) return t;
   }
+  return Array.from(names);
+}
 
-  // Fallback: 첫 번째 enrollment (onHold 아닌 것 우선)
-  const first = student.enrollments.find((e) => !e.onHold) || student.enrollments[0];
-  return resolveTeacher(first);
+/**
+ * 이름 문자열에서 가능한 모든 표기 추출
+ *   "정유진(Yoojin)" → ["정유진(Yoojin)", "정유진", "Yoojin"]
+ *   "Yoojin" → ["Yoojin"]
+ *   "정유진" → ["정유진"]
+ */
+function extractNameAliases(raw: string): string[] {
+  const s = (raw ?? "").trim();
+  if (!s) return [];
+  const result = new Set<string>([s]);
+  // "한글(영어)" 또는 "영어(한글)" 패턴
+  const m = s.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
+  if (m) {
+    result.add(m[1].trim());
+    result.add(m[2].trim());
+  }
+  // 괄호 내부만 있는 경우 제거한 버전
+  const stripped = s.replace(/\s*\([^)]*\)\s*/g, "").trim();
+  if (stripped) result.add(stripped);
+  return Array.from(result);
+}
+
+/**
+ * 상담자 이름(ijw-calander 포맷 포함)이 특정 선생님과 일치하는지
+ *   - "정유진(Yoojin)" 상담자 vs teacher.name="Yoojin" / englishName=undefined → 매치
+ *   - "Sarah" vs teacher.name="강보경" / englishName="Sarah" → 매치
+ *   - 정확 일치, 괄호 안/밖 모두 고려
+ */
+function matchesTeacher(
+  consultantName: string | undefined,
+  teacher: Teacher | undefined
+): boolean {
+  if (!consultantName || !teacher) return false;
+  const consultantAliases = new Set(
+    extractNameAliases(consultantName).map((n) => n.toLowerCase())
+  );
+  const teacherSources = [teacher.name, teacher.englishName].filter(Boolean) as string[];
+  for (const src of teacherSources) {
+    for (const alias of extractNameAliases(src)) {
+      if (consultantAliases.has(alias.toLowerCase())) return true;
+    }
+  }
+  return false;
 }
 
 function consultationSubjectLabel(c: Consultation): string {
@@ -92,6 +149,9 @@ export default function ConsultationsPage() {
     ALL_TEACHERS
   );
 
+  // 상담 상세 팝업 선택 상태
+  const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
+
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
@@ -116,28 +176,39 @@ export default function ConsultationsPage() {
     return m;
   }, [students]);
 
-  // 학생 ID → 담임 이름
-  const homeroomByStudent = useMemo(() => {
-    const m = new Map<string, string>();
+  // 선택된 월의 시작/종료 날짜 (enrollment active 판정용)
+  const monthBounds = useMemo(() => {
+    const [y, m] = selectedMonth.split("-").map(Number);
+    const last = new Date(y, m, 0).getDate();
+    return {
+      start: `${selectedMonth}-01`,
+      end: `${selectedMonth}-${String(last).padStart(2, "0")}`,
+    };
+  }, [selectedMonth]);
+
+  // 학생 ID → 담당 선생님 배열 (한 학생이 여러 과목이면 여러 선생님)
+  const teachersByStudent = useMemo(() => {
+    const m = new Map<string, string[]>();
     for (const s of students) {
-      const h = getHomeroomTeacher(s, staffByKey);
-      if (h) m.set(s.id, h);
+      const list = getTeachersOfStudent(s, staffByKey, monthBounds.start, monthBounds.end);
+      if (list.length > 0) m.set(s.id, list);
     }
     return m;
-  }, [students, staffByKey]);
+  }, [students, staffByKey, monthBounds]);
 
-  // 담임별 학생 목록 (active만, 상담 현황 집계 대상)
+  // 담임별 학생 목록 (active만) — 학생은 여러 담임 아래 중복 등록 가능
   const studentsByHomeroom = useMemo(() => {
     const m = new Map<string, Student[]>();
     for (const s of students) {
       if (s.status !== "active") continue;
-      const h = homeroomByStudent.get(s.id);
-      if (!h) continue;
-      if (!m.has(h)) m.set(h, []);
-      m.get(h)!.push(s);
+      const teachers = teachersByStudent.get(s.id) ?? [];
+      for (const t of teachers) {
+        if (!m.has(t)) m.set(t, []);
+        m.get(t)!.push(s);
+      }
     }
     return m;
-  }, [students, homeroomByStudent]);
+  }, [students, teachersByStudent]);
 
   // 담임 목록 (담임 학생이 1명 이상인 선생님만)
   const homerooms = useMemo(() => {
@@ -157,9 +228,20 @@ export default function ConsultationsPage() {
   const isAllView = selectedHomeroom === ALL_TEACHERS;
 
   // 담임 필터 적용한 scoped 학생 목록
+  //   - 전체 뷰: 한 학생이 여러 담임 아래에 있어도 1번만 (unique by id)
+  //   - 특정 담임: 그 담임 학생들만
   const scopedStudents = useMemo(() => {
     if (isAllView) {
-      return Array.from(studentsByHomeroom.values()).flat();
+      const seen = new Set<string>();
+      const out: Student[] = [];
+      for (const list of studentsByHomeroom.values()) {
+        for (const s of list) {
+          if (seen.has(s.id)) continue;
+          seen.add(s.id);
+          out.push(s);
+        }
+      }
+      return out;
     }
     return studentsByHomeroom.get(selectedHomeroom) ?? [];
   }, [isAllView, selectedHomeroom, studentsByHomeroom]);
@@ -174,10 +256,21 @@ export default function ConsultationsPage() {
 
   const scopedConsultations = useMemo(() => {
     if (isAllView) return consultations;
+    const teacher = staffByKey.get(selectedHomeroom);
     return consultations.filter(
-      (c) => scopedStudentIds.has(c.studentId) && c.consultantName === selectedHomeroom
+      (c) =>
+        scopedStudentIds.has(c.studentId) &&
+        (matchesTeacher(c.consultantName, teacher) ||
+          // 선생님 정보가 staff에 없을 경우 이름 alias fallback
+          extractNameAliases(selectedHomeroom)
+            .map((n) => n.toLowerCase())
+            .some((n) =>
+              extractNameAliases(c.consultantName ?? "")
+                .map((x) => x.toLowerCase())
+                .includes(n)
+            ))
     );
-  }, [consultations, isAllView, selectedHomeroom, scopedStudentIds]);
+  }, [consultations, isAllView, selectedHomeroom, scopedStudentIds, staffByKey]);
 
   // 일자별 상담 수 집계
   const consultationsByDate = useMemo(() => {
@@ -240,14 +333,22 @@ export default function ConsultationsPage() {
   }, []);
 
   // 담임별 요약 (전체 뷰에서만 사용)
-  //   - 각 담임의 "자기 학생을 자기가 상담" 기준 (consultantName === h.name)
+  //   - 각 담임의 "자기 학생을 자기가 상담" 기준
+  //   - consultantName은 "정유진(Yoojin)" 같은 포맷 가능 → matchesTeacher로 유연 매칭
   const homeroomSummaries = useMemo(() => {
     return homerooms.map((h) => {
       const hrStudents = studentsByHomeroom.get(h.name) ?? [];
       const idSet = new Set(hrStudents.map((s) => s.id));
-      const cs = consultations.filter(
-        (c) => idSet.has(c.studentId) && c.consultantName === h.name
-      );
+      const teacher = staffByKey.get(h.name);
+      const nameLowered = h.name.toLowerCase();
+      const cs = consultations.filter((c) => {
+        if (!idSet.has(c.studentId)) return false;
+        if (matchesTeacher(c.consultantName, teacher)) return true;
+        // fallback: alias 비교
+        return extractNameAliases(c.consultantName ?? "")
+          .map((n) => n.toLowerCase())
+          .includes(nameLowered);
+      });
       const counseled = new Set(cs.map((c) => c.studentId));
       const heavy = hrStudents.filter(
         (s) => cs.filter((c) => c.studentId === s.id).length >= 3
@@ -582,7 +683,8 @@ export default function ConsultationsPage() {
                         if (!bucket) return null;
                         const highlight = bucket.total >= 3;
                         const nothing = bucket.total === 0;
-                        const hr = homeroomByStudent.get(s.id) ?? "—";
+                        const hrList = teachersByStudent.get(s.id) ?? [];
+                        const hr = hrList.length > 0 ? hrList.join(", ") : "—";
                         return (
                           <tr
                             key={s.id}
@@ -640,18 +742,28 @@ export default function ConsultationsPage() {
                                 </span>
                               ) : (
                                 <div className="flex flex-wrap gap-1">
-                                  {bucket.dates.map((d) => (
-                                    <span
-                                      key={d}
-                                      className={`inline-block rounded-sm px-1.5 py-0.5 text-[10px] tabular-nums ${
-                                        highlight
-                                          ? "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300"
-                                          : "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-                                      }`}
-                                    >
-                                      {d.slice(5).replace("-", "/")}
-                                    </span>
-                                  ))}
+                                  {bucket.dates.map((d) => {
+                                    // 해당 학생 × 날짜의 상담 찾기 (여러 건이면 첫 번째)
+                                    const match = scopedConsultations.find(
+                                      (c) => c.studentId === s.id && c.date === d
+                                    );
+                                    return (
+                                      <button
+                                        key={d}
+                                        type="button"
+                                        onClick={() => match && setSelectedConsultation(match)}
+                                        disabled={!match}
+                                        title={match ? "상세 보기" : ""}
+                                        className={`inline-block rounded-sm px-1.5 py-0.5 text-[10px] tabular-nums transition-colors ${
+                                          highlight
+                                            ? "bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/50 dark:text-red-300 dark:hover:bg-red-900/70"
+                                            : "bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-300 dark:hover:bg-blue-900/70"
+                                        } ${!match ? "opacity-60" : "cursor-pointer"}`}
+                                      >
+                                        {d.slice(5).replace("-", "/")}
+                                      </button>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </td>
@@ -705,8 +817,9 @@ export default function ConsultationsPage() {
                       .map((c) => (
                         <tr
                           key={c.id}
-                          className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                          title={c.content}
+                          onClick={() => setSelectedConsultation(c)}
+                          className="cursor-pointer border-b border-zinc-100 transition-colors hover:bg-blue-50 dark:border-zinc-800 dark:hover:bg-blue-950/30"
+                          title="클릭하여 상세 보기"
                         >
                           <td className="px-2 py-1 whitespace-nowrap text-zinc-700 dark:text-zinc-300 tabular-nums">
                             {formatDateKorean(c.date)}
@@ -767,6 +880,12 @@ export default function ConsultationsPage() {
           </div>
         </div>
       )}
+
+      {/* 상담 상세 팝업 */}
+      <ConsultationDetailModal
+        consultation={selectedConsultation}
+        onClose={() => setSelectedConsultation(null)}
+      />
     </div>
   );
 }

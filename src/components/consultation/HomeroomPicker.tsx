@@ -105,26 +105,51 @@ export default function HomeroomPicker({
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  // fixed 팝오버 위치 (viewport 기준)
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const isAll = selected === allValue;
   const sections = groupBySubject(homerooms);
   const totalStudents = homerooms.reduce((sum, h) => sum + h.studentCount, 0);
   const selectedHr = !isAll ? homerooms.find((h) => h.name === selected) : undefined;
 
+  // 팝오버 위치 계산 (버튼 하단 오른쪽 정렬)
+  const updatePosition = () => {
+    const btn = buttonRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    setPos({
+      top: r.bottom + 4,
+      right: Math.max(8, window.innerWidth - r.right),
+    });
+  };
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    updatePosition();
     const onClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
+    const onScroll = () => updatePosition();
     document.addEventListener("mousedown", onClick);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
     return () => {
       document.removeEventListener("mousedown", onClick);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
     };
   }, [open]);
 
@@ -137,6 +162,7 @@ export default function HomeroomPicker({
     <div ref={rootRef} className="relative">
       {/* 트리거 버튼 */}
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex min-w-[200px] items-center justify-between gap-2 rounded-sm border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-bold text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
@@ -180,9 +206,13 @@ export default function HomeroomPicker({
         </svg>
       </button>
 
-      {/* 팝오버 */}
-      {open && (
-        <div className="absolute right-0 top-[calc(100%+4px)] z-50 flex max-h-[min(560px,calc(100vh-120px))] w-[320px] flex-col border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+      {/* 팝오버 — viewport fixed. 부모의 overflow/stacking에 갇히지 않도록 */}
+      {open && pos && (
+        <div
+          ref={popoverRef}
+          style={{ top: pos.top, right: pos.right }}
+          className="fixed z-[100] flex max-h-[min(560px,calc(100vh-120px))] w-[320px] flex-col border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+        >
           {/* 전체 담임 (옵션) */}
           {showAll && (
             <button
