@@ -547,7 +547,6 @@ export default function AuditLogViewer() {
               <th className="px-3 py-2 text-left whitespace-nowrap">사용자</th>
               <th className="px-3 py-2 text-left whitespace-nowrap">테이블</th>
               <th className="px-3 py-2 text-left whitespace-nowrap">동작</th>
-              <th className="px-3 py-2 text-left whitespace-nowrap">대상 ID</th>
               <th className="px-3 py-2 text-left">변경 내용</th>
             </tr>
           </thead>
@@ -562,7 +561,6 @@ export default function AuditLogViewer() {
                   </td>
                   <td className="px-3 py-2"><Skeleton className="h-3 w-16" /></td>
                   <td className="px-3 py-2"><Skeleton className="h-4 w-10" /></td>
-                  <td className="px-3 py-2"><Skeleton className="h-3 w-20" /></td>
                   <td className="px-3 py-2">
                     <Skeleton className="mb-1 h-3 w-full" />
                     <Skeleton className="h-3 w-4/5" />
@@ -571,7 +569,7 @@ export default function AuditLogViewer() {
               ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-zinc-500">
+                <td colSpan={5} className="px-3 py-8 text-center text-zinc-500">
                   기록이 없습니다
                 </td>
               </tr>
@@ -603,9 +601,6 @@ export default function AuditLogViewer() {
                     >
                       {ACTION_LABELS[r.action] || r.action}
                     </span>
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-zinc-500">
-                    {r.record_id.length > 12 ? `…${r.record_id.slice(-12)}` : r.record_id}
                   </td>
                   <td className="px-3 py-2">
                     <ChangesCell changes={r.changes} action={r.action} />

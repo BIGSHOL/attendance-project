@@ -207,16 +207,6 @@ export default function ConsultationDetailModal({ consultation, onClose }: Props
             </div>
           )}
 
-          {/* 메타 */}
-          <div className="mt-4 border-t border-zinc-100 pt-2 text-[10px] text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
-            <div>
-              작성 {new Date(c.createdAt).toLocaleString("ko-KR")}
-              {c.updatedAt !== c.createdAt && (
-                <> · 수정 {new Date(c.updatedAt).toLocaleString("ko-KR")}</>
-              )}
-            </div>
-            <div className="mt-0.5">ijw-calander 상담 #{c.id}</div>
-          </div>
         </div>
 
         {/* 푸터 */}
