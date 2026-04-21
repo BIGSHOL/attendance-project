@@ -203,14 +203,14 @@ export default function HomeroomPicker({
         </svg>
       </button>
 
-      {/* 팝오버 — viewport fixed, 트리거 버튼과 같은 너비(최소 240px) */}
+      {/* 팝오버 — viewport fixed, 트리거와 정확히 같은 너비 */}
       {open && pos && (
         <div
           ref={popoverRef}
           style={{
             top: pos.top,
             right: pos.right,
-            minWidth: Math.max(pos.width, 240),
+            width: pos.width,
           }}
           className="fixed z-[100] flex max-h-[min(560px,calc(100vh-120px))] flex-col border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
         >
