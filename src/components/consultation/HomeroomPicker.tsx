@@ -8,6 +8,12 @@ export interface HomeroomOption {
   studentCount: number;
 }
 
+// selected 값 규약:
+//   "__all__"         전체
+//   "__subject:수학"  과목 전체 선택 (담임별 뷰 대신 과목 묶음 뷰)
+//   "권나현"          특정 담임명
+export const SUBJECT_PREFIX = "__subject:";
+
 interface Props {
   homerooms: HomeroomOption[];
   selected: string;      // ALL_VALUE 또는 담임명
@@ -110,8 +116,16 @@ export default function HomeroomPicker({
   // fixed 팝오버 위치 + 트리거 너비 (viewport 기준)
   const [pos, setPos] = useState<{ top: number; right: number; width: number } | null>(null);
   const isAll = selected === allValue;
+  const isSubjectSelection = selected.startsWith(SUBJECT_PREFIX);
+  const selectedSubjectLabel = isSubjectSelection ? selected.slice(SUBJECT_PREFIX.length) : "";
   const sections = groupBySubject(homerooms);
-  const selectedHr = !isAll ? homerooms.find((h) => h.name === selected) : undefined;
+  const selectedSection = isSubjectSelection
+    ? sections.find((s) => s.label === selectedSubjectLabel)
+    : undefined;
+  const selectedHr =
+    !isAll && !isSubjectSelection
+      ? homerooms.find((h) => h.name === selected)
+      : undefined;
 
   // 팝오버 위치 + 너비 계산 — 트리거 버튼과 동일 너비·오른쪽 정렬
   const updatePosition = () => {
@@ -173,6 +187,18 @@ export default function HomeroomPicker({
               <span>{allLabel}</span>
               <span className="font-normal text-zinc-500 dark:text-zinc-400">
                 · {homerooms.length}명
+              </span>
+            </>
+          ) : isSubjectSelection && selectedSection ? (
+            <>
+              <span>전체</span>
+              <span
+                className={`inline-block rounded-sm px-1.5 py-0.5 text-[9px] font-bold leading-none ${getSubjectColor(selectedSubjectLabel).bg} ${getSubjectColor(selectedSubjectLabel).text}`}
+              >
+                {selectedSubjectLabel}
+              </span>
+              <span className="font-normal text-zinc-500 dark:text-zinc-400">
+                · 담임 {selectedSection.teachers.length}명
               </span>
             </>
           ) : selectedHr ? (
@@ -246,9 +272,39 @@ export default function HomeroomPicker({
                   : section.key === "__none__"
                     ? NONE_COLOR
                     : getSubjectColor(section.label);
+              // 과목 단위 선택: 단일 과목 섹션만 지원 (복수·미지정 제외)
+              const canSelectSection =
+                section.key !== "__multi__" && section.key !== "__none__";
+              const sectionSelected =
+                isSubjectSelection && selectedSubjectLabel === section.label;
               return (
                 <div key={section.key}>
-                  <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-zinc-200 bg-zinc-100/95 px-3 py-1.5 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/95">
+                  <button
+                    type="button"
+                    onClick={
+                      canSelectSection
+                        ? () => pick(`${SUBJECT_PREFIX}${section.label}`)
+                        : undefined
+                    }
+                    disabled={!canSelectSection}
+                    className={`sticky top-0 z-10 flex w-full items-center gap-2 border-b border-zinc-200 px-3 py-1.5 text-left backdrop-blur-sm dark:border-zinc-800 ${
+                      sectionSelected
+                        ? "bg-blue-50/95 dark:bg-blue-950/60"
+                        : "bg-zinc-100/95 dark:bg-zinc-950/95"
+                    } ${
+                      canSelectSection
+                        ? "cursor-pointer hover:bg-zinc-200/80 dark:hover:bg-zinc-800/80"
+                        : "cursor-default"
+                    }`}
+                    title={
+                      canSelectSection
+                        ? `${section.label} 전체 선택`
+                        : undefined
+                    }
+                  >
+                    {sectionSelected && (
+                      <CheckIcon className="h-3 w-3 flex-shrink-0 text-blue-600 dark:text-blue-400" />
+                    )}
                     <span
                       className={`inline-block rounded-sm px-1.5 py-0.5 text-[10px] font-bold leading-none ${color.bg} ${color.text}`}
                     >
@@ -257,7 +313,12 @@ export default function HomeroomPicker({
                     <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                       담임 {section.teachers.length}명
                     </span>
-                  </div>
+                    {canSelectSection && (
+                      <span className="ml-auto text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                        전체 선택
+                      </span>
+                    )}
+                  </button>
                   {section.teachers.map((t) => {
                     const isSelected = selected === t.name;
                     return (

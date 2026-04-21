@@ -6,7 +6,7 @@ import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
 import { useConsultations } from "@/hooks/useConsultations";
 import { toSubjectLabel } from "@/lib/labelMap";
-import HomeroomPicker from "@/components/consultation/HomeroomPicker";
+import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -271,9 +271,22 @@ export default function ConsultationsPage() {
   }, [studentsByHomeroom, staffByKey, hiddenTeacherIds, hideUnassignedSubject]);
 
   const isAllView = selectedHomeroom === ALL_TEACHERS;
+  const isSubjectView = selectedHomeroom.startsWith(SUBJECT_PREFIX);
+  const selectedSubject = isSubjectView
+    ? selectedHomeroom.slice(SUBJECT_PREFIX.length)
+    : "";
+
+  // 과목 뷰에서 대상이 되는 담임 이름 목록
+  const subjectTeacherNames = useMemo(() => {
+    if (!isSubjectView) return [] as string[];
+    return homerooms
+      .filter((h) => h.subject === selectedSubject)
+      .map((h) => h.name);
+  }, [isSubjectView, selectedSubject, homerooms]);
 
   // 담임 필터 적용한 scoped 학생 목록
   //   - 전체 뷰: 한 학생이 여러 담임 아래에 있어도 1번만 (unique by id)
+  //   - 과목 뷰: 해당 과목 담임들의 학생 합집합 (unique)
   //   - 특정 담임: 그 담임 학생들만
   const scopedStudents = useMemo(() => {
     if (isAllView) {
@@ -288,12 +301,25 @@ export default function ConsultationsPage() {
       }
       return out;
     }
+    if (isSubjectView) {
+      const seen = new Set<string>();
+      const out: Student[] = [];
+      for (const name of subjectTeacherNames) {
+        for (const s of studentsByHomeroom.get(name) ?? []) {
+          if (seen.has(s.id)) continue;
+          seen.add(s.id);
+          out.push(s);
+        }
+      }
+      return out;
+    }
     return studentsByHomeroom.get(selectedHomeroom) ?? [];
-  }, [isAllView, selectedHomeroom, studentsByHomeroom]);
+  }, [isAllView, isSubjectView, selectedHomeroom, subjectTeacherNames, studentsByHomeroom]);
 
   // 담임 필터 적용한 상담 목록
   //   - 전체 뷰: 모든 상담
-  //   - 특정 담임: 담임 학생 × 상담자 === 담임 (둘 다 해당하는 것만)
+  //   - 과목 뷰: 해당 과목 담임들이 한 상담만 (학생 × 상담자 교집합)
+  //   - 특정 담임: 담임 학생 × 상담자 === 담임
   const scopedStudentIds = useMemo(
     () => new Set(scopedStudents.map((s) => s.id)),
     [scopedStudents]
@@ -301,6 +327,27 @@ export default function ConsultationsPage() {
 
   const scopedConsultations = useMemo(() => {
     if (isAllView) return consultations;
+
+    if (isSubjectView) {
+      // 해당 과목 담임들의 staff 객체 & alias 집합
+      const teacherObjs = subjectTeacherNames
+        .map((n) => staffByKey.get(n))
+        .filter((t): t is Teacher => !!t);
+      const nameLowerAliases = new Set(
+        subjectTeacherNames.flatMap((n) =>
+          extractNameAliases(n).map((x) => x.toLowerCase())
+        )
+      );
+      return consultations.filter((c) => {
+        if (!scopedStudentIds.has(c.studentId)) return false;
+        if (teacherObjs.some((t) => matchesTeacher(c.consultantName, t))) return true;
+        // fallback alias 비교
+        return extractNameAliases(c.consultantName ?? "")
+          .map((n) => n.toLowerCase())
+          .some((x) => nameLowerAliases.has(x));
+      });
+    }
+
     const teacher = staffByKey.get(selectedHomeroom);
     return consultations.filter(
       (c) =>
@@ -315,7 +362,7 @@ export default function ConsultationsPage() {
                 .includes(n)
             ))
     );
-  }, [consultations, isAllView, selectedHomeroom, scopedStudentIds, staffByKey]);
+  }, [consultations, isAllView, isSubjectView, selectedHomeroom, subjectTeacherNames, scopedStudentIds, staffByKey]);
 
   // 일자별 상담 수 집계
   const consultationsByDate = useMemo(() => {
