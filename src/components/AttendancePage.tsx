@@ -34,6 +34,7 @@ import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth, isDateValidForSt
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
+import { SkeletonTable } from "@/components/ui/Skeleton";
 import { CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
@@ -217,9 +218,10 @@ export default function AttendancePage() {
     []
   );
 
-  // 선생님 담당 학생 수 계산
+  // 선생님 담당 학생 수 계산 (선택된 연/월 기준)
+  //   - 실제 출석부 표시 학생 수와 일치시키기 위해 filterStudentsByMonth 적용
+  //   - 0숨김 토글 / 신입·퇴원 필터는 화면 단위라 제외 (기본 상태와 드롭다운 수 일치가 목적)
   // 키(id/name/englishName) → teacher[] 역인덱스를 만들고 enrollment 당 한 번만 탐색
-  // (student × teacher 중첩 루프 → O(students × enrollments) 로 축소)
   const teacherStudentCount = useMemo(() => {
     const keyToTeachers = new Map<string, Teacher[]>();
     const pushKey = (k: string | undefined, t: Teacher) => {
@@ -234,8 +236,10 @@ export default function AttendancePage() {
       pushKey(t.englishName, t);
     }
 
+    const monthActive = filterStudentsByMonth(allStudents, year, month);
+
     const counts = new Map<string, Set<string>>();
-    for (const s of allStudents) {
+    for (const s of monthActive) {
       if (!s.enrollments) continue;
       const matchedTeacherIds = new Set<string>();
       for (const e of s.enrollments) {
@@ -262,7 +266,7 @@ export default function AttendancePage() {
     const map = new Map<string, number>();
     for (const t of teachers) map.set(t.id, counts.get(t.id)?.size || 0);
     return map;
-  }, [teachers, allStudents]);
+  }, [teachers, allStudents, year, month]);
 
   // 시트 동기화 상태 + F열 tier 오버라이드
   const { sheets: teacherSheets, markSynced } = useTeacherSheets();
@@ -1612,8 +1616,8 @@ export default function AttendancePage() {
       {/* 출석 테이블 */}
       <div className="flex-1 min-h-0 overflow-auto" style={{ scrollbarGutter: "stable" }}>
         {loading ? (
-          <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">
-            불러오는 중...
+          <div className="p-3">
+            <SkeletonTable rows={15} cols={12} />
           </div>
         ) : !selectedTeacherId ? (
           <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">

@@ -7,6 +7,7 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { toStatusLabel, toSubjectLabel } from "@/lib/labelMap";
 import Pagination from "./Pagination";
+import { Skeleton, SkeletonTable } from "@/components/ui/Skeleton";
 
 const PAGE_SIZE = 20;
 
@@ -90,7 +91,22 @@ export default function StudentList() {
   const handleStatusFilter = (v: string) => { setStatusFilter(v); setPage(1); };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">불러오는 중...</div>;
+    return (
+      <div className="mx-auto max-w-4xl space-y-4">
+        <Skeleton className="h-6 w-40" />
+        <div className="flex gap-3">
+          <Skeleton className="h-9 w-40" />
+          <Skeleton className="h-9 w-28" />
+        </div>
+        <div className="flex gap-2">
+          <Skeleton className="h-6 w-16" />
+          <Skeleton className="h-6 w-14" />
+          <Skeleton className="h-6 w-14" />
+          <Skeleton className="h-6 w-14" />
+        </div>
+        <SkeletonTable rows={10} cols={7} />
+      </div>
+    );
   }
 
   return (

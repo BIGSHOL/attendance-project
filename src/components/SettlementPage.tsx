@@ -27,6 +27,7 @@ import {
   getEffectiveRatio,
 } from "@/lib/salary";
 import { toSubjectLabel } from "@/lib/labelMap";
+import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 
 export default function SettlementPage() {
   const now = new Date();
@@ -655,7 +656,28 @@ export default function SettlementPage() {
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">불러오는 중...</div>;
+    return (
+      <div className="mx-auto max-w-6xl space-y-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-6 w-40" />
+          <div className="flex gap-1">
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-28" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Skeleton className="h-7 w-24" />
+          <Skeleton className="h-7 w-24" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonKpi key={i} />
+          ))}
+        </div>
+        <SkeletonTable rows={12} cols={8} />
+      </div>
+    );
   }
 
   return (

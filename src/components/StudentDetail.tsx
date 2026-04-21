@@ -7,6 +7,7 @@ import { useStudents } from "@/hooks/useStudents";
 import { useStaff } from "@/hooks/useStaff";
 import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
 import { toSubjectLabel } from "@/lib/labelMap";
+import { Skeleton, SkeletonCard, SkeletonTable } from "@/components/ui/Skeleton";
 import type { Student } from "@/types";
 
 interface AttendanceRow {
@@ -176,7 +177,24 @@ export default function StudentDetail({ studentId }: Props) {
   const totalPaid = monthPayments.reduce((s, p) => s + p.paid_amount, 0);
 
   if (studentLoading) {
-    return <div className="text-sm text-zinc-400">불러오는 중...</div>;
+    return (
+      <div className="mx-auto max-w-4xl space-y-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-7 w-40" />
+          <div className="flex gap-1">
+            <Skeleton className="h-8 w-8" />
+            <Skeleton className="h-8 w-28" />
+            <Skeleton className="h-8 w-8" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <SkeletonCard key={i} lines={2} />
+          ))}
+        </div>
+        <SkeletonTable rows={6} cols={6} />
+      </div>
+    );
   }
 
   if (!student) {

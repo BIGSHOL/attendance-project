@@ -9,6 +9,7 @@ import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import { useUserRole } from "@/hooks/useUserRole";
+import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 import type { Student, Teacher, Consultation } from "@/types";
 
 // ─── 헬퍼 ───────────────────────────────────────────
@@ -450,7 +451,21 @@ export default function ConsultationsPage() {
       </div>
 
       {/* ─── 탭: 상담 현황 ─── */}
-      {activeTab === "consultation" && (
+      {activeTab === "consultation" && loading && homerooms.length === 0 && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonKpi key={i} />
+            ))}
+          </div>
+          <SkeletonTable rows={6} cols={8} />
+          <div className="grid grid-cols-[200px_1fr] gap-3">
+            <SkeletonTable rows={15} cols={2} />
+            <SkeletonTable rows={10} cols={6} />
+          </div>
+        </div>
+      )}
+      {activeTab === "consultation" && !(loading && homerooms.length === 0) && (
         <>
           {/* KPI 카드 */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">

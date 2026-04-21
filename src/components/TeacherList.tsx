@@ -16,6 +16,7 @@ import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { toRoleLabel, toSubjectLabel } from "@/lib/labelMap";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import Pagination from "./Pagination";
+import { Skeleton, SkeletonTable } from "@/components/ui/Skeleton";
 
 const PAGE_SIZE = 20;
 
@@ -380,7 +381,21 @@ export default function TeacherList() {
   const handleSearch = (v: string) => { setSearch(v); setPage(1); };
 
   if (loading || studentsLoading || attendanceLoading) {
-    return <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">불러오는 중...</div>;
+    return (
+      <div className="mx-auto max-w-6xl space-y-4">
+        <Skeleton className="h-6 w-40" />
+        <div className="flex gap-3">
+          <Skeleton className="h-9 w-56" />
+          <Skeleton className="h-9 w-32" />
+        </div>
+        <div className="flex gap-2">
+          <Skeleton className="h-6 w-16" />
+          <Skeleton className="h-6 w-14" />
+          <Skeleton className="h-6 w-14" />
+        </div>
+        <SkeletonTable rows={10} cols={7} />
+      </div>
+    );
   }
 
   return (

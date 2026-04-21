@@ -14,6 +14,7 @@ import { toSubjectLabel } from "@/lib/labelMap";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import { getEffectiveRatio } from "@/lib/salary";
 import { INITIAL_SALARY_CONFIG } from "@/types";
+import { Skeleton, SkeletonCard, SkeletonTable } from "@/components/ui/Skeleton";
 import type { PaymentLite } from "@/lib/studentPaymentMatcher";
 
 interface AttendanceRow {
@@ -233,7 +234,24 @@ export default function TeacherDetail({ teacherId }: Props) {
   }, [studentRows]);
 
   if (staffLoading || studentsLoading) {
-    return <div className="text-sm text-zinc-400">불러오는 중...</div>;
+    return (
+      <div className="mx-auto max-w-4xl space-y-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-7 w-40" />
+          <div className="flex gap-1">
+            <Skeleton className="h-8 w-8" />
+            <Skeleton className="h-8 w-28" />
+            <Skeleton className="h-8 w-8" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonCard key={i} lines={2} />
+          ))}
+        </div>
+        <SkeletonTable rows={8} cols={6} />
+      </div>
+    );
   }
 
   if (!teacher) {

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Pagination from "./Pagination";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 interface AuditLog {
   id: string;
@@ -464,13 +465,23 @@ export default function AuditLogViewer() {
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {loading && (
-              <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-zinc-500">
-                  로드 중...
-                </td>
-              </tr>
-            )}
+            {loading &&
+              Array.from({ length: 10 }).map((_, i) => (
+                <tr key={`skel-${i}`} className="align-top">
+                  <td className="px-3 py-2"><Skeleton className="h-3 w-20" /></td>
+                  <td className="px-3 py-2">
+                    <Skeleton className="mb-1 h-3 w-24" />
+                    <Skeleton className="h-2.5 w-32" />
+                  </td>
+                  <td className="px-3 py-2"><Skeleton className="h-3 w-16" /></td>
+                  <td className="px-3 py-2"><Skeleton className="h-4 w-10" /></td>
+                  <td className="px-3 py-2"><Skeleton className="h-3 w-20" /></td>
+                  <td className="px-3 py-2">
+                    <Skeleton className="mb-1 h-3 w-full" />
+                    <Skeleton className="h-3 w-4/5" />
+                  </td>
+                </tr>
+              ))}
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-3 py-8 text-center text-zinc-500">

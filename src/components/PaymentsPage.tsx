@@ -9,6 +9,7 @@ import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { type PaymentRow } from "@/lib/parsePaymentExcel";
+import { SkeletonTable } from "@/components/ui/Skeleton";
 
 interface Payment {
   id: string;
@@ -476,7 +477,7 @@ export default function PaymentsPage() {
       {/* 테이블 */}
       <div className="mt-3 overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         {loading ? (
-          <div className="p-8 text-center text-sm text-zinc-400">불러오는 중...</div>
+          <SkeletonTable rows={10} cols={9} withHeader={false} className="border-0" />
         ) : (
           <table className="min-w-full text-sm [&_td]:border-r [&_td]:border-zinc-200 [&_th]:border-r [&_th]:border-zinc-300 [&_th]:whitespace-nowrap">
             <thead>
