@@ -49,10 +49,33 @@ function isEnrollmentActiveInMonth(
 }
 
 /**
- * 학생의 수업 담당 선생님 전체 목록 (중복 제거)
+ * 임의 문자열(ID / name / englishName / "한글(영어)" 등)에서 staff 객체를 찾아
+ * canonical name (staff.name) 을 반환. 실패 시 원본 문자열.
+ *   - "박나연(Jenny)" 와 "Jenny" 같은 다른 표기를 한 선생님으로 통합하기 위해
+ */
+function resolveCanonicalTeacherName(
+  raw: string | undefined,
+  staffByKey: Map<string, Teacher>
+): string | null {
+  if (!raw) return null;
+  // 직접 매칭
+  const direct = staffByKey.get(raw);
+  if (direct) return direct.name;
+  // alias 파싱 후 각각 시도
+  for (const alias of extractNameAliases(raw)) {
+    const hit = staffByKey.get(alias);
+    if (hit) return hit.name;
+  }
+  return raw; // staff 에 없는 이름이면 그대로
+}
+
+/**
+ * 학생의 수업 담당 선생님 전체 목록 (canonical name 기준, 중복 제거)
  *   ijw-calander의 "담당" 개념과 일치 — 한 학생이 수학/영어 등 과목별로 여러 선생님 가짐
  *   onHold 는 무시 (ijw-calander UI에선 "재원중"으로 표시되는 케이스 존재)
  *   월 범위를 벗어난 enrollment만 제외
+ *   enrollment.teacher 에 "박나연(Jenny)" / "Jenny" 처럼 다른 표기가 섞여 있어도
+ *   staff 의 canonical name 으로 통합
  */
 function getTeachersOfStudent(
   student: Student,
@@ -64,14 +87,10 @@ function getTeachersOfStudent(
   const names = new Set<string>();
   for (const e of student.enrollments) {
     if (!isEnrollmentActiveInMonth(e, monthStart, monthEnd)) continue;
-    if (e.teacher) {
-      names.add(e.teacher);
-      continue;
-    }
-    if (e.staffId) {
-      const t = staffByKey.get(e.staffId);
-      if (t) names.add(t.name);
-    }
+    const canonical =
+      resolveCanonicalTeacherName(e.staffId, staffByKey) ??
+      resolveCanonicalTeacherName(e.teacher, staffByKey);
+    if (canonical) names.add(canonical);
   }
   return Array.from(names);
 }
