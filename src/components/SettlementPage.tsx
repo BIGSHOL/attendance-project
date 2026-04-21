@@ -46,6 +46,34 @@ export default function SettlementPage() {
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
 
+  // ─── 테이블 정렬 상태 ────────────────────────────────
+  type SettlementSortKey =
+    | "name"
+    | "subject"
+    | "salaryType"
+    | "students"
+    | "attendance"
+    | "baseSalary"
+    | "incentive"
+    | "finalSalary"
+    | "finalized";
+  const [sortKey, setSortKey] = useLocalStorage<SettlementSortKey | "">(
+    "settlement.sortKey",
+    ""
+  );
+  const [sortDir, setSortDir] = useLocalStorage<"asc" | "desc">(
+    "settlement.sortDir",
+    "asc"
+  );
+  const toggleSort = (key: SettlementSortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
   // ─── 전체 시트 순차 동기화 ──────────────────────────
   const [bulkSync, setBulkSync] = useState<{
     running: boolean;
@@ -555,11 +583,47 @@ export default function SettlementPage() {
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {
-    if (effectiveCheckedSubjects.size === allSubjects.length) return settlements;
-    return settlements.filter((s) =>
-      (s.teacher.subjects || []).some((sub) => effectiveCheckedSubjects.has(sub))
-    );
-  }, [settlements, effectiveCheckedSubjects, allSubjects]);
+    const base =
+      effectiveCheckedSubjects.size === allSubjects.length
+        ? settlements
+        : settlements.filter((s) =>
+            (s.teacher.subjects || []).some((sub) => effectiveCheckedSubjects.has(sub))
+          );
+    if (!sortKey) return base;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const cmp = (a: (typeof base)[number], b: (typeof base)[number]): number => {
+      switch (sortKey) {
+        case "name":
+          return a.teacher.name.localeCompare(b.teacher.name, "ko") * dir;
+        case "subject":
+          return (
+            (a.teacher.subjects || []).join(",").localeCompare(
+              (b.teacher.subjects || []).join(","),
+              "ko"
+            ) * dir
+          );
+        case "salaryType":
+          return a.salaryType.localeCompare(b.salaryType) * dir;
+        case "students":
+          return (a.studentCount - b.studentCount) * dir;
+        case "attendance":
+          return (a.totalAttendance - b.totalAttendance) * dir;
+        case "baseSalary":
+          return (a.baseSalary - b.baseSalary) * dir;
+        case "incentive":
+          return ((a.finalSalary - a.baseSalary) - (b.finalSalary - b.baseSalary)) * dir;
+        case "finalSalary":
+          return (a.finalSalary - b.finalSalary) * dir;
+        case "finalized":
+          return (
+            ((a.settlement.isFinalized ? 1 : 0) - (b.settlement.isFinalized ? 1 : 0)) * dir
+          );
+        default:
+          return 0;
+      }
+    };
+    return [...base].sort(cmp);
+  }, [settlements, effectiveCheckedSubjects, allSubjects, sortKey, sortDir]);
 
   // 합계 (필터 반영)
   const totals = useMemo(() => {
@@ -885,15 +949,15 @@ export default function SettlementPage() {
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
               <th className="px-3 py-3 text-left font-medium text-zinc-500">#</th>
-              <th className="px-3 py-3 text-left font-medium text-zinc-500">선생님</th>
-              <th className="px-3 py-3 text-left font-medium text-zinc-500">과목</th>
-              <th className="px-3 py-3 text-left font-medium text-zinc-500">급여유형</th>
-              <th className="px-3 py-3 text-right font-medium text-zinc-500">담당학생</th>
-              <th className="px-3 py-3 text-right font-medium text-zinc-500">출석</th>
-              <th className="px-3 py-3 text-right font-medium text-zinc-500">기본급여</th>
-              <th className="px-3 py-3 text-right font-medium text-zinc-500">인센티브</th>
-              <th className="px-3 py-3 text-right font-medium text-zinc-500">최종 지급액</th>
-              <th className="px-3 py-3 text-center font-medium text-zinc-500">확정</th>
+              <SortableTh label="선생님" sortKey="name" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" />
+              <SortableTh label="과목" sortKey="subject" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" />
+              <SortableTh label="급여유형" sortKey="salaryType" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" />
+              <SortableTh label="담당학생" sortKey="students" current={sortKey} dir={sortDir} onClick={toggleSort} align="right" />
+              <SortableTh label="출석" sortKey="attendance" current={sortKey} dir={sortDir} onClick={toggleSort} align="right" />
+              <SortableTh label="기본급여" sortKey="baseSalary" current={sortKey} dir={sortDir} onClick={toggleSort} align="right" />
+              <SortableTh label="인센티브" sortKey="incentive" current={sortKey} dir={sortDir} onClick={toggleSort} align="right" />
+              <SortableTh label="최종 지급액" sortKey="finalSalary" current={sortKey} dir={sortDir} onClick={toggleSort} align="right" />
+              <SortableTh label="확정" sortKey="finalized" current={sortKey} dir={sortDir} onClick={toggleSort} align="center" />
             </tr>
           </thead>
           <tbody>
@@ -1356,6 +1420,49 @@ export default function SettlementPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function SortableTh<K extends string>({
+  label,
+  sortKey,
+  current,
+  dir,
+  onClick,
+  align = "left",
+}: {
+  label: string;
+  sortKey: K;
+  current: K | "";
+  dir: "asc" | "desc";
+  onClick: (k: K) => void;
+  align?: "left" | "right" | "center";
+}) {
+  const active = current === sortKey;
+  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
+  const alignCls =
+    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
+  const justifyCls =
+    align === "right"
+      ? "justify-end"
+      : align === "center"
+        ? "justify-center"
+        : "justify-start";
+  return (
+    <th className={`px-3 py-3 font-medium text-zinc-500 ${alignCls}`}>
+      <button
+        type="button"
+        onClick={() => onClick(sortKey)}
+        className={`inline-flex w-full items-center gap-1 ${justifyCls} hover:text-zinc-900 dark:hover:text-zinc-100 ${
+          active ? "text-zinc-900 dark:text-zinc-100" : ""
+        }`}
+      >
+        <span>{label}</span>
+        {arrow && (
+          <span className="text-[10px] text-blue-500 dark:text-blue-400">{arrow}</span>
+        )}
+      </button>
+    </th>
   );
 }
 
