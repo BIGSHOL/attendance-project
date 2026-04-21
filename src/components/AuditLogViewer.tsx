@@ -23,6 +23,12 @@ const TABLE_LABELS: Record<string, string> = {
   teacher_settings: "선생님 설정",
   salary_configs: "급여 설정",
   attendance: "출석",
+  user_roles: "사용자 권한",
+  teacher_sheets: "선생님 시트",
+  payment_shares: "수납 분배",
+  virtual_students: "가상 학생",
+  monthly_settlements: "월별 정산",
+  teacher_blog_posts: "블로그 기록",
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -41,10 +47,229 @@ const ACTION_COLORS: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-function formatValue(v: unknown): string {
-  if (v === null || v === undefined) return "—";
-  if (typeof v === "object") return JSON.stringify(v);
+// ─── 필드명 한글화 ────────────────────────────────────
+const FIELD_LABELS: Record<string, string> = {
+  // 공통 / 메타
+  id: "식별자",
+  created_at: "생성일시",
+  updated_at: "수정일시",
+  edited_at: "변경일시",
+  // 사용자/선생님
+  staff_id: "선생님",
+  staff_name: "선생님명",
+  user_id: "사용자",
+  email: "이메일",
+  role: "역할",
+  approved_at: "승인일시",
+  approved_by: "승인자",
+  salary_type: "급여 유형",
+  blog_required: "블로그 의무",
+  commission_days: "비율제 요일",
+  admin_allowance: "행정수당",
+  ratios: "과목별 비율",
+  base_amount: "기본 금액",
+  base_salary: "기본급",
+  final_salary: "최종 지급액",
+  // 학생
+  student_id: "학생",
+  student_name: "학생명",
+  student_code: "학생 번호",
+  grade: "학년",
+  school: "학교",
+  status: "상태",
+  start_date: "시작일",
+  end_date: "종료일",
+  // 수업/등급
+  class_id: "수업ID",
+  class_name: "수업명",
+  tier_id: "등급ID",
+  tier_name: "등급",
+  unit_price: "단가",
+  subject: "과목",
+  category: "분류",
+  // 수납
+  billing_month: "청구 월",
+  payment_name: "납부 항목",
+  payment_date: "납부일",
+  payment_method: "납부 방법",
+  charge_amount: "청구액",
+  paid_amount: "납부액",
+  unpaid_amount: "미납액",
+  discount_amount: "할인액",
+  memo: "메모",
+  teacher_staff_id: "담당 선생님",
+  teacher_name: "담당 선생님명",
+  // 출석
+  teacher_id: "선생님ID",
+  date: "날짜",
+  check_in: "입실",
+  check_out: "퇴실",
+  hours: "시수",
+  is_makeup: "보강 여부",
+  // 세션
+  year: "연도",
+  month: "월",
+  ranges: "기간",
+  sessions: "수업 회수",
+  // 정산
+  has_blog: "블로그 작성",
+  has_retention: "퇴원율 달성",
+  other_amount: "기타 금액",
+  note: "비고",
+  is_finalized: "확정 여부",
+  finalized_at: "확정일시",
+  // 블로그
+  dates: "게시일",
+  // 기타
+  record_id: "대상",
+  table_name: "테이블",
+  changes: "변경 내용",
+};
+
+function toFieldLabel(field: string): string {
+  return FIELD_LABELS[field] ?? field;
+}
+
+// ─── 값 번역기 (필드별) ────────────────────────────────
+const VALUE_TRANSLATORS: Record<string, (v: unknown) => string> = {
+  salary_type: (v) => {
+    const m: Record<string, string> = { commission: "비율제", fixed: "급여제", mixed: "혼합" };
+    return m[String(v)] ?? String(v);
+  },
+  role: (v) => {
+    const m: Record<string, string> = {
+      master: "마스터",
+      admin: "관리자",
+      teacher: "선생님",
+      pending: "대기",
+    };
+    return m[String(v)] ?? String(v);
+  },
+  status: (v) => {
+    const m: Record<string, string> = {
+      active: "재원",
+      inactive: "퇴원",
+      withdrawn: "퇴원",
+      on_hold: "휴원",
+      hold: "휴원",
+      pending: "대기",
+      trial: "체험",
+      prospect: "상담중",
+      prospective: "상담중",
+    };
+    return m[String(v)] ?? String(v);
+  },
+  subject: (v) => {
+    const m: Record<string, string> = {
+      math: "수학",
+      english: "영어",
+      korean: "국어",
+      science: "과학",
+      social: "사회",
+      highmath: "고등수학",
+    };
+    return m[String(v)] ?? String(v);
+  },
+  is_makeup: (v) => (v ? "보강" : "정규"),
+  blog_required: (v) => (v ? "있음" : "없음"),
+  has_blog: (v) => (v ? "작성" : "미작성"),
+  has_retention: (v) => (v ? "달성" : "미달성"),
+  is_finalized: (v) => (v ? "확정" : "미확정"),
+};
+
+// ISO 타임스탬프 감지 (YYYY-MM-DDTHH:MM:SS…)
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+function formatDateKR(s: string): string {
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  return d.toLocaleString("ko-KR", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// virtual_{teacher}_{student}_{school}_{grade} 파싱
+function parseVirtualStudent(id: string): string | null {
+  if (!id.startsWith("virtual_")) return null;
+  const parts = id.slice(8).split("_");
+  if (parts.length < 2) return null;
+  const [teacher, student, school, grade] = parts;
+  const bits: string[] = [student];
+  const meta: string[] = [];
+  if (school) meta.push(school);
+  if (grade) meta.push(grade);
+  if (meta.length) bits.push(`(${meta.join(" ")})`);
+  if (teacher) bits.push(`· 담임 ${teacher}`);
+  return bits.join(" ");
+}
+
+// UUID 감지 (36자 + 하이픈)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function formatValue(v: unknown, field?: string): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (field && VALUE_TRANSLATORS[field]) return VALUE_TRANSLATORS[field](v);
+  if (typeof v === "boolean") return v ? "예" : "아니오";
+  if (typeof v === "number") return v.toLocaleString("ko-KR");
+  if (typeof v === "string") {
+    if (ISO_RE.test(v)) return formatDateKR(v);
+    if (UUID_RE.test(v)) return `…${v.slice(-6)}`;
+    const parsed = parseVirtualStudent(v);
+    if (parsed) return parsed;
+    return v;
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "없음";
+    return v.map((item) => formatValue(item)).join(", ");
+  }
+  if (typeof v === "object") {
+    const obj = v as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (keys.length === 0) return "없음";
+    // 작은 객체는 간단히 표시
+    if (keys.length <= 3) {
+      return keys
+        .map((k) => `${toFieldLabel(k)} ${formatValue(obj[k], k)}`)
+        .join(", ");
+    }
+    return `${keys.length}개 항목`;
+  }
   return String(v);
+}
+
+// 내부용/덜 중요한 필드는 기본적으로 접어둠
+const LOW_PRIORITY_FIELDS = new Set([
+  "id",
+  "created_at",
+  "updated_at",
+  "approved_at",
+  "approved_by",
+  "finalized_at",
+  "edited_at",
+]);
+
+function FieldRow({
+  field,
+  value,
+  muted,
+}: {
+  field: string;
+  value: unknown;
+  muted?: boolean;
+}) {
+  return (
+    <div className={`text-zinc-700 dark:text-zinc-300 ${muted ? "opacity-60" : ""}`}>
+      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+        {toFieldLabel(field)}
+      </span>
+      <span className="text-zinc-400">: </span>
+      <span>{formatValue(value, field)}</span>
+    </div>
+  );
 }
 
 function ChangesCell({ changes, action }: { changes: Record<string, unknown>; action: string }) {
@@ -52,11 +277,9 @@ function ChangesCell({ changes, action }: { changes: Record<string, unknown>; ac
 
   if (action === "bulk") {
     return (
-      <div className="text-xs text-zinc-700 dark:text-zinc-300">
+      <div className="text-xs">
         {Object.entries(changes).map(([k, v]) => (
-          <div key={k}>
-            <span className="font-semibold">{k}:</span> {formatValue(v)}
-          </div>
+          <FieldRow key={k} field={k} value={v} />
         ))}
       </div>
     );
@@ -64,20 +287,26 @@ function ChangesCell({ changes, action }: { changes: Record<string, unknown>; ac
 
   if (action === "insert" || action === "delete") {
     const snapshot = (changes.after || changes.before || {}) as Record<string, unknown>;
-    const entries = Object.entries(snapshot).slice(0, expanded ? undefined : 4);
+    // 중요 필드 우선, 저우선순위는 뒤로
+    const allEntries = Object.entries(snapshot).sort(([a], [b]) => {
+      const aLow = LOW_PRIORITY_FIELDS.has(a) ? 1 : 0;
+      const bLow = LOW_PRIORITY_FIELDS.has(b) ? 1 : 0;
+      return aLow - bLow;
+    });
+    const visibleCount = 4;
+    const entries = expanded ? allEntries : allEntries.slice(0, visibleCount);
+    const remaining = allEntries.length - visibleCount;
     return (
       <div className="text-xs">
         {entries.map(([k, v]) => (
-          <div key={k} className="text-zinc-700 dark:text-zinc-300">
-            <span className="font-semibold">{k}:</span> {formatValue(v)}
-          </div>
+          <FieldRow key={k} field={k} value={v} muted={LOW_PRIORITY_FIELDS.has(k)} />
         ))}
-        {Object.keys(snapshot).length > 4 && (
+        {remaining > 0 && (
           <button
             onClick={() => setExpanded((x) => !x)}
-            className="text-blue-600 hover:underline dark:text-blue-400"
+            className="mt-0.5 text-blue-600 hover:underline dark:text-blue-400"
           >
-            {expanded ? "접기" : `+${Object.keys(snapshot).length - 4}개 더`}
+            {expanded ? "접기" : `+${remaining}개 더 보기`}
           </button>
         )}
       </div>
@@ -90,13 +319,15 @@ function ChangesCell({ changes, action }: { changes: Record<string, unknown>; ac
     <div className="space-y-0.5 text-xs">
       {fields.map(([field, diff]) => (
         <div key={field} className="flex flex-wrap items-baseline gap-1">
-          <span className="font-semibold text-zinc-800 dark:text-zinc-200">{field}:</span>
+          <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+            {toFieldLabel(field)}:
+          </span>
           <span className="text-rose-600 line-through dark:text-rose-400">
-            {formatValue(diff?.from)}
+            {formatValue(diff?.from, field)}
           </span>
           <span className="text-zinc-400">→</span>
           <span className="text-emerald-700 dark:text-emerald-400">
-            {formatValue(diff?.to)}
+            {formatValue(diff?.to, field)}
           </span>
         </div>
       ))}
