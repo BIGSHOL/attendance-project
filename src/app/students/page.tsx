@@ -14,7 +14,7 @@ export default async function StudentsPage() {
     <div className="flex h-screen flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950">
       <Nav email={user.email} />
       <main className="flex-1 min-h-0 overflow-auto p-6">
-        <AuthGuard requireAdmin>
+        <AuthGuard>
           <StudentList />
         </AuthGuard>
       </main>

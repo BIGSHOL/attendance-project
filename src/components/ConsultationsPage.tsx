@@ -8,6 +8,7 @@ import { useConsultations } from "@/hooks/useConsultations";
 import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
+import { useUserRole } from "@/hooks/useUserRole";
 import type { Student, Teacher, Consultation } from "@/types";
 
 // ─── 헬퍼 ───────────────────────────────────────────
@@ -144,7 +145,7 @@ export default function ConsultationsPage() {
     defaultMonth
   );
 
-  const [selectedHomeroom, setSelectedHomeroom] = useLocalStorage<string>(
+  const [selectedHomeroomRaw, setSelectedHomeroom] = useLocalStorage<string>(
     "consultations.selectedHomeroom",
     ALL_TEACHERS
   );
@@ -152,9 +153,18 @@ export default function ConsultationsPage() {
   // 상담 상세 팝업 선택 상태
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
+  const { userRole, isTeacher } = useUserRole();
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
+
+  // 선생님 계정이면 본인으로 고정 (localStorage 값 무시)
+  const selectedHomeroom = useMemo(() => {
+    if (isTeacher && userRole?.staff_name) {
+      return userRole.staff_name;
+    }
+    return selectedHomeroomRaw;
+  }, [isTeacher, userRole, selectedHomeroomRaw]);
 
   const loading = staffLoading || studentsLoading || consultationsLoading;
 
@@ -415,12 +425,20 @@ export default function ConsultationsPage() {
             </button>
           </div>
 
-          <HomeroomPicker
-            homerooms={homerooms}
-            selected={selectedHomeroom}
-            onChange={setSelectedHomeroom}
-            allValue={ALL_TEACHERS}
-          />
+          {isTeacher ? (
+            // 선생님 계정은 본인으로 고정 — 드롭다운 대신 라벨 표시
+            <div className="flex min-w-[200px] items-center gap-1.5 rounded-sm border border-zinc-300 bg-zinc-50 px-2.5 py-1.5 text-xs font-bold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
+              <span>{selectedHomeroom}</span>
+              <span className="font-normal text-zinc-500 dark:text-zinc-400">· 본인 상담만</span>
+            </div>
+          ) : (
+            <HomeroomPicker
+              homerooms={homerooms}
+              selected={selectedHomeroom}
+              onChange={setSelectedHomeroom}
+              allValue={ALL_TEACHERS}
+            />
+          )}
 
           <input
             type="month"

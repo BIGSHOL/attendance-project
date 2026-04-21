@@ -4,7 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useUserRole } from "@/hooks/useUserRole";
 
-const baseNavItems = [
+// 역할별 메뉴 구성
+//   teacher: 출석부 / 학생 / 상담 (본인 관련 정보만)
+//   admin+: 전체 + 출석부 업로드 / 변경 이력
+//   master: 전체 + 사용자 관리
+const TEACHER_NAV = [
+  { href: "/", label: "출석부", icon: "📋" },
+  { href: "/students", label: "학생", icon: "🎒" },
+  { href: "/consultations", label: "상담", icon: "💬" },
+];
+
+const ADMIN_NAV = [
   { href: "/", label: "출석부", icon: "📋" },
   { href: "/teachers", label: "선생님", icon: "👩‍🏫" },
   { href: "/students", label: "학생", icon: "🎒" },
@@ -19,10 +29,10 @@ interface NavProps {
 
 export default function Nav({ email }: NavProps) {
   const pathname = usePathname();
-  const { isMaster, isAdmin } = useUserRole();
+  const { isMaster, isAdmin, isTeacher } = useUserRole();
 
   const navItems = [
-    ...baseNavItems,
+    ...(isAdmin ? ADMIN_NAV : isTeacher ? TEACHER_NAV : []),
     ...(isAdmin ? [{ href: "/attendance-import", label: "출석부 업로드", icon: "📥" }] : []),
     ...(isMaster ? [{ href: "/admin/users", label: "사용자 관리", icon: "👤" }] : []),
     ...(isAdmin ? [{ href: "/admin/audit", label: "변경 이력", icon: "📜" }] : []),

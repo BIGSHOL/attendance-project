@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useStudents } from "@/hooks/useStudents";
+import { useUserRole } from "@/hooks/useUserRole";
 import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { toStatusLabel, toSubjectLabel } from "@/lib/labelMap";
 import Pagination from "./Pagination";
@@ -10,11 +11,25 @@ import Pagination from "./Pagination";
 const PAGE_SIZE = 20;
 
 export default function StudentList() {
-  const { students, loading } = useStudents();
+  const { students: allStudents, loading } = useStudents();
+  const { userRole, isTeacher } = useUserRole();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useLocalStorage<string>("studentList.search", "");
   const [checkedSubjects, setCheckedSubjects] = useLocalStorageSet("studentList.subjects");
   const [statusFilter, setStatusFilter] = useLocalStorage<string>("studentList.status", "active");
+
+  // 선생님 계정이면 본인 담당 학생만 노출
+  //   enrollment.staffId === 내 staff_id  또는  enrollment.teacher === 내 이름
+  const students = useMemo(() => {
+    if (!isTeacher || !userRole?.staff_id) return allStudents;
+    const myId = userRole.staff_id;
+    const myName = userRole.staff_name;
+    return allStudents.filter((s) =>
+      s.enrollments?.some(
+        (e) => e.staffId === myId || (!!myName && e.teacher === myName)
+      )
+    );
+  }, [allStudents, isTeacher, userRole]);
 
   const allSubjects = useMemo(() => {
     const set = new Set<string>();
@@ -85,6 +100,11 @@ export default function StudentList() {
         <span className="ml-2 text-sm font-normal text-zinc-500">
           ({filtered.length}명)
         </span>
+        {isTeacher && (
+          <span className="ml-2 rounded-sm bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            내 담당 학생만
+          </span>
+        )}
       </h2>
 
       <div className="flex gap-3 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
