@@ -223,9 +223,16 @@ export default function StudentDetail({ studentId }: Props) {
           >
             ◀
           </button>
-          <span className="min-w-[110px] text-center text-sm font-bold text-zinc-900 dark:text-zinc-100">
-            {formatMonth(selectedMonth)}
-          </span>
+          <input
+            type="month"
+            value={`${selectedMonth.slice(0, 4)}-${selectedMonth.slice(4)}`}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              setSelectedMonth(v.replace("-", ""));
+            }}
+            className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm font-bold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
           <button
             onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))}
             className="rounded-sm border border-zinc-300 px-2 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"

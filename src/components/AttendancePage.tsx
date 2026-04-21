@@ -33,6 +33,7 @@ import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatch
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth, isDateValidForStudent } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
+import HomeroomPicker from "@/components/consultation/HomeroomPicker";
 import { CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
@@ -1404,19 +1405,27 @@ export default function AttendancePage() {
           ))}
         </div>
 
-        {/* 선생님 선택 */}
-        <select
-          value={selectedTeacherId}
-          onChange={(e) => setSelectedTeacherId(e.target.value)}
-          className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-        >
-          {visibleTeachers.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-          {visibleTeachers.length === 0 && (
-            <option value="" disabled>선생님 없음</option>
-          )}
-        </select>
+        {/* 선생님 선택 — 과목별 섹션 드롭다운 */}
+        {visibleTeachers.length > 0 ? (
+          <HomeroomPicker
+            homerooms={visibleTeachers.map((t) => ({
+              name: t.name,
+              subject: (t.subjects ?? []).map(toSubjectLabel).join("/"),
+              studentCount: teacherStudentCount.get(t.id) ?? 0,
+            }))}
+            selected={selectedTeacher?.name ?? ""}
+            onChange={(name) => {
+              const t = visibleTeachers.find((x) => x.name === name);
+              if (t) setSelectedTeacherId(t.id);
+            }}
+            showAll={false}
+            placeholder="선생님 선택"
+          />
+        ) : (
+          <span className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800">
+            선생님 없음
+          </span>
+        )}
 
         {/* 시트 동기화 (관리자 이상만 + 시트 등록된 선생님만) */}
         {isAdmin && currentSheetUrl && (
@@ -1433,9 +1442,18 @@ export default function AttendancePage() {
         {/* 월 이동 */}
         <div className="flex items-center gap-1">
           <button onClick={prevMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">◀</button>
-          <span className="px-3 py-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-100 min-w-[90px] text-center">
-            {year}년 {month}월
-          </span>
+          <input
+            type="month"
+            value={`${year}-${String(month).padStart(2, "0")}`}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              const [y, m] = v.split("-").map(Number);
+              setYear(y);
+              setMonth(m);
+            }}
+            className="rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm font-bold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
           <button onClick={nextMonth} className="rounded-sm border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">▶</button>
         </div>
       </div>

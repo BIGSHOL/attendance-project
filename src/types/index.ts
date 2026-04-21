@@ -122,6 +122,54 @@ export interface Student {
 }
 
 // ==========================================
+// 상담 타입 (ijw-calander 공유 — student_consultations)
+// ==========================================
+
+export type ConsultationType = "parent" | "student";
+export type ConsultationCategory =
+  | "academic"
+  | "behavior"
+  | "attendance"
+  | "progress"
+  | "concern"
+  | "compliment"
+  | "complaint"
+  | "general"
+  | "other";
+export type ConsultationSubject = "math" | "english";
+export type StudentMood = "positive" | "neutral" | "negative";
+
+/**
+ * 상담 기록 — ijw-calander 프로젝트의 `student_consultations` 컬렉션
+ * 현재 출석부 웹앱에서는 읽기 전용으로 사용
+ */
+export interface Consultation {
+  id: string;
+  studentId: string;
+  studentName: string;
+  type: ConsultationType;
+  consultantId: string;
+  consultantName: string;
+  date: string;              // YYYY-MM-DD
+  time?: string;             // HH:mm
+  duration?: number;         // 분
+  category: ConsultationCategory;
+  subject?: ConsultationSubject;
+  title: string;
+  content: string;
+  parentName?: string;
+  parentRelation?: string;
+  studentMood?: StudentMood;
+  followUpNeeded: boolean;
+  followUpDate?: string;     // YYYY-MM-DD
+  followUpDone: boolean;
+  followUpNotes?: string;
+  createdAt: number;         // ms epoch
+  updatedAt: number;         // ms epoch
+  createdBy: string;
+}
+
+// ==========================================
 // 세션 기간 타입 (ijw-calander 공유)
 // ==========================================
 

@@ -8,6 +8,7 @@ const baseNavItems = [
   { href: "/", label: "출석부", icon: "📋" },
   { href: "/teachers", label: "선생님", icon: "👩‍🏫" },
   { href: "/students", label: "학생", icon: "🎒" },
+  { href: "/consultations", label: "상담", icon: "💬" },
   { href: "/payments", label: "수납", icon: "💳" },
   { href: "/settlement", label: "정산", icon: "💰" },
 ];

@@ -676,9 +676,18 @@ export default function SettlementPage() {
           >
             ◀ 이전 달
           </button>
-          <span className="px-4 py-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-100 min-w-[120px] text-center">
-            {year}년 {month}월
-          </span>
+          <input
+            type="month"
+            value={`${year}-${String(month).padStart(2, "0")}`}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              const [y, m] = v.split("-").map(Number);
+              setYear(y);
+              setMonth(m);
+            }}
+            className="rounded-sm border border-zinc-300 bg-white px-3 py-1.5 text-sm font-bold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
           <button
             onClick={nextMonth}
             className="rounded-sm border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"

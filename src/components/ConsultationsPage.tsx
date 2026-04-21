@@ -1,0 +1,799 @@
+"use client";
+
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useStaff } from "@/hooks/useStaff";
+import { useStudents } from "@/hooks/useStudents";
+import { useConsultations } from "@/hooks/useConsultations";
+import { toSubjectLabel } from "@/lib/labelMap";
+import HomeroomPicker from "@/components/consultation/HomeroomPicker";
+import type { Student, Teacher, Consultation } from "@/types";
+
+// ─── 헬퍼 ───────────────────────────────────────────
+
+function formatDateKorean(date: string): string {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return date;
+  const days = ["일", "월", "화", "수", "목", "금", "토"];
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${String(d.getFullYear()).slice(2)}.${mm}.${dd} (${days[d.getDay()]})`;
+}
+
+function daysInMonth(yyyyMM: string): string[] {
+  const [year, month] = yyyyMM.split("-").map(Number);
+  const last = new Date(year, month, 0).getDate();
+  const result: string[] = [];
+  for (let d = 1; d <= last; d++) {
+    result.push(`${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  }
+  return result;
+}
+
+/**
+ * 학생의 담임 선생님 이름 결정:
+ *   1) mainClasses와 일치하는 enrollment의 teacher
+ *   2) 없으면 첫 번째 active enrollment의 teacher
+ *   3) 모두 없으면 null
+ */
+function getHomeroomTeacher(student: Student, staffByKey: Map<string, Teacher>): string | null {
+  if (!student.enrollments || student.enrollments.length === 0) return null;
+
+  const mainClassSet = new Set(student.mainClasses || []);
+  const resolveTeacher = (e: Student["enrollments"] extends (infer U)[] | undefined ? U : never) => {
+    if (e.teacher) return e.teacher;
+    if (e.staffId) {
+      const t = staffByKey.get(e.staffId);
+      if (t) return t.name;
+    }
+    return null;
+  };
+
+  const homeroomE = student.enrollments.find(
+    (e) => e.className && mainClassSet.has(e.className)
+  );
+  if (homeroomE) {
+    const t = resolveTeacher(homeroomE);
+    if (t) return t;
+  }
+
+  // Fallback: 첫 번째 enrollment (onHold 아닌 것 우선)
+  const first = student.enrollments.find((e) => !e.onHold) || student.enrollments[0];
+  return resolveTeacher(first);
+}
+
+function consultationSubjectLabel(c: Consultation): string {
+  return c.subject ? toSubjectLabel(c.subject) : "-";
+}
+
+type Tab = "consultation" | "note";
+const ALL_TEACHERS = "__all__";
+
+// ─── 컴포넌트 ───────────────────────────────────────
+
+export default function ConsultationsPage() {
+  const [activeTab, setActiveTab] = useLocalStorage<Tab>(
+    "consultations.activeTab",
+    "consultation"
+  );
+
+  const defaultMonth = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  const [selectedMonth, setSelectedMonth] = useLocalStorage<string>(
+    "consultations.selectedMonth",
+    defaultMonth
+  );
+
+  const [selectedHomeroom, setSelectedHomeroom] = useLocalStorage<string>(
+    "consultations.selectedHomeroom",
+    ALL_TEACHERS
+  );
+
+  const { teachers, loading: staffLoading } = useStaff();
+  const { students, loading: studentsLoading } = useStudents();
+  const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
+
+  const loading = staffLoading || studentsLoading || consultationsLoading;
+
+  // staff 빠른 조회 맵 (staffId/이름 다 키로)
+  const staffByKey = useMemo(() => {
+    const m = new Map<string, Teacher>();
+    for (const t of teachers) {
+      m.set(t.id, t);
+      m.set(t.name, t);
+      if (t.englishName) m.set(t.englishName, t);
+    }
+    return m;
+  }, [teachers]);
+
+  // 학생 ID → 학생 매핑
+  const studentById = useMemo(() => {
+    const m = new Map<string, Student>();
+    for (const s of students) m.set(s.id, s);
+    return m;
+  }, [students]);
+
+  // 학생 ID → 담임 이름
+  const homeroomByStudent = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of students) {
+      const h = getHomeroomTeacher(s, staffByKey);
+      if (h) m.set(s.id, h);
+    }
+    return m;
+  }, [students, staffByKey]);
+
+  // 담임별 학생 목록 (active만, 상담 현황 집계 대상)
+  const studentsByHomeroom = useMemo(() => {
+    const m = new Map<string, Student[]>();
+    for (const s of students) {
+      if (s.status !== "active") continue;
+      const h = homeroomByStudent.get(s.id);
+      if (!h) continue;
+      if (!m.has(h)) m.set(h, []);
+      m.get(h)!.push(s);
+    }
+    return m;
+  }, [students, homeroomByStudent]);
+
+  // 담임 목록 (담임 학생이 1명 이상인 선생님만)
+  const homerooms = useMemo(() => {
+    const result = Array.from(studentsByHomeroom.keys()).map((name) => {
+      const teacher = staffByKey.get(name);
+      const subjects = teacher?.subjects ?? [];
+      const subjectLabel = subjects.length > 0 ? subjects.map(toSubjectLabel).join("/") : "";
+      return {
+        name,
+        subject: subjectLabel,
+        studentCount: studentsByHomeroom.get(name)?.length ?? 0,
+      };
+    });
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }, [studentsByHomeroom, staffByKey]);
+
+  const isAllView = selectedHomeroom === ALL_TEACHERS;
+
+  // 담임 필터 적용한 scoped 학생 목록
+  const scopedStudents = useMemo(() => {
+    if (isAllView) {
+      return Array.from(studentsByHomeroom.values()).flat();
+    }
+    return studentsByHomeroom.get(selectedHomeroom) ?? [];
+  }, [isAllView, selectedHomeroom, studentsByHomeroom]);
+
+  // 담임 필터 적용한 상담 목록
+  //   - 전체 뷰: 모든 상담
+  //   - 특정 담임: 담임 학생 × 상담자 === 담임 (둘 다 해당하는 것만)
+  const scopedStudentIds = useMemo(
+    () => new Set(scopedStudents.map((s) => s.id)),
+    [scopedStudents]
+  );
+
+  const scopedConsultations = useMemo(() => {
+    if (isAllView) return consultations;
+    return consultations.filter(
+      (c) => scopedStudentIds.has(c.studentId) && c.consultantName === selectedHomeroom
+    );
+  }, [consultations, isAllView, selectedHomeroom, scopedStudentIds]);
+
+  // 일자별 상담 수 집계
+  const consultationsByDate = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of scopedConsultations) {
+      map.set(c.date, (map.get(c.date) ?? 0) + 1);
+    }
+    return map;
+  }, [scopedConsultations]);
+
+  // 학생별 상담 집계 (횟수 + 날짜 목록)
+  const matrixByStudent = useMemo(() => {
+    const result = new Map<string, { dates: string[]; lastDate: string | null; total: number }>();
+    for (const s of scopedStudents) {
+      result.set(s.id, { dates: [], lastDate: null, total: 0 });
+    }
+    for (const c of scopedConsultations) {
+      const bucket = result.get(c.studentId);
+      if (!bucket) continue;
+      bucket.dates.push(c.date);
+      bucket.total += 1;
+      if (!bucket.lastDate || c.date > bucket.lastDate) bucket.lastDate = c.date;
+    }
+    for (const b of result.values()) b.dates.sort();
+    return result;
+  }, [scopedStudents, scopedConsultations]);
+
+  // 미상담 먼저, 그다음 이름 오름차순
+  const sortedStudents = useMemo(() => {
+    return [...scopedStudents].sort((a, b) => {
+      const ta = matrixByStudent.get(a.id)?.total ?? 0;
+      const tb = matrixByStudent.get(b.id)?.total ?? 0;
+      if (ta === 0 && tb !== 0) return -1;
+      if (tb === 0 && ta !== 0) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [scopedStudents, matrixByStudent]);
+
+  const totalConsultations = scopedConsultations.length;
+  const counseledStudentIds = new Set(scopedConsultations.map((c) => c.studentId));
+  const uncounseledCount = scopedStudents.length - counseledStudentIds.size;
+  const heavyCounseledCount = Array.from(matrixByStudent.values()).filter(
+    (b) => b.total >= 3
+  ).length;
+
+  // ─── 좌우 높이 동기화 ─────────────────────────────
+  //   좌측(날짜) = 자연 높이 기준, 우측(학생) = 좌측 높이로 제한
+  //   학생이 많으면 우측만 내부 스크롤
+  const leftRef = useRef<HTMLElement>(null);
+  const [leftHeight, setLeftHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = leftRef.current;
+    if (!el) return;
+    const update = () => setLeftHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 담임별 요약 (전체 뷰에서만 사용)
+  //   - 각 담임의 "자기 학생을 자기가 상담" 기준 (consultantName === h.name)
+  const homeroomSummaries = useMemo(() => {
+    return homerooms.map((h) => {
+      const hrStudents = studentsByHomeroom.get(h.name) ?? [];
+      const idSet = new Set(hrStudents.map((s) => s.id));
+      const cs = consultations.filter(
+        (c) => idSet.has(c.studentId) && c.consultantName === h.name
+      );
+      const counseled = new Set(cs.map((c) => c.studentId));
+      const heavy = hrStudents.filter(
+        (s) => cs.filter((c) => c.studentId === s.id).length >= 3
+      ).length;
+      return {
+        name: h.name,
+        subject: h.subject,
+        studentCount: hrStudents.length,
+        consultationCount: cs.length,
+        counseledCount: counseled.size,
+        uncounseledCount: hrStudents.length - counseled.size,
+        heavyCount: heavy,
+      };
+    });
+  }, [homerooms, studentsByHomeroom, consultations]);
+
+  const selectedTeacher = !isAllView ? staffByKey.get(selectedHomeroom) : undefined;
+  const currentSubjectLabel = selectedTeacher
+    ? selectedTeacher.subjects.map(toSubjectLabel).join("/")
+    : "";
+
+  const monthDays = daysInMonth(selectedMonth);
+  const [y, m] = selectedMonth.split("-");
+  const monthLabel = `${y.slice(2)}년 ${parseInt(m)}월`;
+
+  return (
+    <div className="mx-auto max-w-[1400px]">
+      {/* 상단 바: 탭 + 담임 + 월 */}
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">상담 관리</h2>
+          {!isAllView && selectedHomeroom && (
+            <span className="rounded-sm bg-blue-100 text-blue-700 text-[11px] font-bold px-2 py-0.5 dark:bg-blue-900/40 dark:text-blue-300">
+              {selectedHomeroom}
+              {currentSubjectLabel && ` · ${currentSubjectLabel}`}
+            </span>
+          )}
+          {loading && (
+            <span className="text-[11px] text-zinc-400">불러오는 중…</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-sm border border-zinc-200 bg-zinc-100 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
+            <button
+              onClick={() => setActiveTab("consultation")}
+              className={`rounded-sm px-3 py-1 text-xs font-bold transition-all ${
+                activeTab === "consultation"
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              상담 현황
+            </button>
+            <button
+              onClick={() => setActiveTab("note")}
+              className={`rounded-sm px-3 py-1 text-xs font-bold transition-all ${
+                activeTab === "note"
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              노트 검사
+            </button>
+          </div>
+
+          <HomeroomPicker
+            homerooms={homerooms}
+            selected={selectedHomeroom}
+            onChange={setSelectedHomeroom}
+            allValue={ALL_TEACHERS}
+          />
+
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+        </div>
+      </div>
+
+      {/* ─── 탭: 상담 현황 ─── */}
+      {activeTab === "consultation" && (
+        <>
+          {/* KPI 카드 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            <KpiCard
+              label={isAllView ? "총 상담 건수 (전체)" : `${selectedHomeroom} 상담 건수`}
+              value={`${totalConsultations}건`}
+            />
+            <KpiCard
+              label={isAllView ? "담당 학생 총합" : `${selectedHomeroom} 담당 학생`}
+              value={`${scopedStudents.length}명`}
+            />
+            <KpiCard
+              label="미상담 학생"
+              value={`${uncounseledCount}명`}
+              tone={uncounseledCount > 0 ? "warn" : "neutral"}
+            />
+            <KpiCard
+              label="3회 이상 집중 상담"
+              value={`${heavyCounseledCount}명`}
+              tone={heavyCounseledCount > 0 ? "alert" : "neutral"}
+            />
+          </div>
+
+          {/* 담임별 요약 (전체 뷰에서만) */}
+          {isAllView && homeroomSummaries.length > 0 && (
+            <section className="mb-3 border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                담임별 상담 현황 ({monthLabel})
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-zinc-100 dark:bg-zinc-800">
+                    <tr>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        담임
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        과목
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        담당 학생
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        총 상담 건수
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        상담 학생
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        미상담
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        3회 이상
+                      </th>
+                      <th className="border-b border-zinc-200 px-3 py-1.5 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                        상세
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {homeroomSummaries.map((h) => {
+                      const coverageRate =
+                        h.studentCount > 0
+                          ? Math.round((h.counseledCount / h.studentCount) * 100)
+                          : 0;
+                      return (
+                        <tr
+                          key={h.name}
+                          className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                        >
+                          <td className="px-3 py-1.5 font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                            {h.name}
+                          </td>
+                          <td className="px-3 py-1.5 whitespace-nowrap">
+                            {h.subject ? (
+                              <span className="inline-block rounded-sm bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                                {h.subject}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                            {h.studentCount}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-bold text-blue-600 dark:text-blue-400">
+                            {h.consultationCount}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                            {h.counseledCount}
+                            <span className="text-[10px] text-zinc-400 ml-1">
+                              ({coverageRate}%)
+                            </span>
+                          </td>
+                          <td
+                            className={`px-3 py-1.5 text-right tabular-nums ${
+                              h.uncounseledCount > 0
+                                ? "font-bold text-amber-600 dark:text-amber-400"
+                                : "text-zinc-400"
+                            }`}
+                          >
+                            {h.uncounseledCount}
+                          </td>
+                          <td
+                            className={`px-3 py-1.5 text-right tabular-nums ${
+                              h.heavyCount > 0
+                                ? "font-bold text-red-600 dark:text-red-400"
+                                : "text-zinc-400"
+                            }`}
+                          >
+                            {h.heavyCount}
+                          </td>
+                          <td className="px-3 py-1.5 text-right">
+                            <button
+                              onClick={() => setSelectedHomeroom(h.name)}
+                              className="text-[10px] rounded-sm border border-zinc-300 bg-white px-2 py-0.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+                            >
+                              열기 →
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* Empty state: 데이터 없음 */}
+          {!loading && homerooms.length === 0 && (
+            <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              담임 정보를 가진 학생이 없습니다. 학생 enrollments에 `mainClasses` 또는 `teacher` 필드가 있는지 확인해주세요.
+            </div>
+          )}
+
+          {/* 본문: 좌(일자별) + 우(학생 매트릭스)
+              - 좌측 = 그 달 날짜 + 총합 = 자연 높이 (스크롤 없음, 높이 기준)
+              - 우측 = 좌측과 같은 높이로 제한, 학생 많으면 내부 세로 스크롤 */}
+          {homerooms.length > 0 && (
+            <div className="grid grid-cols-[200px_1fr] items-start gap-3">
+              {/* 좌측: 일자별 상담 수 — 한 달 날짜 기준 (자연 높이, 스크롤 없음) */}
+              <section
+                ref={leftRef}
+                className="border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+              >
+                <div className="border-b border-zinc-200 bg-zinc-50 px-2 py-1.5 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                  {monthLabel} 상담기간
+                </div>
+                <div>
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-zinc-100 dark:bg-zinc-800">
+                      <tr>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                          날짜
+                        </th>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-right font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                          상담 수
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthDays.map((d) => {
+                        const count = consultationsByDate.get(d) ?? 0;
+                        const isWeekend = [0, 6].includes(new Date(d).getDay());
+                        return (
+                          <tr
+                            key={d}
+                            className={`border-b border-zinc-100 dark:border-zinc-800 ${
+                              isWeekend ? "bg-zinc-50/50 dark:bg-zinc-950/50" : ""
+                            }`}
+                          >
+                            <td className="px-2 py-1 text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
+                              {formatDateKorean(d)}
+                            </td>
+                            <td
+                              className={`px-2 py-1 text-right tabular-nums ${
+                                count > 0
+                                  ? "font-bold text-blue-600 dark:text-blue-400"
+                                  : "text-zinc-400"
+                              }`}
+                            >
+                              {count}회
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      <tr className="bg-zinc-100 dark:bg-zinc-800">
+                        <td className="px-2 py-1 font-bold text-zinc-700 dark:text-zinc-300">
+                          총합
+                        </td>
+                        <td className="px-2 py-1 text-right tabular-nums font-bold text-zinc-900 dark:text-zinc-100">
+                          {totalConsultations}회
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              {/* 우측: 학생 상담 현황 — 좌측 높이로 제한, 넘치면 내부 스크롤 */}
+              <section
+                className="flex flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+                style={leftHeight ? { maxHeight: leftHeight } : undefined}
+              >
+                <div className="flex flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-950">
+                  <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
+                    학생별 상담 현황 ({monthLabel})
+                    {!isAllView && (
+                      <span className="ml-2 text-zinc-500 font-normal">
+                        · {selectedHomeroom} 담임반
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-[10px] text-zinc-500">
+                    읽기 전용 · ijw-calander에서 동기화
+                  </span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 z-10 bg-zinc-100 dark:bg-zinc-800">
+                      <tr>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                          학생
+                        </th>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                          학년
+                        </th>
+                        {isAllView && (
+                          <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                            담임
+                          </th>
+                        )}
+                        <th className="border-b border-zinc-200 px-2 py-1 text-center font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                          횟수
+                        </th>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                          마지막 상담일
+                        </th>
+                        <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                          상담 일자
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedStudents.map((s) => {
+                        const bucket = matrixByStudent.get(s.id);
+                        if (!bucket) return null;
+                        const highlight = bucket.total >= 3;
+                        const nothing = bucket.total === 0;
+                        const hr = homeroomByStudent.get(s.id) ?? "—";
+                        return (
+                          <tr
+                            key={s.id}
+                            className={`border-b border-zinc-100 dark:border-zinc-800 ${
+                              nothing
+                                ? "bg-amber-50 dark:bg-amber-950/30"
+                                : highlight
+                                  ? "bg-red-50 dark:bg-red-950/30"
+                                  : ""
+                            }`}
+                          >
+                            <td
+                              className={`px-2 py-1 font-medium whitespace-nowrap ${
+                                nothing
+                                  ? "text-amber-800 dark:text-amber-300"
+                                  : highlight
+                                    ? "text-red-700 dark:text-red-300"
+                                    : "text-zinc-900 dark:text-zinc-100"
+                              }`}
+                            >
+                              {s.name}
+                            </td>
+                            <td className="px-2 py-1 text-zinc-500 whitespace-nowrap">
+                              {s.grade || "—"}
+                            </td>
+                            {isAllView && (
+                              <td className="px-2 py-1 text-zinc-500 whitespace-nowrap">
+                                {hr}
+                              </td>
+                            )}
+                            <td className="px-2 py-1 text-center whitespace-nowrap">
+                              {nothing ? (
+                                <span className="inline-block rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
+                                  미상담
+                                </span>
+                              ) : (
+                                <span
+                                  className={`tabular-nums font-bold ${
+                                    highlight
+                                      ? "text-red-700 dark:text-red-300"
+                                      : "text-blue-600 dark:text-blue-400"
+                                  }`}
+                                >
+                                  {bucket.total}회
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
+                              {bucket.lastDate ? formatDateKorean(bucket.lastDate) : "—"}
+                            </td>
+                            <td className="px-2 py-1">
+                              {bucket.dates.length === 0 ? (
+                                <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                                  이달 상담 필요
+                                </span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1">
+                                  {bucket.dates.map((d) => (
+                                    <span
+                                      key={d}
+                                      className={`inline-block rounded-sm px-1.5 py-0.5 text-[10px] tabular-nums ${
+                                        highlight
+                                          ? "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300"
+                                          : "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                                      }`}
+                                    >
+                                      {d.slice(5).replace("-", "/")}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          )}
+
+          {/* 최근 상담 이력 */}
+          {scopedConsultations.length > 0 && (
+            <section className="mt-3 border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                최근 상담 이력 ({scopedConsultations.length}건)
+              </div>
+              <div className="max-h-[500px] overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-zinc-100 dark:bg-zinc-800">
+                    <tr>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        날짜
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        학생
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        유형
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        과목
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        상담자
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        제목
+                      </th>
+                      <th className="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                        후속
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scopedConsultations
+                      .slice()
+                      .sort((a, b) => b.date.localeCompare(a.date))
+                      .map((c) => (
+                        <tr
+                          key={c.id}
+                          className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                          title={c.content}
+                        >
+                          <td className="px-2 py-1 whitespace-nowrap text-zinc-700 dark:text-zinc-300 tabular-nums">
+                            {formatDateKorean(c.date)}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap font-medium text-zinc-900 dark:text-zinc-100">
+                            {c.studentName}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap">
+                            <span className="inline-block rounded-sm bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                              {c.type === "parent" ? "학부모" : "학생"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap">
+                            {c.subject ? (
+                              <span className="inline-block rounded-sm bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
+                                {consultationSubjectLabel(c)}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap text-zinc-600 dark:text-zinc-400">
+                            {c.consultantName}
+                          </td>
+                          <td className="px-2 py-1 text-zinc-700 dark:text-zinc-300 max-w-[280px] truncate">
+                            {c.title}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap">
+                            {c.followUpNeeded && !c.followUpDone && (
+                              <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                                필요
+                              </span>
+                            )}
+                            {c.followUpNeeded && c.followUpDone && (
+                              <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                                완료
+                              </span>
+                            )}
+                            {!c.followUpNeeded && <span className="text-zinc-300">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* ─── 탭: 노트 검사 (목업 유지) ─── */}
+      {activeTab === "note" && (
+        <div className="border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+          <div className="font-bold mb-1">노트 검사 기능은 준비 중입니다</div>
+          <div className="text-xs">
+            Supabase <code>note_inspections</code> 테이블 신설 후 연동 예정.
+            입력·기록 UI는 이후 작업에서 추가합니다.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── KPI 카드 ──────────────────────────────────────
+function KpiCard({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "good" | "warn" | "alert";
+}) {
+  const toneClass = {
+    neutral:
+      "border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100",
+    good: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/50 dark:text-emerald-200",
+    warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/50 dark:text-amber-200",
+    alert:
+      "border-red-200 bg-red-50 text-red-900 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-200",
+  }[tone];
+
+  return (
+    <div className={`border ${toneClass} px-3 py-2`}>
+      <div className="text-[10px] font-medium opacity-70">{label}</div>
+      <div className="text-lg font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
