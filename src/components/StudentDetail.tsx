@@ -245,25 +245,25 @@ export default function StudentDetail({ studentId }: Props) {
 
       {/* 요약 카드 */}
       <div className="mt-6 grid grid-cols-4 gap-4">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">총 출석 시수</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
             {totalHours}시간
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">총 청구액</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
             {totalCharge.toLocaleString()}원
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">할인</div>
           <div className="text-lg font-bold text-orange-600">
             {totalDiscount.toLocaleString()}원
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">납부액</div>
           <div className="text-lg font-bold text-emerald-600">
             {totalPaid.toLocaleString()}원
@@ -274,7 +274,7 @@ export default function StudentDetail({ studentId }: Props) {
       {/* 담당 수업 */}
       <div className="mt-6">
         <h3 className="text-sm font-medium text-zinc-500 mb-2">담당 수업</h3>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           {student.enrollments && student.enrollments.length > 0 ? (
             <div className="space-y-2">
               {student.enrollments.map((e, i) => (
@@ -307,7 +307,7 @@ export default function StudentDetail({ studentId }: Props) {
         <h3 className="text-sm font-medium text-zinc-500 mb-2">
           {formatMonth(selectedMonth)} 수납 내역
         </h3>
-        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
+        <div className="rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
           {loading ? (
             <div className="p-4 text-sm text-zinc-400">불러오는 중...</div>
           ) : monthPayments.length === 0 ? (

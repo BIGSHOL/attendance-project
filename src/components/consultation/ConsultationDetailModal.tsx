@@ -75,7 +75,7 @@ export default function ConsultationDetailModal({ consultation, onClose }: Props
                 {c.studentName}
               </span>
               <span
-                className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                className={`inline-block rounded-sm px-2 py-0.5 text-[10px] font-bold ${
                   c.type === "parent"
                     ? "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
                     : "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
@@ -84,11 +84,11 @@ export default function ConsultationDetailModal({ consultation, onClose }: Props
                 {typeLabel}
               </span>
               {subjectLabel && (
-                <span className="inline-block rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                <span className="inline-block rounded-sm bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
                   {subjectLabel}
                 </span>
               )}
-              <span className="inline-block rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+              <span className="inline-block rounded-sm bg-zinc-100 px-2 py-0.5 text-[10px] font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                 {categoryLabel}
               </span>
             </div>
@@ -151,7 +151,7 @@ export default function ConsultationDetailModal({ consultation, onClose }: Props
                 학생 기분
               </div>
               <span
-                className={`inline-block rounded-full px-2 py-0.5 text-xs font-bold ${
+                className={`inline-block rounded-sm px-2 py-0.5 text-xs font-bold ${
                   c.studentMood === "positive"
                     ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
                     : c.studentMood === "negative"
@@ -184,12 +184,12 @@ export default function ConsultationDetailModal({ consultation, onClose }: Props
               <div className="mb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
                 <span>후속 조치</span>
                 {c.followUpNeeded && !c.followUpDone && (
-                  <span className="inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold normal-case text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                  <span className="inline-block rounded-sm bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold normal-case text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
                     필요
                   </span>
                 )}
                 {c.followUpNeeded && c.followUpDone && (
-                  <span className="inline-block rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold normal-case text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+                  <span className="inline-block rounded-sm bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold normal-case text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
                     완료
                   </span>
                 )}

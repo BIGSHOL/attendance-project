@@ -395,11 +395,11 @@ export default function AttendanceImportPage() {
                       <td className="px-3 py-2 text-zinc-500">{e.grade || "-"}</td>
                       <td className="px-3 py-2 text-center">
                         {e.studentId ? (
-                          <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                          <span className="inline-flex rounded-sm bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
                             {e.matchMethod}
                           </span>
                         ) : (
-                          <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900 dark:text-red-300">
+                          <span className="inline-flex rounded-sm bg-red-100 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900 dark:text-red-300">
                             실패
                           </span>
                         )}

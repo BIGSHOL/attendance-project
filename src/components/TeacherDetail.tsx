@@ -493,11 +493,11 @@ export default function TeacherDetail({ teacherId }: Props) {
               📝 {formatMonth(selectedMonth)} 블로그 작성 기록
             </h3>
             {currentBlogPost && currentBlogPost.dates.length > 0 ? (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+              <span className="rounded-sm bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
                 작성 {currentBlogPost.dates.length}건
               </span>
             ) : (
-              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900 dark:text-red-300">
+              <span className="rounded-sm bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900 dark:text-red-300">
                 미작성 (-2% 패널티)
               </span>
             )}
@@ -635,25 +635,25 @@ export default function TeacherDetail({ teacherId }: Props) {
 
       {/* 요약 */}
       <div className="mt-6 grid grid-cols-4 gap-4">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">담당 학생</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
             {totals.studentCount}명
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">총 출석 시수</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
             {totals.totalHours}시간
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">총 청구액</div>
           <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
             {totals.totalCharge.toLocaleString()}원
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-xs text-zinc-500">납부액</div>
           <div className="text-lg font-bold text-emerald-600">
             {totals.totalPaid.toLocaleString()}원
@@ -666,7 +666,7 @@ export default function TeacherDetail({ teacherId }: Props) {
         <h3 className="text-sm font-medium text-zinc-500 mb-2">
           {formatMonth(selectedMonth)} 담당 학생별 출석·수납
         </h3>
-        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
+        <div className="rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
           {loading ? (
             <div className="p-4 text-sm text-zinc-400">불러오는 중...</div>
           ) : studentRows.length === 0 ? (
@@ -803,7 +803,7 @@ function TeacherRatiosCard({
   };
 
   return (
-    <div className="mt-6 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="mt-6 rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           급여 비율 <span className="text-xs font-normal text-zinc-400">(값을 바꾸고 저장하면 이 선생님에게만 적용 · 비우면 45% 폴백)</span>

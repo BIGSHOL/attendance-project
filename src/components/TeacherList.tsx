@@ -740,7 +740,7 @@ export default function TeacherList() {
                   <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => toggleHidden(teacher.id)}
-                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                      className={`inline-flex rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
                         hidden
                           ? "bg-zinc-100 text-zinc-400 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-500"
                           : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900 dark:text-emerald-300"

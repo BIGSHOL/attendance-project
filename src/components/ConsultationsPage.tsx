@@ -717,7 +717,7 @@ export default function ConsultationsPage() {
                             )}
                             <td className="px-2 py-1 text-center whitespace-nowrap">
                               {nothing ? (
-                                <span className="inline-block rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
+                                <span className="inline-block rounded-sm bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
                                   미상담
                                 </span>
                               ) : (
@@ -849,12 +849,12 @@ export default function ConsultationsPage() {
                           </td>
                           <td className="px-2 py-1 whitespace-nowrap">
                             {c.followUpNeeded && !c.followUpDone && (
-                              <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                              <span className="inline-block rounded-sm bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
                                 필요
                               </span>
                             )}
                             {c.followUpNeeded && c.followUpDone && (
-                              <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                              <span className="inline-block rounded-sm bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                                 완료
                               </span>
                             )}

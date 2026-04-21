@@ -112,7 +112,7 @@ export default function ViewOptionsMenu({
       >
         <span>보기</span>
         {activeCount > 0 && (
-          <span className="rounded-full bg-blue-500 px-1.5 text-[11px] font-bold text-white">
+          <span className="rounded-sm bg-blue-500 px-1.5 text-[11px] font-bold text-white">
             {activeCount}
           </span>
         )}

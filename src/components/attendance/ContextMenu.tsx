@@ -118,7 +118,7 @@ export default function ContextMenu({
               색상
               {currentColor && (
                 <span
-                  className="ml-1 inline-block w-2.5 h-2.5 rounded-full"
+                  className="ml-1 inline-block w-2.5 h-2.5 rounded-sm"
                   style={{ backgroundColor: currentColor }}
                 />
               )}

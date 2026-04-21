@@ -270,7 +270,7 @@ export default function AuditLogViewer() {
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-bold ${ACTION_COLORS[r.action] || ""}`}
+                      className={`rounded-sm px-2 py-0.5 text-xs font-bold ${ACTION_COLORS[r.action] || ""}`}
                     >
                       {ACTION_LABELS[r.action] || r.action}
                     </span>

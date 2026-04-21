@@ -180,7 +180,7 @@ export default function HomeroomPicker({
               <span>{selectedHr.name}</span>
               {selectedHr.subject && (
                 <span
-                  className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold leading-none ${getSubjectColor(selectedHr.subject).bg} ${getSubjectColor(selectedHr.subject).text}`}
+                  className={`inline-block rounded-sm px-1.5 py-0.5 text-[9px] font-bold leading-none ${getSubjectColor(selectedHr.subject).bg} ${getSubjectColor(selectedHr.subject).text}`}
                 >
                   {selectedHr.subject}
                 </span>
@@ -249,7 +249,7 @@ export default function HomeroomPicker({
                 <div key={section.key}>
                   <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-zinc-200 bg-zinc-100/95 px-3 py-1.5 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/95">
                     <span
-                      className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${color.bg} ${color.text}`}
+                      className={`inline-block rounded-sm px-1.5 py-0.5 text-[10px] font-bold leading-none ${color.bg} ${color.text}`}
                     >
                       {section.label}
                     </span>

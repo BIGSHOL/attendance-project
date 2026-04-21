@@ -193,7 +193,7 @@ export default function StudentList() {
                   })()}
                 </td>
                 <td className="px-4 py-3">
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                  <span className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${
                     student.status === "withdrawn"
                       ? "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
                       : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"

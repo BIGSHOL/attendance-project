@@ -163,7 +163,7 @@ export default function UserManagement() {
                   {/* 역할 */}
                   <td className="px-4 py-3">
                     {u.role === "master" ? (
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${ROLE_COLORS.master}`}>
+                      <span className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${ROLE_COLORS.master}`}>
                         {ROLE_LABELS.master}
                       </span>
                     ) : (

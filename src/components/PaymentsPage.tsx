@@ -302,7 +302,7 @@ export default function PaymentsPage() {
         <ExcelUploader onParsed={handleParsed} />
 
         {pendingRows && (
-          <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
+          <div className="mt-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
             <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
               <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {pendingRows.length}건 파싱 완료 — 납부월 선택:
@@ -318,7 +318,7 @@ export default function PaymentsPage() {
               />
               <button
                 onClick={handleConfirmUpload}
-                className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                className="rounded-sm bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
               >
                 저장
               </button>
@@ -344,7 +344,7 @@ export default function PaymentsPage() {
                 <button
                   key={s.month}
                   onClick={() => openMonth(s.month)}
-                  className="text-left rounded-lg border border-zinc-200 bg-white p-4 hover:border-blue-400 hover:shadow-sm transition-all dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-blue-500"
+                  className="text-left rounded-sm border border-zinc-200 bg-white p-4 hover:border-blue-400 hover:shadow-sm transition-all dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-blue-500"
                 >
                   <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
                     {formatMonth(s.month)}
@@ -377,7 +377,7 @@ export default function PaymentsPage() {
             {formatMonth(selectedMonth)} 수납
           </h2>
         </div>
-        <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
+        <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-sm border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
           <span>📂</span> 엑셀 재업로드
           <input
             type="file"
@@ -398,7 +398,7 @@ export default function PaymentsPage() {
       </div>
 
       {pendingRows && (
-        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
+        <div className="mb-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
           <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               {pendingRows.length}건 파싱 완료 — 납부월 선택:
@@ -411,7 +411,7 @@ export default function PaymentsPage() {
             />
             <button
               onClick={handleConfirmUpload}
-              className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded-sm bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
             >
               저장
             </button>

@@ -82,12 +82,12 @@ export default function ColumnFilter({
       >
         {children}
         <span className="text-[10px] ml-0.5">{sortKey !== null ? (sortDir === "asc" ? "▲" : "▼") : "▼"}</span>
-        {hasFilter && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 ml-0.5" />}
+        {hasFilter && <span className="w-1.5 h-1.5 rounded-sm bg-blue-500 ml-0.5" />}
       </button>
 
       {open && (
         <div
-          className={`absolute top-full mt-1 z-50 w-64 rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800 ${align === "right" ? "right-0" : "left-0"}`}
+          className={`absolute top-full mt-1 z-50 w-64 rounded-sm border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800 ${align === "right" ? "right-0" : "left-0"}`}
         >
           {/* 정렬 */}
           <div className="border-b border-zinc-300 dark:border-zinc-700 p-1">
