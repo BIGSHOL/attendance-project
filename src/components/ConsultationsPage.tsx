@@ -9,7 +9,6 @@ import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
-import Pagination from "@/components/Pagination";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
@@ -998,21 +997,38 @@ export default function ConsultationsPage() {
                     </tbody>
                   </table>
                 </div>
-                {/* 학생 목록 페이지네이션 — 좌측 날짜 수 기준 */}
+                {/* 학생 목록 페이지네이션 — 좌측 '총합' 행과 동일 높이(h-7) */}
                 {totalPages > 1 && (
-                  <div className="flex-shrink-0 border-t border-zinc-200 dark:border-zinc-800">
-                    <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                      <span>
-                        {(studentsPage - 1) * pageSize + 1}–
-                        {Math.min(studentsPage * pageSize, sortedStudents.length)} /
-                        {" "}
-                        {sortedStudents.length}명
+                  <div className="flex h-7 flex-shrink-0 items-center justify-between border-t border-zinc-200 bg-zinc-50/50 px-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+                    <span className="tabular-nums">
+                      {(studentsPage - 1) * pageSize + 1}–
+                      {Math.min(studentsPage * pageSize, sortedStudents.length)} /{" "}
+                      {sortedStudents.length}명
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setStudentsPage((p) => Math.max(1, p - 1))}
+                        disabled={studentsPage === 1}
+                        aria-label="이전 페이지"
+                        className="px-1 text-zinc-500 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                      >
+                        ◀
+                      </button>
+                      <span className="tabular-nums">
+                        {studentsPage} / {totalPages}
                       </span>
-                      <Pagination
-                        currentPage={studentsPage}
-                        totalPages={totalPages}
-                        onPageChange={setStudentsPage}
-                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStudentsPage((p) => Math.min(totalPages, p + 1))
+                        }
+                        disabled={studentsPage === totalPages}
+                        aria-label="다음 페이지"
+                        className="px-1 text-zinc-500 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                      >
+                        ▶
+                      </button>
                     </div>
                   </div>
                 )}
