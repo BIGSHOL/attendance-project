@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { toSubjectLabel } from "@/lib/labelMap";
 import type { Teacher } from "@/types";
 
 interface Props {
   teachers: Teacher[];
   hiddenTeacherIds: Set<string>;
   onToggle: (teacherId: string) => void;
+  hideUnassigned: boolean;
+  onToggleUnassigned: () => void;
 }
 
 /**
@@ -19,6 +22,8 @@ export default function ConsultationSettings({
   teachers,
   hiddenTeacherIds,
   onToggle,
+  hideUnassigned,
+  onToggleUnassigned,
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -111,6 +116,20 @@ export default function ConsultationSettings({
             <br />
             (출석부 숨김 설정과 공유)
           </div>
+
+          {/* 전역 옵션 — 과목 미지정 섹션 숨김 */}
+          <label className="flex cursor-pointer items-center gap-2 border-b border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-medium dark:border-zinc-800 dark:bg-zinc-950">
+            <input
+              type="checkbox"
+              checked={hideUnassigned}
+              onChange={onToggleUnassigned}
+              className="h-3.5 w-3.5 rounded-sm border-zinc-300 text-blue-600 focus:ring-0 dark:border-zinc-600"
+            />
+            <span className="flex-1 text-zinc-800 dark:text-zinc-200">
+              과목 미지정 선생님 전부 숨김
+            </span>
+          </label>
+
           <div className="flex-1 overflow-y-auto">
             {sorted.length === 0 && (
               <div className="px-3 py-6 text-center text-xs text-zinc-500">
@@ -141,7 +160,7 @@ export default function ConsultationSettings({
                   </span>
                   {t.subjects && t.subjects.length > 0 && (
                     <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                      {t.subjects.join("/")}
+                      {t.subjects.map(toSubjectLabel).join("/")}
                     </span>
                   )}
                 </label>

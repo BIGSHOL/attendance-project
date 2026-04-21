@@ -177,6 +177,10 @@ export default function ConsultationsPage() {
 
   const { userRole, isTeacher, isAdmin } = useUserRole();
   const { hiddenTeacherIds, toggleHidden } = useHiddenTeachers();
+  const [hideUnassignedSubject, setHideUnassignedSubject] = useLocalStorage<boolean>(
+    "consultations.hideUnassignedSubject",
+    false
+  );
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
@@ -260,9 +264,11 @@ export default function ConsultationsPage() {
           subject: subjectLabel,
           studentCount: studentsByHomeroom.get(name)?.length ?? 0,
         };
-      });
+      })
+      // 과목 미지정 선생님 일괄 숨김 옵션
+      .filter((h) => !(hideUnassignedSubject && !h.subject));
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [studentsByHomeroom, staffByKey, hiddenTeacherIds]);
+  }, [studentsByHomeroom, staffByKey, hiddenTeacherIds, hideUnassignedSubject]);
 
   const isAllView = selectedHomeroom === ALL_TEACHERS;
 
@@ -482,6 +488,8 @@ export default function ConsultationsPage() {
               teachers={teachers}
               hiddenTeacherIds={hiddenTeacherIds}
               onToggle={toggleHidden}
+              hideUnassigned={hideUnassignedSubject}
+              onToggleUnassigned={() => setHideUnassignedSubject((v) => !v)}
             />
           )}
         </div>
