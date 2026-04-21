@@ -107,14 +107,13 @@ export default function HomeroomPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  // fixed 팝오버 위치 (viewport 기준)
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  // fixed 팝오버 위치 + 트리거 너비 (viewport 기준)
+  const [pos, setPos] = useState<{ top: number; right: number; width: number } | null>(null);
   const isAll = selected === allValue;
   const sections = groupBySubject(homerooms);
-  const totalStudents = homerooms.reduce((sum, h) => sum + h.studentCount, 0);
   const selectedHr = !isAll ? homerooms.find((h) => h.name === selected) : undefined;
 
-  // 팝오버 위치 계산 (버튼 하단 오른쪽 정렬)
+  // 팝오버 위치 + 너비 계산 — 트리거 버튼과 동일 너비·오른쪽 정렬
   const updatePosition = () => {
     const btn = buttonRef.current;
     if (!btn) return;
@@ -122,6 +121,7 @@ export default function HomeroomPicker({
     setPos({
       top: r.bottom + 4,
       right: Math.max(8, window.innerWidth - r.right),
+      width: r.width,
     });
   };
 
@@ -185,9 +185,6 @@ export default function HomeroomPicker({
                   {selectedHr.subject}
                 </span>
               )}
-              <span className="font-normal text-zinc-500 dark:text-zinc-400">
-                · {selectedHr.studentCount}명
-              </span>
             </>
           ) : (
             <span className="text-zinc-400">{selected || placeholder}</span>
@@ -206,12 +203,16 @@ export default function HomeroomPicker({
         </svg>
       </button>
 
-      {/* 팝오버 — viewport fixed. 부모의 overflow/stacking에 갇히지 않도록 */}
+      {/* 팝오버 — viewport fixed, 트리거 버튼과 같은 너비(최소 240px) */}
       {open && pos && (
         <div
           ref={popoverRef}
-          style={{ top: pos.top, right: pos.right }}
-          className="fixed z-[100] flex max-h-[min(560px,calc(100vh-120px))] w-[320px] flex-col border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+          style={{
+            top: pos.top,
+            right: pos.right,
+            minWidth: Math.max(pos.width, 240),
+          }}
+          className="fixed z-[100] flex max-h-[min(560px,calc(100vh-120px))] flex-col border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
         >
           {/* 전체 담임 (옵션) */}
           {showAll && (
@@ -231,7 +232,7 @@ export default function HomeroomPicker({
                 {allLabel}
               </span>
               <span className="font-normal text-zinc-500 dark:text-zinc-400">
-                {homerooms.length}명 · 학생 {totalStudents}명
+                {homerooms.length}명
               </span>
             </button>
           )}
@@ -280,9 +281,6 @@ export default function HomeroomPicker({
                           {section.key === "__multi__" && (
                             <span className="text-[9px] text-zinc-400">({t.subject})</span>
                           )}
-                        </span>
-                        <span className="text-[10px] tabular-nums text-zinc-500 dark:text-zinc-400">
-                          {t.studentCount}명
                         </span>
                       </button>
                     );
