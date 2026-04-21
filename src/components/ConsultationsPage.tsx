@@ -457,6 +457,30 @@ export default function ConsultationsPage() {
     });
   }, [homerooms, studentsByHomeroom, consultations]);
 
+  // 과목 뷰면 해당 과목 담임만, 아니면 전체
+  const visibleSummaries = useMemo(
+    () =>
+      isSubjectView
+        ? homeroomSummaries.filter((h) => h.subject === selectedSubject)
+        : homeroomSummaries,
+    [homeroomSummaries, isSubjectView, selectedSubject]
+  );
+
+  // 담임별 요약 합계 (표 하단 행)
+  const summaryTotals = useMemo(() => {
+    return visibleSummaries.reduce(
+      (acc, h) => {
+        acc.studentCount += h.studentCount;
+        acc.consultationCount += h.consultationCount;
+        acc.counseledCount += h.counseledCount;
+        acc.uncounseledCount += h.uncounseledCount;
+        acc.heavyCount += h.heavyCount;
+        return acc;
+      },
+      { studentCount: 0, consultationCount: 0, counseledCount: 0, uncounseledCount: 0, heavyCount: 0 }
+    );
+  }, [visibleSummaries]);
+
   const selectedTeacher = !isAllView ? staffByKey.get(selectedHomeroom) : undefined;
   const currentSubjectLabel = selectedTeacher
     ? selectedTeacher.subjects.map(toSubjectLabel).join("/")
@@ -582,10 +606,13 @@ export default function ConsultationsPage() {
           </div>
 
           {/* 담임별 요약 (전체 뷰에서만) */}
-          {isAllView && homeroomSummaries.length > 0 && (
+          {(isAllView || isSubjectView) && homeroomSummaries.length > 0 && (
             <section className="mb-3 border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
               <div className="border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
                 담임별 상담 현황 ({monthLabel})
+                {isSubjectView && (
+                  <span className="ml-2 font-normal text-zinc-500">· {selectedSubject} 과목</span>
+                )}
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -618,7 +645,7 @@ export default function ConsultationsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {homeroomSummaries.map((h) => {
+                    {visibleSummaries.map((h) => {
                       const coverageRate =
                         h.studentCount > 0
                           ? Math.round((h.counseledCount / h.studentCount) * 100)
@@ -682,6 +709,52 @@ export default function ConsultationsPage() {
                       );
                     })}
                   </tbody>
+                  <tfoot className="bg-zinc-100 dark:bg-zinc-800">
+                    <tr className="border-t-2 border-zinc-300 dark:border-zinc-700">
+                      <td
+                        colSpan={2}
+                        className="px-3 py-1.5 font-bold text-zinc-900 dark:text-zinc-100"
+                      >
+                        합계
+                        <span className="ml-1 text-[10px] font-normal text-zinc-500">
+                          ({visibleSummaries.length}명)
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-zinc-800 dark:text-zinc-200">
+                        {summaryTotals.studentCount}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-blue-600 dark:text-blue-400">
+                        {summaryTotals.consultationCount}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-zinc-800 dark:text-zinc-200">
+                        {summaryTotals.counseledCount}
+                        {summaryTotals.studentCount > 0 && (
+                          <span className="text-[10px] font-normal text-zinc-500 ml-1">
+                            ({Math.round((summaryTotals.counseledCount / summaryTotals.studentCount) * 100)}%)
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-3 py-1.5 text-right tabular-nums font-bold ${
+                          summaryTotals.uncounseledCount > 0
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-zinc-400"
+                        }`}
+                      >
+                        {summaryTotals.uncounseledCount}
+                      </td>
+                      <td
+                        className={`px-3 py-1.5 text-right tabular-nums font-bold ${
+                          summaryTotals.heavyCount > 0
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-zinc-400"
+                        }`}
+                      >
+                        {summaryTotals.heavyCount}
+                      </td>
+                      <td className="px-3 py-1.5"></td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </section>
