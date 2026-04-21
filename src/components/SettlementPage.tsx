@@ -14,8 +14,11 @@ import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
 import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
+import { useTeacherSheets } from "@/hooks/useTeacherSheets";
+import { useUserRole } from "@/hooks/useUserRole";
 import { findStudentPayments } from "@/lib/studentPaymentMatcher";
 import { isDateInSession } from "@/lib/sessionUtils";
+import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -38,9 +41,91 @@ export default function SettlementPage() {
   const [hoursSearch, setHoursSearch] = useLocalStorage<string>("settlement.hoursSearch", "");
   const [hoursOnlyDiff, setHoursOnlyDiff] = useLocalStorage<boolean>("settlement.hoursOnlyDiff", false);
   const { config: salaryConfig } = useSalaryConfig();
-
+  const { sheets: teacherSheets, markSynced } = useTeacherSheets();
+  const { isAdmin } = useUserRole();
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
+
+  // ─── 전체 시트 순차 동기화 ──────────────────────────
+  const [bulkSync, setBulkSync] = useState<{
+    running: boolean;
+    current: number;
+    total: number;
+    currentName: string;
+    results: TeacherSyncResult[];
+    done: boolean;
+  } | null>(null);
+
+  const handleBulkSync = useCallback(async () => {
+    if (bulkSync?.running) return;
+    // 동기화 대상: 시트 URL 등록된 선생님
+    const targets: Array<{ teacher: Teacher; sheetUrl: string }> = [];
+    for (const sheet of teacherSheets) {
+      if (!sheet.sheet_url) continue;
+      const teacher = teachers.find((t) => t.id === sheet.teacher_id);
+      if (teacher) targets.push({ teacher, sheetUrl: sheet.sheet_url });
+    }
+    if (targets.length === 0) {
+      alert("동기화할 시트가 없습니다. 선생님 페이지에서 시트 URL을 먼저 등록해주세요.");
+      return;
+    }
+    if (
+      !confirm(
+        `${year}년 ${month}월 탭을 ${targets.length}명 전체 순차 동기화합니다.\n` +
+          `선생님 한 명당 수 초~수십 초 걸릴 수 있습니다. 진행하시겠습니까?`
+      )
+    )
+      return;
+
+    setBulkSync({
+      running: true,
+      current: 0,
+      total: targets.length,
+      currentName: "",
+      results: [],
+      done: false,
+    });
+
+    const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
+    const collected: TeacherSyncResult[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const { teacher, sheetUrl } = targets[i];
+      setBulkSync((prev) =>
+        prev ? { ...prev, current: i, currentName: teacher.name } : prev
+      );
+      try {
+        const result = await syncTeacherSheet(
+          teacher.id,
+          teacher.name,
+          sheetUrl,
+          students,
+          "2026-03",
+          exactMonth,
+          salaryConfig,
+          teacher.subjects?.[0]
+        );
+        collected.push(result);
+        if (result.success) markSynced(teacher.id);
+      } catch (e) {
+        collected.push({
+          teacherId: teacher.id,
+          teacherName: teacher.name,
+          success: false,
+          error: (e as Error).message,
+          months: [],
+        });
+      }
+    }
+
+    setBulkSync({
+      running: false,
+      current: targets.length,
+      total: targets.length,
+      currentName: "",
+      results: collected,
+      done: true,
+    });
+  }, [bulkSync, teacherSheets, teachers, students, salaryConfig, year, month, markSynced]);
 
   // 세션 기반 급여: 이 월에 매핑된 모든 과목 세션의 합집합 날짜 범위로 출석을 로드.
   // (예: 수학 3월 세션 = 3/6~4/2, 영어 3월 세션 = ... → union)
@@ -691,7 +776,20 @@ export default function SettlementPage() {
           </span>
         </h2>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
+          {/* 관리자+: 전체 시트 순차 동기화 */}
+          {isAdmin && (
+            <button
+              onClick={handleBulkSync}
+              disabled={bulkSync?.running}
+              className="rounded-sm bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
+              title={`${year}년 ${month}월 탭을 등록된 모든 선생님 시트에 대해 순차 동기화`}
+            >
+              {bulkSync?.running
+                ? `동기화 중 ${bulkSync.current + 1}/${bulkSync.total}`
+                : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 전체 동기화`}
+            </button>
+          )}
           <button
             onClick={prevMonth}
             className="rounded-sm border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
@@ -1122,6 +1220,140 @@ export default function SettlementPage() {
           )}
         </div>
       </div>
+      )}
+
+      {/* 전체 시트 동기화 진행/결과 모달 */}
+      {bulkSync && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
+            <div className="flex flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                {bulkSync.done ? "동기화 완료" : "전체 시트 동기화 진행 중"}
+              </div>
+              {bulkSync.done && (
+                <button
+                  type="button"
+                  onClick={() => setBulkSync(null)}
+                  className="flex h-7 w-7 items-center justify-center rounded-sm text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+                  aria-label="닫기"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
+              {/* 진행률 바 */}
+              <div className="mb-3">
+                <div className="mb-1 flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    {bulkSync.done
+                      ? `${bulkSync.total}명 완료`
+                      : `${Math.min(bulkSync.current + 1, bulkSync.total)} / ${bulkSync.total}명`}
+                  </span>
+                  <span className="tabular-nums">
+                    {Math.round(
+                      ((bulkSync.done ? bulkSync.total : bulkSync.current) /
+                        bulkSync.total) *
+                        100
+                    )}
+                    %
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-sm bg-zinc-200 dark:bg-zinc-800">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{
+                      width: `${
+                        ((bulkSync.done ? bulkSync.total : bulkSync.current) /
+                          bulkSync.total) *
+                        100
+                      }%`,
+                    }}
+                  />
+                </div>
+                {!bulkSync.done && bulkSync.currentName && (
+                  <div className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                    진행 중 · <span className="font-bold">{bulkSync.currentName}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* 결과 목록 (진행 중에도 실시간) */}
+              {bulkSync.results.length > 0 && (
+                <div className="space-y-1">
+                  {bulkSync.results.map((r) => {
+                    const totalMatched = r.months.reduce((s, m) => s + m.matched, 0);
+                    const hasError = !r.success || !!r.error || r.months.some((m) => m.error);
+                    return (
+                      <div
+                        key={r.teacherId}
+                        className={`flex items-start justify-between gap-2 rounded-sm border px-2 py-1.5 text-xs ${
+                          hasError
+                            ? "border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30"
+                            : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30"
+                        }`}
+                      >
+                        <div className="flex-1">
+                          <div className="font-bold text-zinc-900 dark:text-zinc-100">
+                            {r.teacherName}
+                          </div>
+                          {r.error && (
+                            <div className="text-[11px] text-red-600 dark:text-red-400">
+                              {r.error}
+                            </div>
+                          )}
+                          {r.months.map((m) => (
+                            <div
+                              key={`${m.year}-${m.month}`}
+                              className="text-[11px] text-zinc-600 dark:text-zinc-400"
+                            >
+                              {m.error ? (
+                                <span className="text-red-600 dark:text-red-400">
+                                  {m.sheetName}: {m.error}
+                                </span>
+                              ) : (
+                                <>
+                                  {m.sheetName} · 학생 {m.matched}/{m.total}
+                                  {m.memoCount > 0 && ` · 메모 ${m.memoCount}`}
+                                  {m.tierMatched > 0 && ` · tier ${m.tierMatched}`}
+                                </>
+                              )}
+                            </div>
+                          ))}
+                          {!r.error && r.months.length === 0 && (
+                            <div className="text-[11px] text-zinc-500">해당 월 탭 없음</div>
+                          )}
+                        </div>
+                        <span
+                          className={`flex-shrink-0 text-[10px] font-bold ${
+                            hasError
+                              ? "text-red-600 dark:text-red-400"
+                              : "text-emerald-600 dark:text-emerald-400"
+                          }`}
+                        >
+                          {hasError ? "실패" : "완료 · " + totalMatched + "명"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {bulkSync.done && (
+              <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                <button
+                  type="button"
+                  onClick={() => setBulkSync(null)}
+                  className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  닫기
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

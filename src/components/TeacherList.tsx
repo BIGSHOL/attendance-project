@@ -365,6 +365,9 @@ export default function TeacherList() {
         }
       };
       list = [...list].sort(cmp);
+    } else {
+      // 기본 정렬: 이름 가나다 오름차순
+      list = [...list].sort((a, b) => a.name.localeCompare(b.name, "ko"));
     }
 
     return list;
