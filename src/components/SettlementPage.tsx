@@ -16,7 +16,7 @@ import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useTeacherSheets } from "@/hooks/useTeacherSheets";
 import { useUserRole } from "@/hooks/useUserRole";
-import { findStudentPayments } from "@/lib/studentPaymentMatcher";
+import { findStudentPayments, filterPaymentsForTeacherRow } from "@/lib/studentPaymentMatcher";
 import { isDateInSession } from "@/lib/sessionUtils";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import type { Teacher, Student } from "@/types";
@@ -516,16 +516,28 @@ export default function SettlementPage() {
         }
       } else {
         // 수학/기타 — 기존 student 단위 loop
+        const isMathTeacher = !!teacher.subjects?.some(
+          (s) => s === "math" || s === "highmath"
+        );
         for (const student of teacherStudents) {
           const subs = Array.from(studentSubjects.get(student.id) || []);
           if (subs.length === 0) continue;
           const classUnits = studentUnitMap.get(student.id) || 0;
           const totalUnits = studentTotalMap.get(student.id) || 0;
           const share = 1 / subs.length;
+          // 출석부 탭과 동일하게 filterPaymentsForTeacherRow 적용 —
+          // 해당 선생님 + 수학 선생님이면 요일 패턴 포함 수납만.
+          // (이 필터 없을 경우 다른 선생님 수납/행정 수납이 섞여 paidAmount 부풀려짐)
           const studentPayments = findStudentPayments(student, monthPayments);
+          const filtered = filterPaymentsForTeacherRow(studentPayments, {
+            teacherId: teacher.id,
+            teacherName: teacher.name,
+            teacherEnglishName: teacher.englishName,
+            isMathTeacher,
+          });
           const paidAmount =
-            studentPayments.length > 0
-              ? studentPayments.reduce((a, p) => a + (p.charge_amount || 0), 0)
+            filtered.length > 0
+              ? filtered.reduce((a, p) => a + (p.charge_amount || 0), 0)
               : null;
           const { studentBase } = computeRow({
             student,

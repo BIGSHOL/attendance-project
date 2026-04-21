@@ -97,6 +97,58 @@ export function findPaymentStudent(
 }
 
 /**
+ * 수납명 끝의 요일 문자열 추출
+ *   "초등M 초4 BS1J 화금" → ["화","금"]
+ */
+export function extractPaymentDays(paymentName: string): string[] {
+  const m = (paymentName || "").match(/\s([월화수목금토일]+)\s*$/);
+  return m ? m[1].split("") : [];
+}
+
+/**
+ * 수납 목록을 이 선생님·이 행(분반) 기준으로 필터.
+ *   AttendancePage/SettlementPage 공유 — 정산 수치 일치 보장.
+ *
+ *   1) teacher_staff_id / teacher_name 이 이 선생님인 수납만
+ *   2) 수학 선생님일 경우 payment_name 에 요일 토큰이 있는 수납만
+ *      (요일 없는 행정/기타 수납 제외)
+ *   3) rowDays 가 지정되면 payment 요일이 그 집합에 포함되는 것만
+ *
+ * AttendancePage 에서 이전에 local 로 가지고 있던 `filterPaymentsForRow` 로직.
+ */
+export function filterPaymentsForTeacherRow<T extends PaymentLite>(
+  payments: T[],
+  opts: {
+    teacherId: string;
+    teacherName?: string;
+    teacherEnglishName?: string;
+    isMathTeacher: boolean;
+    rowDays?: string[];
+  }
+): T[] {
+  const teacherPayments = payments.filter((p) => {
+    if (p.teacher_staff_id && p.teacher_staff_id === opts.teacherId) return true;
+    const pt = p.teacher_name || "";
+    if (!pt) return false;
+    if (opts.teacherName && pt.includes(opts.teacherName)) return true;
+    if (opts.teacherEnglishName && pt.includes(opts.teacherEnglishName)) return true;
+    return false;
+  });
+  const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
+  const dayFiltered = opts.isMathTeacher
+    ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
+    : teacherPayments;
+  const rowDays = opts.rowDays;
+  if (!rowDays || rowDays.length === 0) return dayFiltered;
+  const rowDaysSet = new Set(rowDays);
+  return dayFiltered.filter((p) => {
+    const payDays = extractPaymentDays(p.payment_name || "");
+    if (payDays.length === 0) return !opts.isMathTeacher;
+    return payDays.every((d) => rowDaysSet.has(d));
+  });
+}
+
+/**
  * 선생님 → 해당 월 담당 학생들의 수납 합계
  */
 export function sumTeacherPayments<T extends PaymentLite>(

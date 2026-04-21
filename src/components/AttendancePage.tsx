@@ -29,7 +29,12 @@ import {
   isAttendanceCountable,
   gradeToGroup,
 } from "@/lib/salary";
-import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
+import {
+  findStudentPayments,
+  filterPaymentsForTeacherRow,
+  extractPaymentDays,
+  type PaymentLite,
+} from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth, isDateValidForStudent } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
 import { toSubjectLabel } from "@/lib/labelMap";
@@ -469,15 +474,6 @@ export default function AttendancePage() {
   }, [isEnglishTeacher, teacherShares, rawMonthPayments, allStudents, year, month, selectedTeacher?.name]);
 
   /**
-   * 수납명 끝의 요일 문자열을 배열로 추출.
-   * 예: "초등M 초4 BS1J 화금" → ["화","금"], "초등M 개별 JJ1E 수" → ["수"]
-   */
-  const extractPaymentDays = (paymentName: string): string[] => {
-    const m = (paymentName || "").match(/\s([월화수목금토일]+)\s*$/);
-    return m ? m[1].split("") : [];
-  };
-
-  /**
    * 수납명에서 끝의 요일 토큰을 제거한 prefix (분반/tier 폴백 식별자).
    */
   const paymentClassKey = (paymentName: string): string =>
@@ -887,28 +883,7 @@ export default function AttendancePage() {
       teacherEnglishName?: string;
       isMathTeacher: boolean;
     }
-  ) => {
-    const teacherPayments = payments.filter((p) => {
-      if (p.teacher_staff_id && p.teacher_staff_id === opts.teacherId) return true;
-      const pt = p.teacher_name || "";
-      if (!pt) return false;
-      if (opts.teacherName && pt.includes(opts.teacherName)) return true;
-      if (opts.teacherEnglishName && pt.includes(opts.teacherEnglishName)) return true;
-      return false;
-    });
-    const MATH_DAY_PATTERN = /\s[월화수목금토일]+\s*$/;
-    const dayFiltered = opts.isMathTeacher
-      ? teacherPayments.filter((p) => MATH_DAY_PATTERN.test(p.payment_name || ""))
-      : teacherPayments;
-    const rowDays = row.days || [];
-    if (rowDays.length === 0) return dayFiltered;
-    const rowDaysSet = new Set(rowDays);
-    return dayFiltered.filter((p) => {
-      const payDays = extractPaymentDays(p.payment_name || "");
-      if (payDays.length === 0) return !opts.isMathTeacher;
-      return payDays.every((d) => rowDaysSet.has(d));
-    });
-  };
+  ) => filterPaymentsForTeacherRow(payments, { ...opts, rowDays: row.days });
 
   // 행별 등록차수: (이 수강에 해당하는 수납 합계) / (이 수강의 학생 단가)
   const termCountMap = useMemo(() => {
