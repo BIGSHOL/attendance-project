@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { cachedFetch, getCached, invalidateCache } from "@/lib/fetchCache";
 
 /**
  * payment_shares row — 강사별 학생 수납 귀속.
@@ -25,46 +26,44 @@ export interface PaymentShare {
 
 /**
  * 특정 선생님 × 월 의 payment_shares 조회.
- * 영어 선생님 AttendancePage 에서 기존 payments 대신 사용.
+ * SWR: 모듈 캐시에 있으면 즉시 반환, 백그라운드 revalidate → 선생님 전환 깜빡임 제거.
  */
 export function usePaymentShares(teacherStaffId: string, year: number, month: number) {
-  const [shares, setShares] = useState<PaymentShare[]>([]);
-  const [loading, setLoading] = useState(true);
+  const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+  const url = teacherStaffId
+    ? `/api/payment-shares?${new URLSearchParams({ teacher_id: teacherStaffId, month: monthStr })}`
+    : null;
 
-  const monthStr = useMemo(
-    () => `${year}-${String(month).padStart(2, "0")}`,
-    [year, month]
-  );
+  const initial = url ? getCached<PaymentShare[]>(url) : undefined;
+  const [shares, setShares] = useState<PaymentShare[]>(initial ?? []);
+  const [loading, setLoading] = useState(!initial && !!teacherStaffId);
 
   const fetchShares = useCallback(async () => {
-    if (!teacherStaffId) {
+    if (!url) {
       setShares([]);
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const hasCached = !!getCached<PaymentShare[]>(url);
+    if (!hasCached) setLoading(true);
     try {
-      const params = new URLSearchParams({
-        teacher_id: teacherStaffId,
-        month: monthStr,
-      });
-      const res = await fetch(`/api/payment-shares?${params}`, {
-        cache: "no-store",
-      });
-      if (res.ok) {
-        const data = (await res.json()) as PaymentShare[];
-        setShares(data);
-      } else {
-        setShares([]);
-      }
+      const data = await cachedFetch<PaymentShare[]>(url);
+      if (Array.isArray(data)) setShares(data);
+    } catch {
+      // 기존 값 유지
     } finally {
       setLoading(false);
     }
-  }, [teacherStaffId, monthStr]);
+  }, [url]);
 
   useEffect(() => {
     fetchShares();
   }, [fetchShares]);
 
-  return { shares, loading, refetch: fetchShares };
+  const refetch = useCallback(async () => {
+    if (url) invalidateCache(url);
+    await fetchShares();
+  }, [url, fetchShares]);
+
+  return { shares, loading, refetch };
 }

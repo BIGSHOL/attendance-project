@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useUserRole } from "@/hooks/useUserRole";
+import { getCached, cachedFetch, invalidateCache } from "@/lib/fetchCache";
 
 export interface AttendanceRow {
   id: string;
@@ -71,9 +72,25 @@ export function useAttendanceData(
   /** 세션 모드 등에서 기간을 덮어쓰기 (YYYY-MM-DD) */
   rangeOverride?: { startDate: string; endDate: string } | null
 ) {
-  const [records, setRecords] = useState<AttendanceRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const recordsRef = useRef<AttendanceRow[]>([]);
+  // fetch URL — 캐시 키로도 사용. 월별 / 세션별 범위 모두 고유 키.
+  const fetchUrl = useMemo(() => {
+    if (!teacherId) return null;
+    const params = new URLSearchParams({ teacher_id: teacherId });
+    if (rangeOverride?.startDate && rangeOverride?.endDate) {
+      params.set("startDate", rangeOverride.startDate);
+      params.set("endDate", rangeOverride.endDate);
+    } else {
+      params.set("year", String(year));
+      params.set("month", String(month));
+    }
+    return `/api/attendance?${params}`;
+  }, [teacherId, year, month, rangeOverride?.startDate, rangeOverride?.endDate]);
+
+  // SWR: 캐시에 있으면 즉시 보여주고 백그라운드 revalidate (스켈레톤 깜빡임 제거)
+  const initialCached = fetchUrl ? getCached<AttendanceRow[]>(fetchUrl) : undefined;
+  const [records, setRecords] = useState<AttendanceRow[]>(initialCached ?? []);
+  const [loading, setLoading] = useState(!initialCached && !!teacherId);
+  const recordsRef = useRef<AttendanceRow[]>(initialCached ?? []);
   useEffect(() => {
     recordsRef.current = records;
   }, [records]);
@@ -96,46 +113,28 @@ export function useAttendanceData(
   //   session 뷰로 rangeOverride 가 나중에 들어오는 케이스), 이전 요청이 늦게 resolve
   //   되어도 그 결과로 records 를 덮어쓰지 않도록 reqId 로 stale 체크.
   const reqIdRef = useRef(0);
-  const fetchRecords = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!teacherId) {
-        setRecords([]);
-        setLoading(false);
-        return;
-      }
-      const myReqId = ++reqIdRef.current;
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({ teacher_id: teacherId });
-        if (overrideStart && overrideEnd) {
-          params.set("startDate", overrideStart);
-          params.set("endDate", overrideEnd);
-        } else {
-          params.set("year", String(year));
-          params.set("month", String(month));
-        }
-        const res = await fetch(`/api/attendance?${params}`, {
-          cache: "no-store",
-          signal,
-        });
-        if (res.ok && reqIdRef.current === myReqId) {
-          const data = (await res.json()) as AttendanceRow[];
-          if (reqIdRef.current === myReqId) setRecords(data);
-        }
-      } catch (e) {
-        // AbortError 는 무시
-        if ((e as Error).name !== "AbortError") throw e;
-      } finally {
-        if (reqIdRef.current === myReqId) setLoading(false);
-      }
-    },
-    [teacherId, year, month, overrideStart, overrideEnd]
-  );
+  const fetchRecords = useCallback(async () => {
+    if (!fetchUrl) {
+      setRecords([]);
+      setLoading(false);
+      return;
+    }
+    const myReqId = ++reqIdRef.current;
+    // 캐시에 있으면 로딩 표시 없이 조용히 revalidate
+    const hasCached = !!getCached<AttendanceRow[]>(fetchUrl);
+    if (!hasCached) setLoading(true);
+    try {
+      const data = await cachedFetch<AttendanceRow[]>(fetchUrl);
+      if (reqIdRef.current === myReqId) setRecords(data);
+    } catch {
+      // 네트워크 에러는 무시 — 기존 상태 유지
+    } finally {
+      if (reqIdRef.current === myReqId) setLoading(false);
+    }
+  }, [fetchUrl]);
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    fetchRecords(ctrl.signal);
-    return () => ctrl.abort();
+    fetchRecords();
   }, [fetchRecords]);
 
   // 현재 보고 있는 기간 (날짜 필터링)
@@ -455,7 +454,10 @@ export function useAttendanceData(
     updateMemo,
     updateCellColor,
     updateHomework,
-    refetch: fetchRecords,
+    refetch: useCallback(async () => {
+      if (fetchUrl) invalidateCache(fetchUrl);
+      await fetchRecords();
+    }, [fetchUrl, fetchRecords]),
     /** 다른 사용자가 편집 중인 셀 맵 (key: "studentId|date") */
     editingByPeers,
     /** 셀 편집 시작/종료 broadcast */

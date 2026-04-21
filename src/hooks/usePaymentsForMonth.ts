@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { PaymentLite } from "@/lib/studentPaymentMatcher";
+import { cachedFetch, getCached } from "@/lib/fetchCache";
 
 /**
  * billing_month 가 해당 연월에 매칭되는지 확인.
@@ -21,65 +22,40 @@ export function billingMonthMatches(raw: string, year: number, month: number): b
 
 /**
  * 특정 연월의 수납 내역을 모두 가져온다.
- * API 의 month 필터 하나로는 포맷 불일치(hypen/no-hypen 등) 케이스에 취약하므로
- * 가능한 포맷들을 순차 시도해서 첫 번째로 비어있지 않은 결과를 반환.
+ * SWR: 모듈 캐시에 있으면 즉시 반환하고 백그라운드 revalidate → 월 전환 시 깜빡임 제거.
  */
 export function usePaymentsForMonth(year: number, month: number) {
-  const [payments, setPayments] = useState<PaymentLite[]>([]);
-  const [loading, setLoading] = useState(false);
+  const mm = String(month).padStart(2, "0");
+  const yyyy = String(year);
+  const candidates = `${yyyy}${mm},${yyyy}-${mm},${yyyy}/${mm},${yyyy}.${mm}`;
+  const url = `/api/payments?months=${encodeURIComponent(candidates)}`;
+
+  const cached = getCached<PaymentLite[]>(url);
+  const [payments, setPayments] = useState<PaymentLite[]>(cached ?? []);
+  const [loading, setLoading] = useState(!cached);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-
-    const mm = String(month).padStart(2, "0");
-    const yyyy = String(year);
-    // 4가지 포맷을 한 번의 IN 쿼리로 처리 (이전엔 순차 RTT 4회)
-    const candidates = [`${yyyy}${mm}`, `${yyyy}-${mm}`, `${yyyy}/${mm}`, `${yyyy}.${mm}`];
+    const hasCached = !!getCached<PaymentLite[]>(url);
+    if (!hasCached) setLoading(true);
 
     (async () => {
       try {
-        const res = await fetch(
-          `/api/payments?months=${encodeURIComponent(candidates.join(","))}`
-        );
-        if (res.ok) {
-          const body = await res.json();
-          if (!cancelled && Array.isArray(body)) {
-            setPayments(body as PaymentLite[]);
-            return;
-          }
+        const data = await cachedFetch<PaymentLite[]>(url);
+        if (!cancelled && Array.isArray(data)) {
+          setPayments(data);
         }
       } catch {
-        // fallthrough to fallback
-      }
-
-      // fallback: 전체 로드 후 클라 필터
-      try {
-        const res = await fetch(`/api/payments`);
-        if (res.ok) {
-          const all = await res.json();
-          if (Array.isArray(all)) {
-            const filtered = (all as PaymentLite[]).filter((p) =>
-              billingMonthMatches(p.billing_month, year, month)
-            );
-            if (!cancelled) setPayments(filtered);
-            return;
-          }
-        }
-      } catch {
-        // 무시
-      }
-
-      if (!cancelled) setPayments([]);
-    })()
-      .finally(() => {
+        // 기존 값 유지
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [year, month]);
+  }, [url]);
 
   return { payments, loading };
 }

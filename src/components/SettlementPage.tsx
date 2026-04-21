@@ -19,6 +19,9 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { findStudentPayments, filterPaymentsForTeacherRow } from "@/lib/studentPaymentMatcher";
 import { isDateInSession } from "@/lib/sessionUtils";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
+import { computeTeacherMonthPayroll } from "@/lib/teacherPayroll";
+import { filterStudentsByMonth } from "@/lib/studentFilter";
+import BulkSyncSettings from "./settlement/BulkSyncSettings";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -84,12 +87,38 @@ export default function SettlementPage() {
     done: boolean;
   } | null>(null);
 
+  // 전체 동기화에서 제외할 선생님 id 집합 — localStorage 영속화
+  const [excludedSyncIds, setExcludedSyncIds] = useLocalStorageSet(
+    "settlement.excludedSyncIds"
+  );
+  const toggleExcludedSync = useCallback(
+    (teacherId: string) => {
+      const next = new Set(excludedSyncIds);
+      if (next.has(teacherId)) next.delete(teacherId);
+      else next.add(teacherId);
+      setExcludedSyncIds(next);
+    },
+    [excludedSyncIds, setExcludedSyncIds]
+  );
+  const bulkToggleExcludedSync = useCallback(
+    (teacherIds: string[], shouldExclude: boolean) => {
+      const next = new Set(excludedSyncIds);
+      for (const id of teacherIds) {
+        if (shouldExclude) next.add(id);
+        else next.delete(id);
+      }
+      setExcludedSyncIds(next);
+    },
+    [excludedSyncIds, setExcludedSyncIds]
+  );
+
   const handleBulkSync = useCallback(async () => {
     if (bulkSync?.running) return;
-    // 동기화 대상: 시트 URL 등록된 선생님
+    // 동기화 대상: 시트 URL 등록된 선생님 (설정에서 제외된 선생님 제거)
     const targets: Array<{ teacher: Teacher; sheetUrl: string }> = [];
     for (const sheet of teacherSheets) {
       if (!sheet.sheet_url) continue;
+      if (excludedSyncIds.has(sheet.teacher_id)) continue;
       const teacher = teachers.find((t) => t.id === sheet.teacher_id);
       if (teacher) targets.push({ teacher, sheetUrl: sheet.sheet_url });
     }
@@ -153,7 +182,15 @@ export default function SettlementPage() {
       results: collected,
       done: true,
     });
-  }, [bulkSync, teacherSheets, teachers, students, salaryConfig, year, month, markSynced]);
+  }, [bulkSync, teacherSheets, teachers, students, salaryConfig, year, month, markSynced, excludedSyncIds]);
+
+  // 동기화 설정 팝오버에 전달할 "시트 URL 등록된 선생님" 목록
+  const syncCandidateTeachers = useMemo(() => {
+    const withSheet = new Set(
+      teacherSheets.filter((s) => s.sheet_url).map((s) => s.teacher_id)
+    );
+    return teachers.filter((t) => withSheet.has(t.id));
+  }, [teacherSheets, teachers]);
 
   // 세션 기반 급여: 이 월에 매핑된 모든 과목 세션의 합집합 날짜 범위로 출석을 로드.
   // (예: 수학 3월 세션 = 3/6~4/2, 영어 3월 세션 = ... → union)
@@ -179,7 +216,7 @@ export default function SettlementPage() {
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
   const { hasPostForTeacher } = useAllBlogPosts(year, month);
-  const { isBlogRequired, getSalary } = useTeacherSettings();
+  const { isBlogRequired, getSalary, getAdminAllowance } = useTeacherSettings();
   const { payments: monthPayments, loading: paymentsLoading } = usePaymentsForMonth(year, month);
   const { overrides: tierOverrides } = useAllTierOverrides();
 
@@ -568,21 +605,81 @@ export default function SettlementPage() {
         }))
         .sort((a, b) => b.baseSalary - a.baseSalary);
 
-      // 출석부 탭과 동일 — 최종 합계는 정수 내림
-      const baseSalaryInt = Math.floor(baseSalary);
-      const finalSalary = calculateFinalSalary(
-        baseSalaryInt,
-        effectiveConfig.incentives,
-        settlement
-      );
+      // ⭐ 출석부 탭과 완벽히 동일한 값 — 공유 순수 함수 computeTeacherMonthPayroll 호출.
+      //   기존 SettlementPage 자체 로직(위 baseSalary 계산)은 subject breakdown 용으로만 유지.
+      //   최종 합계(baseSalary/finalSalary)는 출석부 탭과 동일한 파이프라인으로 덮어씀.
+      const payrollFilteredStudents = filterStudentsByMonth(teacherStudents, year, month);
+      const teacherDataMap = new Map<string, {
+        attendance: Record<string, number>;
+        memos: Record<string, string>;
+        homework: Record<string, boolean>;
+        cellColors: Record<string, string>;
+      }>();
+      for (const r of attendanceRecords) {
+        if (r.teacher_id !== teacher.id) continue;
+        const key = r.class_name ? `${r.student_id}|${r.class_name}` : r.student_id;
+        let d = teacherDataMap.get(key);
+        if (!d) {
+          d = { attendance: {}, memos: {}, homework: {}, cellColors: {} };
+          teacherDataMap.set(key, d);
+        }
+        if (r.hours > 0) d.attendance[r.date] = r.hours;
+        if (r.memo) d.memos[r.date] = r.memo;
+        if (r.homework) d.homework[r.date] = true;
+        if (r.cell_color) d.cellColors[r.date] = r.cell_color;
+      }
+      // 이 선생님에 해당하는 tier override 만 payroll 포맷 (student_id | student_id|className) 으로 변환
+      const teacherTierOverrides: Record<string, string> = {};
+      const prefix = `${teacher.id}|`;
+      for (const [k, v] of Object.entries(tierOverrides)) {
+        if (!k.startsWith(prefix)) continue;
+        const rest = k.slice(prefix.length);
+        // rest = "studentId" 또는 "studentId|className"
+        teacherTierOverrides[rest] = v;
+      }
+      // 행정수당
+      const aa = getAdminAllowance(teacher.id);
+      let adminSalary = 0;
+      if (aa) {
+        const item = (effectiveConfig.items || []).find((i) => i.id === aa.tierId);
+        if (item) {
+          const ratio = getEffectiveRatio(item, effectiveConfig, teacher.name);
+          adminSalary = Math.floor(
+            aa.baseAmount * (ratio / 100) * (1 - effectiveConfig.academyFee / 100)
+          );
+        }
+      }
+      const monthStrFmt = `${year}-${String(month).padStart(2, "0")}`;
+      const isDateInPeriodMonthly = (dk: string) => dk.startsWith(monthStrFmt);
+      const payroll = computeTeacherMonthPayroll({
+        teacher,
+        filteredStudents: payrollFilteredStudents,
+        allStudents: students,
+        rawMonthPayments: monthPayments,
+        monthPayments,
+        teacherShares,
+        salaryConfig: effectiveConfig,
+        studentDataMap: teacherDataMap,
+        tierOverrides: teacherTierOverrides,
+        settlement,
+        adminSalary,
+        blogPenalty,
+        year,
+        month,
+        isDateInPeriod: isDateInPeriodMonthly,
+        salaryType,
+        commissionDays,
+        subject: teacherSubjectHint,
+        isEnglishTeacher,
+      });
 
       return {
         teacher,
-        studentCount: teacherStudents.length,
-        totalAttendance,
-        countableAttendance,
-        baseSalary: baseSalaryInt,
-        finalSalary,
+        studentCount: payroll.studentCount,
+        totalAttendance: payroll.totalAttendance,
+        countableAttendance: payroll.countableAttendance,
+        baseSalary: payroll.totalSalary,
+        finalSalary: payroll.finalSalary,
         settlement,
         salaryType,
         commissionDays,
@@ -591,7 +688,7 @@ export default function SettlementPage() {
         subjects,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions, getAdminAllowance]);
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {
@@ -853,18 +950,26 @@ export default function SettlementPage() {
         </h2>
 
         <div className="flex items-center gap-2">
-          {/* 관리자+: 전체 시트 순차 동기화 */}
+          {/* 관리자+: 전체 시트 순차 동기화 + 설정 */}
           {isAdmin && (
-            <button
-              onClick={handleBulkSync}
-              disabled={bulkSync?.running}
-              className="rounded-sm bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
-              title={`${year}년 ${month}월 탭을 등록된 모든 선생님 시트에 대해 순차 동기화`}
-            >
-              {bulkSync?.running
-                ? `동기화 중 ${bulkSync.current + 1}/${bulkSync.total}`
-                : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 전체 동기화`}
-            </button>
+            <>
+              <button
+                onClick={handleBulkSync}
+                disabled={bulkSync?.running}
+                className="rounded-sm bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
+                title={`${year}년 ${month}월 탭을 등록된 모든 선생님 시트에 대해 순차 동기화`}
+              >
+                {bulkSync?.running
+                  ? `동기화 중 ${bulkSync.current + 1}/${bulkSync.total}`
+                  : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 전체 동기화`}
+              </button>
+              <BulkSyncSettings
+                teachers={syncCandidateTeachers}
+                excludedIds={excludedSyncIds}
+                onToggle={toggleExcludedSync}
+                onBulkToggle={bulkToggleExcludedSync}
+              />
+            </>
           )}
           <button
             onClick={prevMonth}
