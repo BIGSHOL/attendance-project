@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
-import type { Consultation } from "@/types";
+import type { Consultation, ConsultationCategory } from "@/types";
 
 /**
  * GET /api/sheets/consultations?teacher=...&month=YYYY-MM&key=...
@@ -8,16 +8,19 @@ import type { Consultation } from "@/types";
  * Google Sheets `IMPORTDATA()` 전용 공개 엔드포인트 (CSV 반환).
  * 로그인 없이 접근 가능 — 반드시 `SHEETS_API_KEY` 환경변수로 보호.
  *
- * 응답 (날짜는 괄호+한글 요일 포맷 — Google Sheets 가 날짜로 자동 파싱하지 못하도록):
- *   성명,상담
- *   김소은,03/23(월)
- *   박지율,"04/14(화), 04/18(토)"
+ * 응답 컬럼: 성명 | 상담 | 상담내용
+ *   - 상담: 날짜 목록 (괄호+한글 요일 포맷 → Sheets 가 날짜로 자동 파싱 못함)
+ *   - 상담내용: 회차별 [날짜 태그] 제목 + 본문, 회차 간 빈 줄 구분
  *
- * 수식 예:
- *   =IFERROR(VLOOKUP(B6,
- *     IMPORTDATA("https://attendance-project-snowy.vercel.app/api/sheets/consultations?teacher="
- *                &A$2&"&month=20"&SUBSTITUTE(B$1,".","-")&"&key=..."),
- *     2, FALSE), "")
+ * 예:
+ *   성명,상담,상담내용
+ *   김소은,03/23(월),"[03/23(월) 학생·학업] 성적 하락 상담
+ *   지난 달 대비 10점 하락..."
+ *   박지율,"04/14(화), 04/18(토)","[04/14(화) 학부모·고민] ...
+ *
+ * 수식:
+ *   H6 = VLOOKUP(B6, IMPORTDATA(...), 2, FALSE)  // 날짜
+ *   I6 = VLOOKUP(B6, IMPORTDATA(...), 3, FALSE)  // 내용 (같은 URL → 캐시 공유)
  */
 export async function GET(req: NextRequest) {
   const expectedKey = process.env.SHEETS_API_KEY;
@@ -65,25 +68,36 @@ export async function GET(req: NextRequest) {
       extractNameAliases(teacher).map((n) => n.toLowerCase())
     );
 
-    // studentName → sorted MM/DD 목록
-    const byStudent = new Map<string, string[]>();
+    // studentName → 회차별 entry 목록 (원본 date 로 정렬 후 포맷팅)
+    const byStudent = new Map<string, Entry[]>();
     for (const doc of snap.docs) {
       const c = doc.data() as Omit<Consultation, "id">;
       if (!matchesTeacherByAliases(c.consultantName, teacherAliasesLower)) continue;
-      const mmdd = toMMDD(c.date);
-      if (!mmdd) continue;
+      const mmddWeekday = toMMDD(c.date);
+      if (!mmddWeekday) continue;
       const list = byStudent.get(c.studentName) ?? [];
-      list.push(mmdd);
+      list.push({
+        date: c.date,
+        mmddWeekday,
+        type: c.type,
+        category: c.category,
+        title: c.title ?? "",
+        content: c.content ?? "",
+      });
       byStudent.set(c.studentName, list);
     }
 
-    const rows: string[] = ["성명,상담"];
+    const rows: string[] = ["성명,상담,상담내용"];
     const students = Array.from(byStudent.keys()).sort((a, b) =>
       a.localeCompare(b, "ko")
     );
     for (const name of students) {
-      const dates = byStudent.get(name)!.sort(); // MM/DD 오름차순
-      rows.push(`${csvEscape(name)},${csvEscape(dates.join(", "))}`);
+      const entries = byStudent.get(name)!.sort((a, b) => a.date.localeCompare(b.date));
+      const dateCol = entries.map((e) => e.mmddWeekday).join(", ");
+      const detailCol = entries.map(formatEntry).join("\n\n");
+      rows.push(
+        `${csvEscape(name)},${csvEscape(dateCol)},${csvEscape(detailCol)}`
+      );
     }
     const csv = rows.join("\n");
 
@@ -155,4 +169,40 @@ function csvEscape(v: string): string {
     return `"${v.replace(/"/g, '""')}"`;
   }
   return v;
+}
+
+interface Entry {
+  date: string;            // YYYY-MM-DD (정렬용)
+  mmddWeekday: string;     // "03/24(화)"
+  type: "parent" | "student";
+  category: ConsultationCategory;
+  title: string;
+  content: string;
+}
+
+/** ConsultationDetailModal 의 CATEGORY_LABEL 와 동일 */
+const CATEGORY_LABEL: Record<ConsultationCategory, string> = {
+  academic: "학업",
+  behavior: "생활/태도",
+  attendance: "출결",
+  progress: "진도",
+  concern: "고민",
+  compliment: "칭찬",
+  complaint: "불만",
+  general: "일반",
+  other: "기타",
+};
+
+/**
+ * 회차 1건을 셀 표시용 문자열로 변환.
+ *   "[03/24(화) 학부모·학업] 제목 텍스트
+ *    본문 내용..."
+ */
+function formatEntry(e: Entry): string {
+  const who = e.type === "parent" ? "학부모" : "학생";
+  const cat = CATEGORY_LABEL[e.category] ?? e.category;
+  const header = `[${e.mmddWeekday} ${who}·${cat}]`;
+  const titlePart = e.title ? ` ${e.title}` : "";
+  const firstLine = `${header}${titlePart}`;
+  return e.content ? `${firstLine}\n${e.content}` : firstLine;
 }
