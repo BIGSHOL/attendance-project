@@ -181,6 +181,11 @@ export default function ConsultationsPage() {
     "consultations.hideUnassignedSubject",
     false
   );
+  // 학생 상담 현황 테이블 — 학생 이름 검색 (localStorage 영속화)
+  const [studentSearch, setStudentSearch] = useLocalStorage<string>(
+    "consultations.studentSearch",
+    ""
+  );
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
@@ -401,18 +406,30 @@ export default function ConsultationsPage() {
     });
   }, [scopedStudents, matrixByStudent]);
 
+  // 학생 이름 검색 필터 적용 — 공백/대소문자 무시 substring 매칭
+  const searchedStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return sortedStudents;
+    return sortedStudents.filter((s) => {
+      const name = (s.name || "").toLowerCase();
+      const grade = (s.grade || "").toLowerCase();
+      const school = (s.school || "").toLowerCase();
+      return name.includes(q) || grade.includes(q) || school.includes(q);
+    });
+  }, [sortedStudents, studentSearch]);
+
   // 학생 목록 페이지네이션: 페이지 크기 = 월 일수 (좌측 날짜 행 수와 일치)
   const pageSize = useMemo(() => {
     const [y, m] = selectedMonth.split("-").map(Number);
     return new Date(y, m, 0).getDate();
   }, [selectedMonth]);
   const [studentsPage, setStudentsPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(sortedStudents.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(searchedStudents.length / pageSize));
 
   useEffect(() => {
-    // 월/담임/과목 바뀌면 1페이지로 리셋
+    // 월/담임/과목/검색어 바뀌면 1페이지로 리셋
     setStudentsPage(1);
-  }, [selectedMonth, selectedHomeroom]);
+  }, [selectedMonth, selectedHomeroom, studentSearch]);
 
   useEffect(() => {
     // 현재 페이지가 전체 페이지 초과 시 조정
@@ -420,8 +437,8 @@ export default function ConsultationsPage() {
   }, [studentsPage, totalPages]);
 
   const pagedStudents = useMemo(
-    () => sortedStudents.slice((studentsPage - 1) * pageSize, studentsPage * pageSize),
-    [sortedStudents, studentsPage, pageSize]
+    () => searchedStudents.slice((studentsPage - 1) * pageSize, studentsPage * pageSize),
+    [searchedStudents, studentsPage, pageSize]
   );
 
   const totalConsultations = scopedConsultations.length;
@@ -859,7 +876,7 @@ export default function ConsultationsPage() {
                 className="flex flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
                 style={leftHeight ? { maxHeight: leftHeight } : undefined}
               >
-                <div className="flex flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-950">
+                <div className="flex h-7 flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 px-3 dark:border-zinc-800 dark:bg-zinc-950">
                   <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
                     학생별 상담 현황 ({monthLabel})
                     {!isAllView && (
@@ -868,9 +885,42 @@ export default function ConsultationsPage() {
                       </span>
                     )}
                   </span>
-                  <span className="text-[10px] text-zinc-500">
-                    읽기 전용 · ijw-calander에서 동기화
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={studentSearch}
+                        onChange={(e) => setStudentSearch(e.target.value)}
+                        placeholder="학생 이름 검색"
+                        className="h-5 w-36 rounded-sm border border-zinc-300 bg-white pl-5 pr-5 text-[10px] leading-none text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                      <svg
+                        className="pointer-events-none absolute left-1 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-zinc-400"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l3.817 3.817a1 1 0 01-1.414 1.414l-3.817-3.817A6 6 0 012 8z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      {studentSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setStudentSearch("")}
+                          aria-label="검색어 지우기"
+                          className="absolute right-0.5 top-1/2 -translate-y-1/2 px-0.5 text-[10px] leading-none text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-zinc-500">
+                      읽기 전용 · ijw-calander에서 동기화
+                    </span>
+                  </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="w-full text-xs">
@@ -994,16 +1044,43 @@ export default function ConsultationsPage() {
                           </tr>
                         );
                       })}
+                      {/* 마지막 페이지에서 부족한 만큼 빈 행 채움 — 테이블 높이 고정 → 페이지네이션 위치 일정 */}
+                      {Array.from({ length: Math.max(0, pageSize - pagedStudents.length) }).map(
+                        (_, i) => (
+                          <tr
+                            key={`blank-${i}`}
+                            aria-hidden="true"
+                            className="h-7 border-b border-zinc-100 dark:border-zinc-800"
+                          >
+                            <td colSpan={isAllView ? 6 : 5} />
+                          </tr>
+                        )
+                      )}
+                      {/* 검색 결과 0건 안내 — 빈 행 위에 오버레이 느낌으로 표시 */}
+                      {searchedStudents.length === 0 && studentSearch.trim() && (
+                        <tr className="pointer-events-none">
+                          <td
+                            colSpan={isAllView ? 6 : 5}
+                            className="px-2 py-3 text-center text-[11px] text-zinc-500 dark:text-zinc-400"
+                          >
+                            &quot;{studentSearch.trim()}&quot; 검색 결과가 없습니다
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
-                {/* 학생 목록 페이지네이션 — 좌측 '총합' 행과 동일 높이(h-7) */}
-                {totalPages > 1 && (
-                  <div className="flex h-7 flex-shrink-0 items-center justify-between border-t border-zinc-200 bg-zinc-50/50 px-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+                {/* 학생 목록 페이지네이션 — 좌측 '총합' 행과 동일 높이(h-7). 페이지 없을 때도 자리 확보 */}
+                <div className="flex h-7 flex-shrink-0 items-center justify-between border-t border-zinc-200 bg-zinc-50/50 px-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+                  {totalPages > 1 ? (
+                  <>
                     <span className="tabular-nums">
-                      {(studentsPage - 1) * pageSize + 1}–
-                      {Math.min(studentsPage * pageSize, sortedStudents.length)} /{" "}
-                      {sortedStudents.length}명
+                      {searchedStudents.length === 0
+                        ? "0 / 0명"
+                        : `${(studentsPage - 1) * pageSize + 1}–${Math.min(
+                            studentsPage * pageSize,
+                            searchedStudents.length
+                          )} / ${searchedStudents.length}명`}
                     </span>
                     <div className="flex items-center gap-1">
                       <button
@@ -1030,8 +1107,15 @@ export default function ConsultationsPage() {
                         ▶
                       </button>
                     </div>
-                  </div>
-                )}
+                  </>
+                  ) : (
+                    <span className="tabular-nums text-zinc-400">
+                      {searchedStudents.length === 0 && studentSearch.trim()
+                        ? "0명"
+                        : `총 ${searchedStudents.length}명`}
+                    </span>
+                  )}
+                </div>
               </section>
             </div>
           )}
