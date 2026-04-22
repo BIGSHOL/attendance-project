@@ -876,32 +876,6 @@ export default function ConsultationsPageV2({
               </span>
             </h2>
           </div>
-          <div className="flex flex-shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-              title="현재 화면 인쇄"
-            >
-              🖨 인쇄
-            </button>
-            <button
-              type="button"
-              disabled
-              className="rounded-sm border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900"
-              title="엑셀 내보내기 (추후 구현)"
-            >
-              📄 엑셀
-            </button>
-            <button
-              type="button"
-              disabled
-              className="rounded-sm border border-blue-300 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
-              title="새 상담 기록 — ijw-calander 에서 입력 (추후 딥링크)"
-            >
-              + 새 상담
-            </button>
-          </div>
         </div>
 
         {/* Filters — 상태 세그먼트 + 반명 칩 + 학생 검색 */}
