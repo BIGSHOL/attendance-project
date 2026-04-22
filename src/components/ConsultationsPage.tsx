@@ -9,6 +9,7 @@ import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/HomeroomPicker";
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
+import ConsultationsPageV2 from "@/components/consultation/ConsultationsPageV2";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
@@ -146,7 +147,7 @@ function consultationSubjectLabel(c: Consultation): string {
   return c.subject ? toSubjectLabel(c.subject) : "-";
 }
 
-type Tab = "consultation" | "note";
+type Tab = "consultation" | "note" | "v2";
 const ALL_TEACHERS = "__all__";
 
 // ─── 컴포넌트 ───────────────────────────────────────
@@ -569,6 +570,17 @@ export default function ConsultationsPage() {
             >
               노트 검사
             </button>
+            <button
+              onClick={() => setActiveTab("v2")}
+              className={`rounded-sm px-3 py-1 text-xs font-bold transition-all ${
+                activeTab === "v2"
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+              title="V2 레이아웃 파일럿 — 좌측 선생님 레일 + 우측 상세"
+            >
+              상담 V2
+            </button>
           </div>
 
           {isTeacher ? (
@@ -605,6 +617,23 @@ export default function ConsultationsPage() {
           )}
         </div>
       </div>
+
+      {/* ─── 탭: 상담 V2 (파일럿) ─── */}
+      {activeTab === "v2" && (
+        <ConsultationsPageV2
+          month={selectedMonth}
+          teachers={teachers}
+          students={students}
+          consultations={consultations}
+          homerooms={homerooms}
+          studentsByHomeroom={studentsByHomeroom}
+          hiddenTeacherIds={hiddenTeacherIds}
+          selectedHomeroom={selectedHomeroom}
+          setSelectedHomeroom={setSelectedHomeroom}
+          loading={loading}
+          isAllView={isAllView}
+        />
+      )}
 
       {/* ─── 탭: 상담 현황 ─── */}
       {activeTab === "consultation" && loading && homerooms.length === 0 && (
