@@ -598,12 +598,44 @@ export default function ConsultationsPage() {
             />
           )}
 
-          <input
-            type="month"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-          />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                const [y, m] = selectedMonth.split("-").map(Number);
+                const d = new Date(y, m - 2, 1);
+                const newMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                setSelectedMonth(newMonth);
+              }}
+              className="rounded-sm border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="이전 달"
+              title="이전 달"
+            >
+              ◀
+            </button>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => {
+                if (e.target.value) setSelectedMonth(e.target.value);
+              }}
+              className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const [y, m] = selectedMonth.split("-").map(Number);
+                const d = new Date(y, m, 1);
+                const newMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                setSelectedMonth(newMonth);
+              }}
+              className="rounded-sm border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="다음 달"
+              title="다음 달"
+            >
+              ▶
+            </button>
+          </div>
 
           {/* 관리자+: 담임 목록 표시 설정 */}
           {isAdmin && (
