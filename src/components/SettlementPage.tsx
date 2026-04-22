@@ -25,7 +25,6 @@ import { filterStudentsByMonth } from "@/lib/studentFilter";
 import BulkSyncSettings from "./settlement/BulkSyncSettings";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
-import type { PaymentShare } from "@/hooks/usePaymentShares";
 import {
   calculateStudentSalary,
   matchSalarySetting,
