@@ -15,6 +15,7 @@ import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
 import { useTeacherSheets } from "@/hooks/useTeacherSheets";
+import type { PaymentShare } from "@/hooks/usePaymentShares";
 import { useUserRole } from "@/hooks/useUserRole";
 import { findStudentPayments, filterPaymentsForTeacherRow } from "@/lib/studentPaymentMatcher";
 import { isDateInSession } from "@/lib/sessionUtils";
@@ -41,6 +42,12 @@ export default function SettlementPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [tab, setTab] = useLocalStorage<"settlement" | "hours">("settlement.tab", "settlement");
+  // 실급여 집계 기준 — 월별(달력 월) 또는 세션별(해당 월 세션 범위).
+  // 출석부 탭의 `attendance.viewMode` 와 독립적으로 저장(설정 팝오버에서 제어).
+  const [payMode, setPayMode] = useLocalStorage<"monthly" | "session">(
+    "settlement.payMode",
+    "monthly"
+  );
   const [hoursSubjectFilter, setHoursSubjectFilter] = useLocalStorage<string[]>("settlement.hoursSubjects", []);
   const [hoursSearch, setHoursSearch] = useLocalStorage<string>("settlement.hoursSearch", "");
   const [hoursOnlyDiff, setHoursOnlyDiff] = useLocalStorage<boolean>("settlement.hoursOnlyDiff", false);
@@ -222,6 +229,7 @@ export default function SettlementPage() {
   const { overrides: tierOverrides } = useAllTierOverrides();
 
   // 월 전체 payment_shares — 영어 선생님의 강사별 귀속 수납. 출석부 탭과 동일 공식 적용.
+  // API(/api/payment-shares) 는 Supabase 전체 row 를 그대로 반환하므로 PaymentShare 전 필드 보유.
   const [allShares, setAllShares] = useState<PaymentShare[]>([]);
   useEffect(() => {
     const ym = `${year}-${String(month).padStart(2, "0")}`;
@@ -644,6 +652,18 @@ export default function SettlementPage() {
       }
       const monthStrFmt = `${year}-${String(month).padStart(2, "0")}`;
       const isDateInPeriodMonthly = (dk: string) => dk.startsWith(monthStrFmt);
+      // 세션별 모드: 선생님 주과목의 해당 월 세션을 찾아 그 범위로 집계.
+      //   - 영어 선생님 → englishSessions, 수학/고등수학/과학 등 → mathSessions
+      //   - 해당 월 세션이 없으면 안전하게 월별 fallback
+      let isDateInPeriod: (dk: string) => boolean = isDateInPeriodMonthly;
+      if (payMode === "session") {
+        const useEnglishSessions = isEnglishTeacher;
+        const pool = useEnglishSessions ? englishSessions : mathSessions;
+        const sess = pool.find((sp) => sp.month === month);
+        if (sess) {
+          isDateInPeriod = (dk: string) => isDateInSession(dk, sess);
+        }
+      }
       const payroll = computeTeacherMonthPayroll({
         teacher,
         filteredStudents: payrollFilteredStudents,
@@ -659,7 +679,7 @@ export default function SettlementPage() {
         blogPenalty,
         year,
         month,
-        isDateInPeriod: isDateInPeriodMonthly,
+        isDateInPeriod,
         salaryType,
         commissionDays,
         subject: teacherSubjectHint,
@@ -681,7 +701,7 @@ export default function SettlementPage() {
         subjects,
       };
     });
-  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions, getAdminAllowance]);
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions, getAdminAllowance, payMode]);
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {
@@ -727,14 +747,16 @@ export default function SettlementPage() {
     return [...base].sort(cmp);
   }, [settlements, effectiveCheckedSubjects, allSubjects, sortKey, sortDir]);
 
-  // 합계 (필터 반영)
+  // 합계 (필터 반영) — 계약 기반(급여제/파트타임) 선생님은 별도 지급이므로 합계 집계에서 제외.
+  //   학생수/출석수는 담당 정보이므로 합산 유지, 금액만 제외.
   const totals = useMemo(() => {
+    const isContract = (t: SalaryType) => t === "fixed" || t === "part_time";
     return filteredSettlements.reduce(
       (acc, s) => ({
         studentCount: acc.studentCount + s.studentCount,
         totalAttendance: acc.totalAttendance + s.totalAttendance,
-        baseSalary: acc.baseSalary + s.baseSalary,
-        finalSalary: acc.finalSalary + s.finalSalary,
+        baseSalary: acc.baseSalary + (isContract(s.salaryType) ? 0 : s.baseSalary),
+        finalSalary: acc.finalSalary + (isContract(s.salaryType) ? 0 : s.finalSalary),
       }),
       { studentCount: 0, totalAttendance: 0, baseSalary: 0, finalSalary: 0 }
     );
@@ -961,6 +983,8 @@ export default function SettlementPage() {
                 excludedIds={excludedSyncIds}
                 onToggle={toggleExcludedSync}
                 onBulkToggle={bulkToggleExcludedSync}
+                payMode={payMode}
+                onPayModeChange={setPayMode}
               />
             </>
           )}
@@ -1094,9 +1118,17 @@ export default function SettlementPage() {
                         ? "bg-blue-50 text-blue-700"
                         : s.salaryType === "fixed"
                         ? "bg-zinc-100 text-zinc-500"
+                        : s.salaryType === "part_time"
+                        ? "bg-orange-50 text-orange-700"
                         : "bg-purple-50 text-purple-700"
                     }`}>
-                      {s.salaryType === "commission" ? "비율제" : s.salaryType === "fixed" ? "급여제" : "혼합"}
+                      {s.salaryType === "commission"
+                        ? "비율제"
+                        : s.salaryType === "fixed"
+                        ? "급여제"
+                        : s.salaryType === "part_time"
+                        ? "파트타임"
+                        : "혼합"}
                     </span>
                     {s.salaryType === "mixed" && s.commissionDays.length > 0 && (
                       <div className="mt-0.5 text-[9px] text-zinc-400">
@@ -1128,13 +1160,25 @@ export default function SettlementPage() {
                     )}
                   </td>
                   <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
-                    {s.baseSalary.toLocaleString()}원
+                    {s.salaryType === "fixed" || s.salaryType === "part_time" ? (
+                      <span className="text-[11px] italic text-zinc-500 dark:text-zinc-400">계약에 따른 급여 지급</span>
+                    ) : (
+                      `${s.baseSalary.toLocaleString()}원`
+                    )}
                   </td>
                   <td className="px-3 py-3 text-right text-zinc-600 dark:text-zinc-400">
-                    {incentiveTotal > 0 ? `+${incentiveTotal.toLocaleString()}원` : "-"}
+                    {s.salaryType === "fixed" || s.salaryType === "part_time"
+                      ? "-"
+                      : incentiveTotal > 0
+                        ? `+${incentiveTotal.toLocaleString()}원`
+                        : "-"}
                   </td>
                   <td className="px-3 py-3 text-right font-bold text-blue-600 dark:text-blue-400">
-                    {s.finalSalary.toLocaleString()}원
+                    {s.salaryType === "fixed" || s.salaryType === "part_time" ? (
+                      <span className="text-[11px] italic font-normal text-zinc-500 dark:text-zinc-400">계약에 따른 급여 지급</span>
+                    ) : (
+                      `${s.finalSalary.toLocaleString()}원`
+                    )}
                   </td>
                   <td className="px-3 py-3 text-center">
                     {s.settlement.isFinalized ? (

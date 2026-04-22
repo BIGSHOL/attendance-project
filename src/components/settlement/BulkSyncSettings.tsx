@@ -4,11 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toSubjectLabel } from "@/lib/labelMap";
 import type { Teacher } from "@/types";
 
+export type PayMode = "monthly" | "session";
+
 interface Props {
   teachers: Teacher[];
   excludedIds: Set<string>;
   onToggle: (teacherId: string) => void;
   onBulkToggle?: (teacherIds: string[], shouldExclude: boolean) => void;
+  /** 급여 집계 기준 — 월별 달력 월, 세션별 해당 월 세션 범위 */
+  payMode?: PayMode;
+  onPayModeChange?: (mode: PayMode) => void;
 }
 
 // 과목별 뱃지 색상 — HomeroomPicker 와 동일 팔레트
@@ -71,6 +76,8 @@ export default function BulkSyncSettings({
   excludedIds,
   onToggle,
   onBulkToggle,
+  payMode,
+  onPayModeChange,
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -172,6 +179,49 @@ export default function BulkSyncSettings({
             <br />
             (시트 URL 등록된 선생님만 표시)
           </div>
+
+          {/* 급여 집계 기준 토글 — 월별(달력 월) vs 세션별(해당 월 세션 범위) */}
+          {payMode !== undefined && onPayModeChange && (
+            <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+              <span className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
+                실급여 기준
+              </span>
+              <div
+                role="tablist"
+                aria-label="실급여 기준"
+                className="flex items-center rounded-sm bg-zinc-100 p-0.5 dark:bg-zinc-800"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={payMode === "monthly"}
+                  onClick={() => onPayModeChange("monthly")}
+                  className={`rounded-sm px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    payMode === "monthly"
+                      ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  }`}
+                  title="달력 월(1일~말일) 기준으로 실급여 집계"
+                >
+                  월별
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={payMode === "session"}
+                  onClick={() => onPayModeChange("session")}
+                  className={`rounded-sm px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    payMode === "session"
+                      ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  }`}
+                  title="해당 월 세션 범위(교차 월 포함) 기준으로 실급여 집계"
+                >
+                  세션별
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="flex-1 overflow-y-auto">
             {sections.length === 0 && (
