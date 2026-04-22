@@ -8,10 +8,10 @@ import type { Consultation } from "@/types";
  * Google Sheets `IMPORTDATA()` 전용 공개 엔드포인트 (CSV 반환).
  * 로그인 없이 접근 가능 — 반드시 `SHEETS_API_KEY` 환경변수로 보호.
  *
- * 응답:
+ * 응답 (날짜는 괄호+한글 요일 포맷 — Google Sheets 가 날짜로 자동 파싱하지 못하도록):
  *   성명,상담
- *   김소은,03/23
- *   박지율,"04/14, 04/18"
+ *   김소은,03/23(월)
+ *   박지율,"04/14(화), 04/18(토)"
  *
  * 수식 예:
  *   =IFERROR(VLOOKUP(B6,
@@ -133,10 +133,20 @@ function matchesTeacherByAliases(
   return false;
 }
 
+const KOR_WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"] as const;
+
+/**
+ * "2026-03-24" → "03/24(화)"
+ *   괄호+한글 요일을 포함시키면 Google Sheets IMPORTDATA 가 셀을 날짜로
+ *   자동 파싱하지 못해 원본 텍스트 그대로 표시됨 (단일 날짜 셀도 안전).
+ *   쉼표 조인된 다중 날짜는 이미 텍스트로 인식되므로 동일 포맷 유지.
+ */
 function toMMDD(date: string | undefined): string | null {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  const [, mm, dd] = date.split("-");
-  return `${mm}/${dd}`;
+  const [y, mm, dd] = date.split("-");
+  // UTC 로 고정해 서버 타임존 영향 제거 (KST·UTC 모두 동일한 요일 반환)
+  const w = new Date(`${y}-${mm}-${dd}T00:00:00Z`).getUTCDay();
+  return `${mm}/${dd}(${KOR_WEEKDAY[w]})`;
 }
 
 /** RFC 4180 최소 이스케이프 — 콤마/따옴표/개행 포함 시 큰따옴표로 감싸고 내부 따옴표는 "" */
