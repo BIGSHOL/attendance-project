@@ -12,6 +12,9 @@ interface Props {
   setShowPaidAmount: (v: boolean) => void;
   showActualSalary: boolean;
   setShowActualSalary: (v: boolean) => void;
+  /** 실급여 토글 비활성 — 급여제(fixed) 선생님일 때 사용 */
+  actualSalaryDisabled?: boolean;
+  actualSalaryDisabledReason?: string;
 
   /** 화면 옵션 */
   highlightWeekends: boolean;
@@ -37,6 +40,8 @@ export default function ViewOptionsMenu({
   setShowPaidAmount,
   showActualSalary,
   setShowActualSalary,
+  actualSalaryDisabled = false,
+  actualSalaryDisabledReason,
   highlightWeekends,
   setHighlightWeekends,
   hideZeroAttendance,
@@ -91,11 +96,11 @@ export default function ViewOptionsMenu({
     };
   }, [open]);
 
-  // 켜진 옵션 수 (뱃지 표시용)
+  // 켜진 옵션 수 (뱃지 표시용) — 실급여가 비활성 상태면 카운트에서 제외
   const activeCount =
     Number(showExpectedBilling) +
     Number(showPaidAmount) +
-    Number(showActualSalary) +
+    Number(showActualSalary && !actualSalaryDisabled) +
     Number(highlightWeekends) +
     Number(hideZeroAttendance);
 
@@ -145,9 +150,14 @@ export default function ViewOptionsMenu({
               />
               <Toggle
                 label="실급여"
-                desc="실제 지급 예상 (수납/비율/패널티 반영)"
-                checked={showActualSalary}
+                desc={
+                  actualSalaryDisabled
+                    ? actualSalaryDisabledReason || "급여제 선생님은 실급여 계산 비활성"
+                    : "실제 지급 예상 (수납/비율/패널티 반영)"
+                }
+                checked={showActualSalary && !actualSalaryDisabled}
                 onChange={setShowActualSalary}
+                disabled={actualSalaryDisabled}
               />
             </div>
           </div>
@@ -194,19 +204,29 @@ function Toggle({
   desc,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   desc?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-2 rounded-sm px-1 py-0.5 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+    <label
+      className={`flex items-start gap-2 rounded-sm px-1 py-0.5 ${
+        disabled
+          ? "cursor-not-allowed opacity-50"
+          : "cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800"
+      }`}
+      title={disabled ? desc : undefined}
+    >
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 rounded border-zinc-300"
+        disabled={disabled}
+        className="mt-0.5 h-4 w-4 rounded border-zinc-300 disabled:cursor-not-allowed"
       />
       <div className="flex-1">
         <div className="text-sm font-medium text-zinc-800 dark:text-zinc-200">

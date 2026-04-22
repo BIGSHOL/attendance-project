@@ -156,6 +156,21 @@ export default function AttendancePage() {
     };
   }, [getSalary, userRoles, selectedTeacherId]);
   const selectedBlogRequired = isBlogRequired(selectedTeacherId);
+  // 계약 기반(급여제·파트타임) 선생님은 별도 지급이므로 본인이 볼 때는 실급여 표시를 숨김.
+  //   - 관리자는 시수/실급여 참고용으로 계속 볼 수 있음 (내부 계산은 항상 진행)
+  //   - 본인(급여제/파트타임)은 토글 비활성 + 실급여 숨김 → 상단/테이블에 유형 라벨로 대체
+  const isContractBasedTeacher =
+    selectedTeacherSalaryInfo.type === "fixed" ||
+    selectedTeacherSalaryInfo.type === "part_time";
+  const hideSalaryForFixed = isContractBasedTeacher && !isAdmin;
+  const effectiveShowActualSalary = !hideSalaryForFixed && showActualSalary;
+  // 본인 뷰의 상단 "이번 달 급여" 자리 대체 라벨
+  const contractTypeLabel =
+    selectedTeacherSalaryInfo.type === "fixed"
+      ? "급여제"
+      : selectedTeacherSalaryInfo.type === "part_time"
+        ? "파트타임"
+        : "";
 
   // 행정급여 — 기본액 × tier 비율(선생님 오버라이드 반영) × (1 − 수수료). 0 이면 미사용.
   const adminSalaryInfo = useMemo(() => {
@@ -1290,14 +1305,20 @@ export default function AttendancePage() {
     <div className="flex flex-col flex-1 min-h-0">
       {/* 상단 1행: 통계 + 주요 네비게이션 */}
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 bg-white dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
-        {/* 급여 카드 */}
+        {/* 급여 카드 — 급여제 선생님 본인에게는 "급여제"로 대체 표시 */}
         <button
           onClick={() => setSettlementOpen(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-sm bg-blue-50 text-blue-700 text-sm hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-300"
         >
           <span>💰</span>
           <span className="font-semibold">이번 달 급여</span>
-          <span className="font-bold">{finalSalary.toLocaleString()}원</span>
+          {hideSalaryForFixed ? (
+            <span className="rounded-sm bg-zinc-200 px-2 py-0.5 text-xs font-bold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">
+              {contractTypeLabel}
+            </span>
+          ) : (
+            <span className="font-bold">{finalSalary.toLocaleString()}원</span>
+          )}
         </button>
 
         {/* 행정급여 (설정 있는 선생님만) */}
@@ -1447,6 +1468,8 @@ export default function AttendancePage() {
           setShowPaidAmount={setShowPaidAmount}
           showActualSalary={showActualSalary}
           setShowActualSalary={setShowActualSalary}
+          actualSalaryDisabled={hideSalaryForFixed}
+          actualSalaryDisabledReason={`${contractTypeLabel} — 본인에게는 실급여 표시가 숨겨집니다`}
           highlightWeekends={highlightWeekends}
           setHighlightWeekends={setHighlightWeekends}
           hideZeroAttendance={hideZeroAttendance}
@@ -1609,7 +1632,7 @@ export default function AttendancePage() {
             highlightWeekends={highlightWeekends}
             showExpectedBilling={showExpectedBilling}
             showPaidAmount={showPaidAmount}
-            showActualSalary={showActualSalary}
+            showActualSalary={effectiveShowActualSalary}
             paidAmountByStudent={paidAmountByStudent}
             actualSalaryByStudent={actualSalaryByStudent}
             sortMode={sortMode}
