@@ -60,12 +60,13 @@ export async function POST(request: NextRequest) {
     ratios,
     admin_base_amount,
     admin_tier_id,
+    fixed_salary_amount,
   } = body || {};
 
   if (!staff_id) {
     return NextResponse.json({ error: "staff_id 필수" }, { status: 400 });
   }
-  if (salary_type && !["commission", "fixed", "mixed"].includes(salary_type)) {
+  if (salary_type && !["commission", "fixed", "mixed", "part_time"].includes(salary_type)) {
     return NextResponse.json({ error: "잘못된 salary_type" }, { status: 400 });
   }
 
@@ -76,7 +77,8 @@ export async function POST(request: NextRequest) {
     .eq("staff_id", staff_id)
     .maybeSingle();
 
-  const merged = {
+  // DB 마이그레이션 미적용 환경에서도 안전하도록, 선택적 컬럼은 존재할 때만 set.
+  const merged: Record<string, unknown> = {
     staff_id,
     blog_required:
       blog_required !== undefined ? !!blog_required : !!existing?.blog_required,
@@ -102,6 +104,15 @@ export async function POST(request: NextRequest) {
         : existing?.admin_tier_id ?? null,
     updated_at: new Date().toISOString(),
   };
+  // fixed_salary_amount 는 migration_020 이후에 존재하는 선택적 컬럼.
+  // body 또는 existing 에 값이 있을 때만 set → 컬럼 미적용 환경에서는 건드리지 않음.
+  const resolvedFixed =
+    fixed_salary_amount !== undefined
+      ? Math.max(0, Math.floor(Number(fixed_salary_amount) || 0))
+      : (existing as Record<string, unknown>)?.fixed_salary_amount;
+  if (resolvedFixed !== undefined && resolvedFixed !== null) {
+    merged.fixed_salary_amount = resolvedFixed;
+  }
 
   const { data, error } = await supabase
     .from("teacher_settings")

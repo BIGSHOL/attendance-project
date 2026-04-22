@@ -26,6 +26,12 @@ export interface TeacherSetting {
    * 이 tier 의 ratio · 수수료 체계를 그대로 사용해 계산한다.
    */
   admin_tier_id?: string | null;
+  /**
+   * 월 고정급 금액 (원). salary_type === 'fixed' 선생님의 월 지급액.
+   * 정산 탭 표기는 "계약에 따른 급여 지급" 문구로 대체, 실금액은 별도 관리.
+   * 0 이면 미설정.
+   */
+  fixed_salary_amount?: number;
   updated_at?: string;
 }
 
@@ -176,6 +182,25 @@ export function useTeacherSettings(staffId?: string) {
     [settings]
   );
 
+  /** 월 고정급 저장 */
+  const setFixedSalary = useCallback(
+    (targetStaffId: string, amount: number) =>
+      postPatch({
+        staff_id: targetStaffId,
+        fixed_salary_amount: Math.max(0, Math.floor(amount || 0)),
+      }),
+    [postPatch]
+  );
+
+  /** 월 고정급 조회 (없거나 0 이면 null) */
+  const getFixedSalary = useCallback(
+    (id: string): number => {
+      const row = settings.find((s) => s.staff_id === id);
+      return row?.fixed_salary_amount ?? 0;
+    },
+    [settings]
+  );
+
   return {
     settings,
     loading,
@@ -185,10 +210,12 @@ export function useTeacherSettings(staffId?: string) {
     setCommissionDays,
     setRatios,
     setAdminAllowance,
+    setFixedSalary,
     isBlogRequired,
     getSalary,
     getRatios,
     getAdminAllowance,
+    getFixedSalary,
     refetch: fetchSettings,
   };
 }

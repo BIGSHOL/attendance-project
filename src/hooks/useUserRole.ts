@@ -4,8 +4,24 @@ import { useEffect, useState, useCallback } from "react";
 
 export type UserRole = "master" | "admin" | "teacher" | "pending";
 
-/** 급여 유형: 비율제 | 급여제 | 혼합 */
-export type SalaryType = "commission" | "fixed" | "mixed";
+/** 급여 유형: 비율제 | 급여제 | 혼합 | 파트타임 */
+export type SalaryType = "commission" | "fixed" | "mixed" | "part_time";
+
+/** SalaryType → 한글 라벨 (UI 표기용 공용 매핑) */
+export const SALARY_TYPE_LABEL: Record<SalaryType, string> = {
+  commission: "비율제",
+  fixed: "급여제",
+  mixed: "혼합",
+  part_time: "파트타임",
+};
+
+/** 실급여(출석·수납 기반) 계산이 비활성화되는 유형 — 계약 기반 별도 지급 */
+export const CONTRACT_BASED_SALARY_TYPES: SalaryType[] = ["fixed", "part_time"];
+
+/** 계약 기반(고정/파트타임) 여부 — 실급여 계산 비활성 조건 */
+export function isContractBasedSalary(type: SalaryType | undefined): boolean {
+  return !!type && CONTRACT_BASED_SALARY_TYPES.includes(type);
+}
 
 export interface UserRoleData {
   id: string;

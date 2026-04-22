@@ -1,6 +1,9 @@
 import type { SalarySettingItem, SalaryConfig, Student, IncentiveConfig, SalarySubject, SalaryGroup } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 
+// teacherPayroll.ts 등 공유 함수에서 재사용할 수 있도록 re-export
+export type { SalaryType, SalarySubject };
+
 /**
  * 날짜 문자열(YYYY-MM-DD)을 요일 라벨(일~토)로 변환
  */
@@ -12,7 +15,8 @@ export function getDayLabelFromDate(dateStr: string): string {
 /**
  * 선생님 급여 유형에 따라 출석이 급여 계산 대상인지 판단
  * - commission (비율제): 모든 출석 반영
- * - fixed (급여제): 반영 안 함
+ * - fixed (급여제): 반영 안 함 (계약 기반 월 고정급)
+ * - part_time (파트타임): 반영 안 함 (계약 기반 별도 지급)
  * - mixed (혼합): commission_days 에 해당하는 요일만 반영
  */
 export function isAttendanceCountable(
@@ -21,7 +25,7 @@ export function isAttendanceCountable(
   commissionDays: string[] | undefined
 ): boolean {
   if (!salaryType || salaryType === "commission") return true;
-  if (salaryType === "fixed") return false;
+  if (salaryType === "fixed" || salaryType === "part_time") return false;
   if (salaryType === "mixed") {
     const dayLabel = getDayLabelFromDate(dateStr);
     return (commissionDays || []).includes(dayLabel);
