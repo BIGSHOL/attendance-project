@@ -9,9 +9,10 @@
  * unitPriceByStudent + stats + finalSalary 파이프라인을 그대로 추출.
  */
 
-import type { Student, Teacher, SalaryConfig, MonthlySettlement } from "@/types";
+import type { Student, Teacher, SalaryConfig, MonthlySettlement, SalarySubject } from "@/types";
 import type { PaymentLite } from "@/lib/studentPaymentMatcher";
 import type { PaymentShare } from "@/hooks/usePaymentShares";
+import type { SalaryType } from "@/hooks/useUserRole";
 import {
   calculateStats,
   calculateFinalSalary,
@@ -20,8 +21,6 @@ import {
   getEffectiveRatio,
   isAttendanceCountable,
   gradeToGroup,
-  type SalaryType,
-  type SalarySubject,
 } from "@/lib/salary";
 import {
   findStudentPayments,

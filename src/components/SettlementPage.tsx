@@ -24,6 +24,7 @@ import { filterStudentsByMonth } from "@/lib/studentFilter";
 import BulkSyncSettings from "./settlement/BulkSyncSettings";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
+import type { PaymentShare } from "@/hooks/usePaymentShares";
 import {
   calculateStudentSalary,
   matchSalarySetting,
@@ -221,15 +222,7 @@ export default function SettlementPage() {
   const { overrides: tierOverrides } = useAllTierOverrides();
 
   // 월 전체 payment_shares — 영어 선생님의 강사별 귀속 수납. 출석부 탭과 동일 공식 적용.
-  const [allShares, setAllShares] = useState<Array<{
-    student_id: string;
-    teacher_staff_id: string;
-    class_name: string;
-    allocated_paid: number;
-    allocated_charge: number;
-    allocated_units: number | null;
-    unit_price: number | null;
-  }>>([]);
+  const [allShares, setAllShares] = useState<PaymentShare[]>([]);
   useEffect(() => {
     const ym = `${year}-${String(month).padStart(2, "0")}`;
     let cancelled = false;
