@@ -574,17 +574,20 @@ export default function TeacherList() {
                       const s = resolveSalary(teacher.id);
                       const label =
                         s.type === "commission" ? "프리랜서" :
-                        s.type === "fixed" ? "급여제" : "혼합";
+                        s.type === "fixed" ? "급여제" :
+                        s.type === "part_time" ? "파트타임" : "혼합";
                       const cls =
                         s.type === "commission"
                           ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 hover:bg-blue-100"
                           : s.type === "fixed"
                           ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 hover:bg-zinc-200"
+                          : s.type === "part_time"
+                          ? "bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300 hover:bg-orange-100"
                           : "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300 hover:bg-purple-100";
                       const isEditing = salaryEditingId === teacher.id;
                       return isEditing ? (
                         <div className="inline-flex items-center gap-1">
-                          {(["commission", "fixed", "mixed"] as SalaryType[]).map((t) => (
+                          {(["commission", "fixed", "mixed", "part_time"] as SalaryType[]).map((t) => (
                             <button
                               key={t}
                               disabled={!!savingSalary}
@@ -598,7 +601,7 @@ export default function TeacherList() {
                                   : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
                               }`}
                             >
-                              {t === "commission" ? "프리랜서" : t === "fixed" ? "급여제" : "혼합"}
+                              {t === "commission" ? "프리랜서" : t === "fixed" ? "급여제" : t === "part_time" ? "파트타임" : "혼합"}
                             </button>
                           ))}
                           <button

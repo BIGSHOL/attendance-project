@@ -61,7 +61,24 @@ export default function TeacherDetail({ teacherId }: Props) {
     setRatios,
     getAdminAllowance,
     setAdminAllowance,
+    getSalary,
+    setSalaryType,
+    setCommissionDays,
+    getFixedSalary,
+    setFixedSalary,
   } = useTeacherSettings(teacherId);
+  const currentSalary = getSalary(teacherId);
+  const currentSalaryType = currentSalary?.type || "commission";
+  const currentCommissionDays = currentSalary?.days || [];
+  const fixedSalaryAmount = getFixedSalary(teacherId);
+  const [fixedSalaryInput, setFixedSalaryInput] = useState<string>("");
+  useEffect(() => {
+    setFixedSalaryInput(fixedSalaryAmount > 0 ? String(fixedSalaryAmount) : "");
+  }, [fixedSalaryAmount]);
+  const handleFixedSalarySave = async () => {
+    const amount = Math.max(0, parseInt(fixedSalaryInput.replace(/[^\d]/g, "")) || 0);
+    await setFixedSalary(teacherId, amount);
+  };
   const blogRequired = isBlogRequired(teacherId);
   const adminAllowance = getAdminAllowance(teacherId);
   const [adminBaseInput, setAdminBaseInput] = useState<string>("");
@@ -91,10 +108,17 @@ export default function TeacherDetail({ teacherId }: Props) {
   const { getPost, savePost } = useTeacherBlogPosts(teacherId, blogYear, blogMonth);
   const currentBlogPost = getPost(blogYear, blogMonth);
 
-  // selectedMonth 변경 시 blog 기록 불러오기
+  // 저장된 YYYY-MM-DD 를 현재 선택된 월 기준 "D" 로 변환 (다른 월 날짜는 제외)
+  // 화면 입력 단순화 — 사용자는 일(日) 숫자만 입력.
+  const blogMonthPrefix = `${blogYear}-${String(blogMonth).padStart(2, "0")}-`;
+  // selectedMonth 변경 시 blog 기록 불러오기 — DD 형식으로 역변환
   useEffect(() => {
     if (currentBlogPost) {
-      setBlogDatesInput((currentBlogPost.dates || []).join(", "));
+      const days = (currentBlogPost.dates || [])
+        .filter((d) => d.startsWith(blogMonthPrefix))
+        .map((d) => String(parseInt(d.slice(blogMonthPrefix.length), 10)))
+        .filter((d) => /^\d+$/.test(d));
+      setBlogDatesInput(days.join(", "));
       setBlogNoteInput(currentBlogPost.note || "");
     } else {
       setBlogDatesInput("");
@@ -104,10 +128,19 @@ export default function TeacherDetail({ teacherId }: Props) {
   }, [selectedMonth, currentBlogPost?.id]);
 
   const handleBlogSave = async () => {
+    // 선택된 월의 마지막 일(윤년 포함)
+    const monthDays = new Date(blogYear, blogMonth, 0).getDate();
     const dates = blogDatesInput
       .split(/[,\s]+/)
       .map((d) => d.trim())
-      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      .filter(Boolean)
+      // "5", "05" 모두 허용. YYYY-MM-DD 형식으로 붙여넣어도 일(日)만 추출.
+      .map((d) => {
+        const m = d.match(/(\d{1,2})$/);
+        return m ? parseInt(m[1], 10) : NaN;
+      })
+      .filter((n) => Number.isFinite(n) && n >= 1 && n <= monthDays)
+      .map((n) => `${blogMonthPrefix}${String(n).padStart(2, "0")}`);
     await savePost(teacherId, blogYear, blogMonth, dates, blogNoteInput);
   };
   const [payments, setPayments] = useState<PaymentLite[]>([]);
@@ -523,13 +556,13 @@ export default function TeacherDetail({ teacherId }: Props) {
           <div className="space-y-2">
             <div>
               <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">
-                작성 날짜 (YYYY-MM-DD, 쉼표 또는 공백으로 여러 개 입력)
+                작성 일(日) — 쉼표 또는 공백으로 여러 개 입력 (연·월은 선택된 월로 자동 반영)
               </label>
               <input
                 type="text"
                 value={blogDatesInput}
                 onChange={(e) => setBlogDatesInput(e.target.value)}
-                placeholder="예: 2026-04-05, 2026-04-15"
+                placeholder="예: 5, 15"
                 className="w-full rounded-sm border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
               />
             </div>
@@ -560,8 +593,132 @@ export default function TeacherDetail({ teacherId }: Props) {
         </div>
       )}
 
-      {/* 급여 비율 — 과목×그룹 오버라이드 (DB 우선, INITIAL 하드코딩값 플레이스홀더 힌트) */}
-      {teacher && (
+      {/* 급여 유형 — 비율제/급여제/혼합 토글. 급여제 선생님은 출석 기반 실급여 계산이 비활성화됨 */}
+      {teacher && isAdmin && (
+        <div className="mt-4 rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              급여 유형
+            </h3>
+            <span className="text-xs text-zinc-500">
+              급여제 선택 시 출석부 실급여 토글·정산탭 비율제 계산이 비활성화됩니다
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="tablist"
+              aria-label="급여 유형"
+              className="inline-flex items-center rounded-sm bg-zinc-100 p-0.5 dark:bg-zinc-800"
+            >
+              {(
+                [
+                  { key: "commission", label: "비율제", title: "출석·수납 기반 실급여 계산" },
+                  { key: "fixed", label: "급여제", title: "월 고정급 — 실급여 계산 비활성화" },
+                  { key: "mixed", label: "혼합", title: "지정 요일만 비율제로 계산" },
+                  { key: "part_time", label: "파트타임", title: "계약 기반 별도 지급 — 실급여 계산 비활성화" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={currentSalaryType === opt.key}
+                  onClick={() => setSalaryType(teacher.id, opt.key, currentCommissionDays)}
+                  title={opt.title}
+                  className={`rounded-sm px-3 py-1.5 text-xs font-medium transition-colors ${
+                    currentSalaryType === opt.key
+                      ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {currentSalaryType === "mixed" && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">비율제 요일:</span>
+                {(["일", "월", "화", "수", "목", "금", "토"] as const).map((d) => {
+                  const selected = currentCommissionDays.includes(d);
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => {
+                        const next = selected
+                          ? currentCommissionDays.filter((x) => x !== d)
+                          : [...currentCommissionDays, d];
+                        setCommissionDays(teacher.id, next);
+                      }}
+                      className={`h-7 w-7 rounded-sm border text-[11px] font-medium ${
+                        selected
+                          ? "border-blue-500 bg-blue-500 text-white"
+                          : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {currentSalaryType === "fixed" && (
+              <span className="rounded-sm bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                실급여 계산 비활성 · 월 고정급 기준
+              </span>
+            )}
+            {currentSalaryType === "part_time" && (
+              <span className="rounded-sm bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                실급여 계산 비활성 · 계약 기반 별도 지급
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 월 고정급 — 급여제(fixed) 선생님 전용. 실제 지급은 별도 프로세스, 참고용 금액 저장. */}
+      {teacher && isAdmin && currentSalaryType === "fixed" && (
+        <div className="mt-4 rounded-sm border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              월 고정급
+            </h3>
+            <span className="text-xs text-zinc-500">
+              계약 기반 월 지급액 · 정산 탭에는 금액 대신 "계약에 따른 급여 지급"으로 표시
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2">
+              <span className="text-xs text-zinc-600 dark:text-zinc-400">월 지급액 (원)</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={fixedSalaryInput}
+                onChange={(e) => setFixedSalaryInput(e.target.value)}
+                placeholder="예: 2500000"
+                className="w-40 rounded-sm border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+            </label>
+            <button
+              onClick={handleFixedSalarySave}
+              className="rounded-sm bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              저장
+            </button>
+            {fixedSalaryAmount > 0 && (
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                현재: <span className="font-semibold text-zinc-700 dark:text-zinc-200">{fixedSalaryAmount.toLocaleString()}원</span>
+              </span>
+            )}
+          </div>
+          <p className="mt-2 text-[11px] text-zinc-500">
+            ※ 실제 지급 처리 방식은 추후 확장될 수 있습니다. 현재는 참고용 저장만 수행합니다.
+          </p>
+        </div>
+      )}
+
+      {/* 급여 비율 — 과목×그룹 오버라이드. 계약 기반(급여제/파트타임) 선생님은 숨김 */}
+      {teacher && currentSalaryType !== "fixed" && currentSalaryType !== "part_time" && (
         <TeacherRatiosCard
           teacher={teacher}
           isEditable={isAdmin}

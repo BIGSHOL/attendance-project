@@ -27,6 +27,7 @@ const SALARY_TYPE_LABELS: Record<SalaryType, string> = {
   commission: "비율제",
   fixed: "급여제",
   mixed: "혼합",
+  part_time: "파트타임",
 };
 
 export default function UserManagement() {
@@ -218,6 +219,7 @@ export default function UserManagement() {
                           <option value="commission">비율제</option>
                           <option value="fixed">급여제</option>
                           <option value="mixed">혼합 (급여제+비율제)</option>
+                          <option value="part_time">파트타임</option>
                         </select>
 
                         {/* 혼합 → 비율제 적용 요일 선택 */}
