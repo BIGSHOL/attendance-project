@@ -85,8 +85,8 @@ export async function GET(req: NextRequest) {
         mmddWeekday,
         type: c.type,
         category: c.category,
-        title: c.title ?? "",
-        content: c.content ?? "",
+        title: cleanMigratedTitle(c.title ?? ""),
+        content: cleanMigratedContent(c.content ?? ""),
       });
       byStudent.set(c.studentName, list);
     }
@@ -207,6 +207,55 @@ const CATEGORY_LABEL: Record<ConsultationCategory, string> = {
   general: "일반",
   other: "기타",
 };
+
+/**
+ * MakeEdu_Excel 마이그레이션이 생성한 보일러플레이트 제목 제거.
+ *   "학생 상담일지2026년 03월 24일" 같은 날짜만 박힌 제목은 브라켓에 이미
+ *   들어가 있어 중복이므로 빈 문자열로 대체.
+ */
+function cleanMigratedTitle(raw: string): string {
+  if (!raw) return "";
+  if (/^\s*학생\s*상담\s*일지\s*\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일\s*$/.test(raw)) {
+    return "";
+  }
+  return raw.trim();
+}
+
+/**
+ * MakeEdu_Excel 마이그레이션 content 정리.
+ *   원본: "✅ 상담 내역상담 기록 항목:2026-03-03김민주상담 내용: 본문...조치사항:건의사항:비고:\n\n[등록자: 김민주]"
+ *   → "상담 내용:" 이후 본문만 추출, 빈 trailing 섹션 마커 삭제,
+ *     내용 있는 섹션은 줄바꿈 유지, 등록자 footer 제거.
+ *   "상담 내용:" 패턴이 없으면 원본 유지.
+ */
+const CLEANUP_MARKERS = ["조치사항:", "건의사항:", "비고:"] as const;
+
+function cleanMigratedContent(raw: string): string {
+  if (!raw) return "";
+  let text = raw.replace(/\n*\[등록자:[^\]]*\]\s*$/, "").trim();
+
+  const m = text.match(/상담\s*내용\s*:/);
+  if (!m || m.index === undefined) return text;
+  const body = text.slice(m.index + m[0].length).trim();
+
+  const positions: Array<{ marker: string; idx: number }> = [];
+  for (const marker of CLEANUP_MARKERS) {
+    const i = body.indexOf(marker);
+    if (i !== -1) positions.push({ marker, idx: i });
+  }
+  positions.sort((a, b) => a.idx - b.idx);
+  if (positions.length === 0) return body;
+
+  const mainBody = body.slice(0, positions[0].idx).trim();
+  const kept: string[] = [];
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i].idx + positions[i].marker.length;
+    const end = i + 1 < positions.length ? positions[i + 1].idx : body.length;
+    const content = body.slice(start, end).trim();
+    if (content) kept.push(`${positions[i].marker} ${content}`);
+  }
+  return kept.length > 0 ? `${mainBody}\n${kept.join("\n")}` : mainBody;
+}
 
 /**
  * 회차 1건을 셀 표시용 문자열로 변환.
