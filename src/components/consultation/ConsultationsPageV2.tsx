@@ -86,6 +86,46 @@ function subjectBadgeClass(label: string): string {
   return SUBJECT_BADGE[label] ?? NONE_BADGE;
 }
 
+/**
+ * 이름 문자열에서 가능한 모든 표기 추출 (V1 동일 로직)
+ *   "정유진(Yoojin)" → ["정유진(Yoojin)", "정유진", "Yoojin"]
+ */
+function extractNameAliases(raw: string | undefined): string[] {
+  const s = (raw ?? "").trim();
+  if (!s) return [];
+  const result = new Set<string>([s]);
+  const m = s.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
+  if (m) {
+    result.add(m[1].trim());
+    result.add(m[2].trim());
+  }
+  const stripped = s.replace(/\s*\([^)]*\)\s*/g, "").trim();
+  if (stripped) result.add(stripped);
+  return Array.from(result);
+}
+
+/**
+ * 상담자 이름이 특정 선생님과 일치하는지 판정.
+ *   - consultantName 의 모든 alias(본명/영어명/괄호안팎)와
+ *     teacher 의 name/englishName alias 를 대소문자 무시 교집합으로 비교
+ */
+function matchesTeacher(
+  consultantName: string | undefined,
+  teacher: Teacher | undefined
+): boolean {
+  if (!consultantName || !teacher) return false;
+  const consultantAliases = new Set(
+    extractNameAliases(consultantName).map((n) => n.toLowerCase())
+  );
+  const teacherSources = [teacher.name, teacher.englishName].filter(Boolean) as string[];
+  for (const src of teacherSources) {
+    for (const alias of extractNameAliases(src)) {
+      if (consultantAliases.has(alias.toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
 // 도넛 색상 — 완료율 기준 단계적
 function donutColor(pct: number): string {
   if (pct >= 70) return "#16a34a"; // green-600
@@ -146,6 +186,11 @@ export default function ConsultationsPageV2({
     "consultations.v2.classFilter",
     "all"
   );
+  // 전체 담임 뷰 전용 — 과목(섹션 키) 필터. "all" 또는 "수학"·"복수 과목"·"미지정" 등.
+  const [subjectFilter, setSubjectFilter] = useLocalStorage<string>(
+    "consultations.v2.subjectFilter",
+    "all"
+  );
   const [studentSearch, setStudentSearch] = useLocalStorage<string>(
     "consultations.v2.studentSearch",
     ""
@@ -157,16 +202,23 @@ export default function ConsultationsPageV2({
   const [railSearch, setRailSearch] = useState<string>("");
   const [sortKey, setSortKey] = useLocalStorage<SortKey>("consultations.v2.railSort", "rate_desc");
 
-  // 담임별 완료/미상담 집계 — 상담된 학생 ID 집합 × 담임별 학생 목록
-  const consultedStudentIds = useMemo(
-    () => new Set(consultations.map((c) => c.studentId)),
-    [consultations]
-  );
+  // 선생님별 본인 상담 목록 — consultantName 이 해당 선생님과 매칭되는 상담만.
+  //   "본인이 직접 상담한 기록" 만 '완료' 로 집계 (V1 homeroomSummaries 와 동일 로직).
+  const consultationsByTeacher = useMemo(() => {
+    const m = new Map<string, Consultation[]>();
+    for (const t of teachers) m.set(t.name, []);
+    for (const c of consultations) {
+      for (const t of teachers) {
+        if (matchesTeacher(c.consultantName, t)) m.get(t.name)!.push(c);
+      }
+    }
+    return m;
+  }, [teachers, consultations]);
 
   // V2 선생님 통계 — teachers 전체(활성/과목 있음/숨김 제외)에서 직접 계산.
-  //   V1 homerooms 는 "studentsByHomeroom 에 1명 이상" 조건이 있어 과학처럼
-  //   staffId canonical 매칭이 안 된 선생님이 누락됨 → V2는 teachers 기반으로
-  //   담당 0명이어도 레일에 노출하고 결과를 투명하게 보여줌.
+  //   done = "이 선생님 본인이 상담한 담당 학생 수" (consultantName 매칭 기준).
+  //   단순히 "담당 학생이 누군가에게 상담받음" 이 아님 — 본인이 아닌 다른
+  //   선생님(예: 수학 담임 학생을 영어 담임이 상담) 기록은 여기선 제외.
   const teacherStats = useMemo(() => {
     return teachers
       .filter((t) => t.status === "active")
@@ -175,7 +227,9 @@ export default function ConsultationsPageV2({
       .map((t) => {
         const list = studentsByHomeroom.get(t.name) || [];
         const total = list.length;
-        const done = list.filter((s) => consultedStudentIds.has(s.id)).length;
+        const myConsults = consultationsByTeacher.get(t.name) || [];
+        const consultedIds = new Set(myConsults.map((c) => c.studentId));
+        const done = list.filter((s) => consultedIds.has(s.id)).length;
         const pending = total - done;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
         const subject = (t.subjects || []).map(toSubjectLabel).filter(Boolean).join("/");
@@ -189,7 +243,7 @@ export default function ConsultationsPageV2({
           studentCount: total,
         };
       });
-  }, [teachers, hiddenTeacherIds, studentsByHomeroom, consultedStudentIds]);
+  }, [teachers, hiddenTeacherIds, studentsByHomeroom, consultationsByTeacher]);
 
   const overall = useMemo(() => {
     const total = teacherStats.reduce((a, s) => a + s.total, 0);
@@ -198,6 +252,29 @@ export default function ConsultationsPageV2({
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
     return { total, done, pending, pct };
   }, [teacherStats]);
+
+  // 학생 → 담임 선생님 이름 배열 (studentsByHomeroom 역매핑).
+  //   isAllView 테이블에서 "담임" 컬럼으로 노출, 과목 필터에도 사용.
+  const teachersByStudent = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const [teacherName, list] of studentsByHomeroom.entries()) {
+      for (const s of list) {
+        if (!m.has(s.id)) m.set(s.id, []);
+        m.get(s.id)!.push(teacherName);
+      }
+    }
+    return m;
+  }, [studentsByHomeroom]);
+
+  // 선생님 이름 → 과목 레이블 매핑. 과목 필터 판정과 담임 뱃지 색상에 사용.
+  const subjectByTeacher = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of teachers) {
+      const label = (t.subjects || []).map(toSubjectLabel).filter(Boolean).join("/");
+      m.set(t.name, label);
+    }
+    return m;
+  }, [teachers]);
 
   // 레일 검색 적용 (정렬은 섹션 내에서)
   const visibleTeachers = useMemo(() => {
@@ -296,10 +373,26 @@ export default function ConsultationsPageV2({
     return studentsByHomeroom.get(selectedHomeroom) || [];
   }, [isAllView, selectedHomeroom, studentsByHomeroom]);
 
-  // 학생별 상담 매핑 (당월) — studentId → Consultation[] (최신순)
+  // 학생별 상담 매핑 (당월) — studentId → Consultation[] (최신순).
+  //   전체 담임 뷰: 모든 상담 포함.
+  //   특정 선생님 뷰: "이 선생님이 직접 상담한" 기록만 — 다른 선생님이 상담한
+  //     같은 학생 기록은 여기에 포함되지 않아야 오른쪽 테이블에 안 나옴.
   const consultationsByStudent = useMemo(() => {
+    let src: Consultation[];
+    if (isAllView) {
+      src = consultations;
+    } else {
+      const teacher = teachers.find((t) => t.name === selectedHomeroom);
+      const nameAliases = extractNameAliases(selectedHomeroom).map((n) => n.toLowerCase());
+      src = consultations.filter((c) => {
+        if (matchesTeacher(c.consultantName, teacher)) return true;
+        // teacher 객체에 없는 이름일 때 alias 비교 폴백
+        const consAliases = extractNameAliases(c.consultantName ?? "").map((n) => n.toLowerCase());
+        return nameAliases.some((n) => consAliases.includes(n));
+      });
+    }
     const m = new Map<string, Consultation[]>();
-    for (const c of consultations) {
+    for (const c of src) {
       if (!m.has(c.studentId)) m.set(c.studentId, []);
       m.get(c.studentId)!.push(c);
     }
@@ -307,7 +400,7 @@ export default function ConsultationsPageV2({
       list.sort((a, b) => b.date.localeCompare(a.date));
     }
     return m;
-  }, [consultations]);
+  }, [consultations, isAllView, teachers, selectedHomeroom]);
 
   // 각 학생의 이 선생님 담당 className 추출 헬퍼
   const selectedTeacher = useMemo(
@@ -331,6 +424,8 @@ export default function ConsultationsPageV2({
     key: string;
     student: Student;
     className: string;
+    // 전체 담임 뷰에서 표시할 담임 선생님 이름 목록(가나다 정렬).
+    homeroomNames: string[];
     status: "done" | "pending";
     consultation: Consultation | null; // null 이면 미상담
     // 같은 학생의 당월 전체 상담 — 모달에서 "지난 상담" 리스트용
@@ -341,11 +436,15 @@ export default function ConsultationsPageV2({
     for (const s of scopedStudents) {
       const list = consultationsByStudent.get(s.id) || [];
       const className = classNameOfStudent(s);
+      const homeroomNames = (teachersByStudent.get(s.id) || [])
+        .slice()
+        .sort((a, b) => a.localeCompare(b, "ko"));
       if (list.length === 0) {
         rows.push({
           key: `${s.id}`,
           student: s,
           className,
+          homeroomNames,
           status: "pending",
           consultation: null,
           allConsultations: [],
@@ -356,6 +455,7 @@ export default function ConsultationsPageV2({
             key: `${s.id}|${c.id}`,
             student: s,
             className,
+            homeroomNames,
             status: "done",
             consultation: c,
             allConsultations: list,
@@ -375,7 +475,7 @@ export default function ConsultationsPageV2({
     });
     return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopedStudents, consultationsByStudent, selectedTeacher, selectedHomeroom]);
+  }, [scopedStudents, consultationsByStudent, selectedTeacher, selectedHomeroom, teachersByStudent]);
 
   // 필터 적용 — 이벤트 행(상담 1건 또는 미상담) 단위
   const filteredRows = useMemo(() => {
@@ -384,6 +484,16 @@ export default function ConsultationsPageV2({
       if (statusFilter === "done" && r.status !== "done") return false;
       if (statusFilter === "pending" && r.status !== "pending") return false;
       if (!isAllView && classFilter !== "all" && r.className !== classFilter) return false;
+      // 전체 담임 뷰 + 과목 필터 — 담임 한 명이라도 해당 과목이면 표시
+      if (isAllView && subjectFilter !== "all") {
+        const hit = r.homeroomNames.some((hr) => {
+          const subj = subjectByTeacher.get(hr) || "";
+          if (subjectFilter === "복수 과목") return subj.includes("/");
+          if (subjectFilter === "미지정") return !subj;
+          return subj === subjectFilter;
+        });
+        if (!hit) return false;
+      }
       if (q) {
         const name = r.student.name.toLowerCase();
         const school = (r.student.school || "").toLowerCase();
@@ -394,7 +504,7 @@ export default function ConsultationsPageV2({
       }
       return true;
     });
-  }, [studentRows, statusFilter, classFilter, studentSearch, isAllView]);
+  }, [studentRows, statusFilter, classFilter, subjectFilter, studentSearch, isAllView, subjectByTeacher]);
 
   // 페이지네이션 — 25명 고정. scroll 영역은 thead + 25*32 로 정확히 맞춰 하단 여백 0.
   const PAGE_SIZE = 25;
@@ -441,6 +551,26 @@ export default function ConsultationsPageV2({
     [filteredRows, page, pageSize]
   );
   const blankCount = Math.max(0, pageSize - pagedRows.length);
+
+  // 전체 담임 뷰 — 과목 섹션별 요약(담임 수·총학생·완료·미상담·완료율).
+  //   sections 은 이미 과목별로 그룹핑되어 있으므로 그대로 집계.
+  const subjectBreakdown = useMemo(() => {
+    if (!isAllView) return [];
+    return sections.map((sec) => {
+      const total = sec.teachers.reduce((a, t) => a + t.total, 0);
+      const done = sec.teachers.reduce((a, t) => a + t.done, 0);
+      const pending = total - done;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      return {
+        key: sec.key,
+        teacherCount: sec.teachers.length,
+        total,
+        done,
+        pending,
+        pct,
+      };
+    });
+  }, [isAllView, sections]);
 
   // 반명(className) 목록 — 이 선생님이 실제로 담당하는 enrollment 만.
   //   scopedStudents 는 담임 관계로 묶였지만 학생은 여러 과목을 수강하므로,
@@ -833,7 +963,7 @@ export default function ConsultationsPageV2({
             )}
           </div>
 
-          {/* 반명 드롭다운 — 전체 집계 뷰에서는 숨김 */}
+          {/* 반명 드롭다운 — 특정 선생님 뷰에서만 */}
           {!isAllView && classOptions.length > 0 && (
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-zinc-500">반 :</span>
@@ -863,6 +993,43 @@ export default function ConsultationsPageV2({
               )}
             </div>
           )}
+
+          {/* 과목 필터 칩 — 전체 담임 뷰 전용. 섹션 키 기반(수학/영어/…/복수/미지정) */}
+          {isAllView && subjectBreakdown.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[10px] text-zinc-500">과목 :</span>
+              <button
+                type="button"
+                onClick={() => setSubjectFilter("all")}
+                className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  subjectFilter === "all"
+                    ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/50 dark:text-blue-300"
+                    : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+                }`}
+              >
+                전체
+              </button>
+              {subjectBreakdown.map((sb) => {
+                const active = subjectFilter === sb.key;
+                const base = subjectBadgeClass(sb.key === "복수 과목" ? "수학/영어" : sb.key);
+                return (
+                  <button
+                    key={sb.key}
+                    type="button"
+                    onClick={() => setSubjectFilter(sb.key)}
+                    className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                      active
+                        ? `border-blue-500 ${base}`
+                        : `border-transparent ${base} hover:brightness-95`
+                    }`}
+                    title={`${sb.key} · 담임 ${sb.teacherCount}명 · ${sb.done}/${sb.total} 완료`}
+                  >
+                    {sb.key} {sb.teacherCount}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* 학생 테이블 */}
@@ -887,7 +1054,7 @@ export default function ConsultationsPageV2({
                   상담
                 </th>
                 <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
-                  반명
+                  {isAllView ? "담임" : "반명"}
                 </th>
                 <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
                   학생
@@ -940,7 +1107,30 @@ export default function ConsultationsPageV2({
                       )}
                     </td>
                     <td className="overflow-hidden px-2 py-1 whitespace-nowrap">
-                      {r.className ? (
+                      {isAllView ? (
+                        r.homeroomNames.length > 0 ? (
+                          <span
+                            className="inline-block max-w-full truncate align-middle text-[10px] font-medium text-zinc-700 dark:text-zinc-300"
+                            title={r.homeroomNames.join(", ")}
+                          >
+                            {r.homeroomNames.map((hr, i) => {
+                              const subj = subjectByTeacher.get(hr) || "";
+                              const cls = subjectBadgeClass(subj);
+                              return (
+                                <span
+                                  key={hr}
+                                  className={`mr-0.5 inline-block rounded-sm px-1 py-0.5 text-[10px] font-medium ${cls}`}
+                                >
+                                  {hr}
+                                  {i < r.homeroomNames.length - 1 ? "" : ""}
+                                </span>
+                              );
+                            })}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-zinc-400">—</span>
+                        )
+                      ) : r.className ? (
                         <span
                           className="inline-block max-w-full truncate rounded-sm bg-zinc-100 px-1.5 py-0.5 align-middle text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                           title={r.className}
@@ -1068,6 +1258,7 @@ function ConsultationModal({
   row: {
     student: Student;
     className: string;
+    homeroomNames: string[];
     status: "done" | "pending";
     consultation: Consultation | null;
     allConsultations: Consultation[];
@@ -1101,10 +1292,15 @@ function ConsultationModal({
         {/* 헤더 */}
         <div className="flex flex-shrink-0 items-start gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
               {row.className && (
                 <span className="rounded-sm bg-zinc-100 px-1.5 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                   {row.className}
+                </span>
+              )}
+              {!row.className && row.homeroomNames.length > 0 && (
+                <span className="rounded-sm bg-zinc-100 px-1.5 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                  담임 {row.homeroomNames.join(", ")}
                 </span>
               )}
               <span>
@@ -1210,37 +1406,3 @@ function ConsultationModal({
   );
 }
 
-function StatTile({
-  label,
-  value,
-  unit,
-  tone,
-  hint,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  tone: "neutral" | "done" | "pending" | "rate";
-  hint?: string;
-}) {
-  const valueColor =
-    tone === "done"
-      ? "text-emerald-700 dark:text-emerald-400"
-      : tone === "pending"
-        ? "text-amber-700 dark:text-amber-400"
-        : tone === "rate"
-          ? "text-blue-700 dark:text-blue-400"
-          : "text-zinc-900 dark:text-zinc-100";
-  return (
-    <div className="rounded-sm border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400">{label}</div>
-      <div className="mt-0.5 flex items-baseline gap-1">
-        <span className={`text-xl font-bold tabular-nums ${valueColor}`}>{value}</span>
-        {unit && <span className="text-[10px] text-zinc-500">{unit}</span>}
-      </div>
-      {hint && (
-        <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{hint}</div>
-      )}
-    </div>
-  );
-}
