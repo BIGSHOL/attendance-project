@@ -817,7 +817,7 @@ export default function ConsultationsPage() {
                 ref={leftRef}
                 className="border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
               >
-                <div className="border-b border-zinc-200 bg-zinc-50 px-2 py-1.5 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                <div className="flex h-7 flex-shrink-0 items-center border-b border-zinc-200 bg-zinc-50 px-2 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
                   {monthLabel} 상담기간
                 </div>
                 <div>
@@ -858,7 +858,7 @@ export default function ConsultationsPage() {
                           </tr>
                         );
                       })}
-                      <tr className="bg-zinc-100 dark:bg-zinc-800">
+                      <tr className="h-7 border-b border-zinc-100 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800">
                         <td className="px-2 py-1 font-bold text-zinc-700 dark:text-zinc-300">
                           총합
                         </td>
