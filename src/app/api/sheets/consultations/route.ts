@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
 
   const teacher = (searchParams.get("teacher") ?? "").trim();
   const month = (searchParams.get("month") ?? "").trim();
+  const format = (searchParams.get("format") ?? "csv").trim(); // "csv" | "json" — 디버그용
 
   if (!teacher) {
     return NextResponse.json({ error: "teacher 필수" }, { status: 400 });
@@ -68,11 +69,14 @@ export async function GET(req: NextRequest) {
       extractNameAliases(teacher).map((n) => n.toLowerCase())
     );
 
+    // 교사 필터링한 raw docs (format=json 디버그용)
+    const rawMatched: Array<Record<string, unknown>> = [];
     // studentName → 회차별 entry 목록 (원본 date 로 정렬 후 포맷팅)
     const byStudent = new Map<string, Entry[]>();
     for (const doc of snap.docs) {
       const c = doc.data() as Omit<Consultation, "id">;
       if (!matchesTeacherByAliases(c.consultantName, teacherAliasesLower)) continue;
+      rawMatched.push({ id: doc.id, ...c });
       const mmddWeekday = toMMDD(c.date);
       if (!mmddWeekday) continue;
       const list = byStudent.get(c.studentName) ?? [];
@@ -85,6 +89,17 @@ export async function GET(req: NextRequest) {
         content: c.content ?? "",
       });
       byStudent.set(c.studentName, list);
+    }
+
+    if (format === "json") {
+      return NextResponse.json(
+        { count: rawMatched.length, docs: rawMatched },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        }
+      );
     }
 
     const rows: string[] = ["성명,상담,상담내용"];
