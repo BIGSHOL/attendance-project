@@ -396,13 +396,24 @@ export default function ConsultationsPage() {
     return result;
   }, [scopedStudents, scopedConsultations]);
 
-  // 미상담 먼저, 그다음 이름 오름차순
+  // 상담된 학생 먼저(최근 상담일 내림차순), 미상담 학생 뒤(이름 오름차순).
+  //   V2 와 동일한 정렬 기준. 최근 업데이트된 항목을 위에서 바로 확인 가능.
   const sortedStudents = useMemo(() => {
     return [...scopedStudents].sort((a, b) => {
-      const ta = matrixByStudent.get(a.id)?.total ?? 0;
-      const tb = matrixByStudent.get(b.id)?.total ?? 0;
-      if (ta === 0 && tb !== 0) return -1;
-      if (tb === 0 && ta !== 0) return 1;
+      const ba = matrixByStudent.get(a.id);
+      const bb = matrixByStudent.get(b.id);
+      const ta = ba?.total ?? 0;
+      const tb = bb?.total ?? 0;
+      // 상담된 그룹을 위로
+      if (ta > 0 && tb === 0) return -1;
+      if (ta === 0 && tb > 0) return 1;
+      // 둘 다 상담됨: 최근 상담일 내림차순
+      if (ta > 0 && tb > 0) {
+        const la = ba?.lastDate ?? "";
+        const lb = bb?.lastDate ?? "";
+        if (la !== lb) return lb.localeCompare(la);
+      }
+      // 둘 다 미상담(혹은 동률): 이름 오름차순
       return a.name.localeCompare(b.name);
     });
   }, [scopedStudents, matrixByStudent]);
