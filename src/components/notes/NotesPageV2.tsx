@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useNoteInspections } from "@/hooks/useNoteInspections";
 import { toSubjectLabel } from "@/lib/labelMap";
@@ -290,6 +290,37 @@ export default function NotesPageV2({
   );
   const blankCount = Math.max(0, PAGE_SIZE - pagedRows.length);
 
+  // 그리드 컨테이너 높이 동기화 — V2 상담과 동일 로직.
+  //   main 의 형제(헤더·필터·페이지네이션) 높이 + (thead + 25*32) = 정확히 맞춰
+  //   하단 여백 없이 25행 높이로 고정.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const container = containerRef.current;
+    const scroll = scrollRef.current;
+    if (!container || !scroll) return;
+    const main = scroll.parentElement;
+    if (!main) return;
+    const ROW_H = 32;
+    const calc = () => {
+      const theadH = scroll.querySelector("thead")?.getBoundingClientRect().height ?? 29;
+      const exactScrollH = theadH + PAGE_SIZE * ROW_H;
+      const siblings = Array.from(main.children).filter(
+        (c) => c !== scroll
+      ) as HTMLElement[];
+      const siblingsH = siblings.reduce(
+        (a, s) => a + s.getBoundingClientRect().height,
+        0
+      );
+      container.style.height = `${siblingsH + exactScrollH}px`;
+      scroll.style.height = `${exactScrollH}px`;
+      scroll.style.flex = "0 0 auto";
+    };
+    calc();
+    window.addEventListener("resize", calc);
+    return () => window.removeEventListener("resize", calc);
+  }, []);
+
   // 모달 저장 핸들러
   const teacherNameForCreate = isAllView ? selectedHomeroom : selectedHomeroom;
   const handleSave = async (input: {
@@ -319,9 +350,9 @@ export default function NotesPageV2({
   };
 
   return (
-    <div className="grid grid-cols-[300px_1fr] gap-3" style={{ minHeight: 600 }}>
+    <div ref={containerRef} className="grid grid-cols-[300px_1fr] gap-3">
       {/* ─── 좌측 레일 ─── */}
-      <aside className="flex flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <aside className="flex h-full flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 dark:border-zinc-800 dark:bg-zinc-950">
           <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
             선생님 · {teacherStats.length}명
@@ -444,7 +475,7 @@ export default function NotesPageV2({
       </aside>
 
       {/* ─── 우측 상세 ─── */}
-      <main className="flex min-w-0 flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <main className="flex h-full min-w-0 flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex flex-shrink-0 items-center gap-3 border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
           <div className="min-w-0 flex-1">
             <div className="text-[10px] text-zinc-500">
@@ -514,7 +545,7 @@ export default function NotesPageV2({
         </div>
 
         {/* 테이블 */}
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           <table className="w-full table-fixed text-xs">
             <colgroup>
               <col className="w-10" />
