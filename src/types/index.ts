@@ -170,6 +170,39 @@ export interface Consultation {
 }
 
 // ==========================================
+// 노트 검사 타입 (Supabase note_inspections 테이블)
+// ==========================================
+
+/**
+ * 노트 검사 상태
+ *   done       : 정상 검사 완료
+ *   needs_fix  : 보완 필요 / 재작성 요청
+ *   missing    : 미제출
+ */
+export type NoteInspectionStatus = "done" | "needs_fix" | "missing";
+
+/** 노트 검사 이벤트 — 학생별/월별로 여러 건 가능 */
+export interface NoteInspection {
+  id: string;
+  studentId: string;
+  studentName: string;
+  teacherName: string;
+  date: string;              // YYYY-MM-DD
+  status: NoteInspectionStatus;
+  memo?: string;
+  createdBy?: string;        // 기록자 이메일
+  createdAt: string;         // ISO 8601
+  updatedAt: string;         // ISO 8601
+}
+
+/** 노트 검사 상태 라벨 매핑 */
+export const NOTE_INSPECTION_STATUS_LABEL: Record<NoteInspectionStatus, string> = {
+  done: "완료",
+  needs_fix: "보완",
+  missing: "미제출",
+};
+
+// ==========================================
 // 세션 기간 타입 (ijw-calander 공유)
 // ==========================================
 

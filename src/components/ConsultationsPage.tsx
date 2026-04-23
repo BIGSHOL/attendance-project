@@ -10,6 +10,8 @@ import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/Homero
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
 import ConsultationsPageV2 from "@/components/consultation/ConsultationsPageV2";
+import NotesPageV1 from "@/components/notes/NotesPageV1";
+import NotesPageV2 from "@/components/notes/NotesPageV2";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
@@ -147,7 +149,7 @@ function consultationSubjectLabel(c: Consultation): string {
   return c.subject ? toSubjectLabel(c.subject) : "-";
 }
 
-type Tab = "consultation" | "note" | "v2";
+type Tab = "consultation" | "note" | "v2" | "note-v2";
 const ALL_TEACHERS = "__all__";
 
 // ─── 컴포넌트 ───────────────────────────────────────
@@ -588,9 +590,20 @@ export default function ConsultationsPage() {
                   ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
                   : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
               }`}
-              title="V2 레이아웃 파일럿 — 좌측 선생님 레일 + 우측 상세"
+              title="V2 레이아웃 — 좌측 선생님 레일 + 우측 상세"
             >
               상담 V2
+            </button>
+            <button
+              onClick={() => setActiveTab("note-v2")}
+              className={`rounded-sm px-3 py-1 text-xs font-bold transition-all ${
+                activeTab === "note-v2"
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+              title="노트 검사 V2"
+            >
+              노트 V2
             </button>
           </div>
 
@@ -1285,15 +1298,31 @@ export default function ConsultationsPage() {
         </>
       )}
 
-      {/* ─── 탭: 노트 검사 (목업 유지) ─── */}
+      {/* ─── 탭: 노트 검사 V1 ─── */}
       {activeTab === "note" && (
-        <div className="border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-          <div className="font-bold mb-1">노트 검사 기능은 준비 중입니다</div>
-          <div className="text-xs">
-            Supabase <code>note_inspections</code> 테이블 신설 후 연동 예정.
-            입력·기록 UI는 이후 작업에서 추가합니다.
-          </div>
-        </div>
+        <NotesPageV1
+          month={selectedMonth}
+          monthLabel={monthLabel}
+          teachers={teachers}
+          studentsByHomeroom={studentsByHomeroom}
+          selectedHomeroom={selectedHomeroom}
+          loading={loading}
+          isAllView={isAllView}
+        />
+      )}
+
+      {/* ─── 탭: 노트 검사 V2 ─── */}
+      {activeTab === "note-v2" && (
+        <NotesPageV2
+          month={selectedMonth}
+          teachers={teachers}
+          studentsByHomeroom={studentsByHomeroom}
+          hiddenTeacherIds={hiddenTeacherIds}
+          selectedHomeroom={selectedHomeroom}
+          setSelectedHomeroom={setSelectedHomeroom}
+          loading={loading}
+          isAllView={isAllView}
+        />
       )}
 
       {/* 상담 상세 팝업 */}
