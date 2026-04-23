@@ -1219,19 +1219,31 @@ export default function ConsultationsPageV2({
         (() => {
           const r = filteredRows.find((row) => row.key === modalRowKey);
           if (!r) return null;
-          return <ConsultationModal row={r} month={month} onClose={() => setModalRowKey(null)} />;
+          return (
+            <ConsultationModal
+              row={r}
+              month={month}
+              filterTeacher={isAllView ? null : selectedTeacher ?? null}
+              filterTeacherName={isAllView ? null : selectedHomeroom}
+              onClose={() => setModalRowKey(null)}
+            />
+          );
         })()}
     </div>
   );
 }
 
-// 상담 상세 모달 — 선택된 이벤트 행을 중앙 오버레이로 표시
+// 상담 상세 모달 — 선택된 이벤트 행을 중앙 오버레이로 표시.
+//   filterTeacher 가 있으면 이전 월 이력을 해당 선생님 본인 상담만 필터 (전체 담임 뷰면 null)
 function ConsultationModal({
   row,
   month,
+  filterTeacher,
+  filterTeacherName,
   onClose,
 }: {
   row: {
+    key: string;
     student: Student;
     className: string;
     homeroomNames: string[];
@@ -1240,6 +1252,8 @@ function ConsultationModal({
     allConsultations: Consultation[];
   };
   month: string;
+  filterTeacher: Teacher | null;
+  filterTeacherName: string | null;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1250,8 +1264,15 @@ function ConsultationModal({
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // 지금 본문에 표시 중인 상담 — 리스트 항목 클릭으로 바뀜(페이지 이동 없이).
+  //   row 가 바뀌면(학생 이동) 원래 상담으로 리셋.
+  const [viewing, setViewing] = useState<Consultation | null>(row.consultation);
+  useEffect(() => {
+    setViewing(row.consultation);
+  }, [row.key, row.consultation]);
+
   // 이전 월 이력 — 모달 열릴 때 API 호출, 월 변경되면 재조회.
-  const [pastHistory, setPastHistory] = useState<Consultation[] | null>(null);
+  const [pastHistoryAll, setPastHistoryAll] = useState<Consultation[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState(false);
   useEffect(() => {
@@ -1259,13 +1280,13 @@ function ConsultationModal({
     const studentId = row.student.id;
     const url = `/api/consultations/student-history?studentId=${encodeURIComponent(
       studentId
-    )}&beforeMonth=${encodeURIComponent(month)}&limit=10`;
+    )}&beforeMonth=${encodeURIComponent(month)}&limit=30`;
     setHistoryLoading(true);
     setHistoryError(false);
     (async () => {
       try {
         const data = await cachedFetch<Consultation[]>(url);
-        if (!cancelled) setPastHistory(data);
+        if (!cancelled) setPastHistoryAll(data);
       } catch (e) {
         console.error("[student-history]", e);
         if (!cancelled) setHistoryError(true);
@@ -1278,7 +1299,23 @@ function ConsultationModal({
     };
   }, [row.student.id, month]);
 
-  const c = row.consultation;
+  // 현재 선생님 기준 필터 + 10건 제한. 전체 담임 뷰면 필터 없이 그대로.
+  const pastHistory = useMemo(() => {
+    if (!pastHistoryAll) return null;
+    if (!filterTeacher && !filterTeacherName) return pastHistoryAll.slice(0, 10);
+    const nameAliases = new Set(
+      extractNameAliases(filterTeacherName ?? "").map((n) => n.toLowerCase())
+    );
+    return pastHistoryAll
+      .filter((c) => {
+        if (matchesTeacher(c.consultantName, filterTeacher ?? undefined)) return true;
+        const consAliases = extractNameAliases(c.consultantName ?? "").map((n) => n.toLowerCase());
+        return consAliases.some((x) => nameAliases.has(x));
+      })
+      .slice(0, 10);
+  }, [pastHistoryAll, filterTeacher, filterTeacherName]);
+
+  const c = viewing;
   const otherHistory = c
     ? row.allConsultations.filter((x) => x.id !== c.id).slice(0, 5)
     : row.allConsultations.slice(0, 5);
@@ -1311,7 +1348,7 @@ function ConsultationModal({
               <span>
                 {formatSchoolGrade(row.student.school, row.student.grade)}
               </span>
-              {row.status === "done" ? (
+              {viewing ? (
                 <span className="rounded-full bg-emerald-100 px-2 py-0 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
                   ✓ 완료
                 </span>
@@ -1319,6 +1356,17 @@ function ConsultationModal({
                 <span className="rounded-full bg-amber-100 px-2 py-0 text-[10px] font-bold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
                   ! 미상담
                 </span>
+              )}
+              {/* 원래 열었던 상담이 아닌 다른 항목 보는 중일 때 되돌리기 */}
+              {row.consultation && viewing?.id !== row.consultation.id && (
+                <button
+                  type="button"
+                  onClick={() => setViewing(row.consultation)}
+                  className="rounded-sm border border-zinc-300 bg-white px-1.5 py-0 text-[10px] text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  title="처음 열었던 상담으로 돌아가기"
+                >
+                  ↺ 원래 상담
+                </button>
               )}
             </div>
             <h3 className="mt-0.5 text-lg font-bold text-zinc-900 dark:text-zinc-100">
@@ -1373,9 +1421,12 @@ function ConsultationModal({
             ) : (
               <div className="flex flex-col gap-1.5">
                 {otherHistory.map((h) => (
-                  <div
+                  <button
                     key={h.id}
-                    className="flex items-baseline gap-2 border-l-2 border-zinc-200 pl-2 dark:border-zinc-700"
+                    type="button"
+                    onClick={() => setViewing(h)}
+                    className="flex items-baseline gap-2 border-l-2 border-zinc-200 pl-2 text-left transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/50"
+                    title="이 상담으로 이동"
                   >
                     <span className="w-20 flex-shrink-0 text-[11px] tabular-nums text-zinc-500">
                       {h.date.slice(5).replace("-", "/")}
@@ -1386,13 +1437,13 @@ function ConsultationModal({
                     <span className="ml-auto flex-shrink-0 text-[10px] text-zinc-400">
                       {h.type === "parent" ? "학부모" : "학생"}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* 이전 월 이력 — API 조회, 최대 10건 */}
+          {/* 이전 월 이력 — API 조회, 본인 상담만 필터, 최대 10건 */}
           <div className="mt-5">
             <div className="mb-1.5 flex items-baseline gap-2">
               <span className="text-[11px] font-medium text-zinc-500">
@@ -1400,6 +1451,9 @@ function ConsultationModal({
                 {pastHistory && ` · ${pastHistory.length}건`}
                 {pastHistory && pastHistory.length >= 10 && (
                   <span className="ml-1 text-[10px] text-zinc-400">(최근 10건)</span>
+                )}
+                {filterTeacherName && (
+                  <span className="ml-1 text-[10px] text-zinc-400">· {filterTeacherName} 본인</span>
                 )}
               </span>
             </div>
@@ -1411,23 +1465,39 @@ function ConsultationModal({
               <div className="text-[11px] text-zinc-400">이전 월 상담 기록 없음</div>
             ) : (
               <div className="flex flex-col gap-1.5">
-                {pastHistory.map((h) => (
-                  <div
-                    key={h.id}
-                    className="flex items-baseline gap-2 border-l-2 border-blue-200 pl-2 dark:border-blue-900"
-                  >
-                    <span className="w-24 flex-shrink-0 text-[11px] tabular-nums text-zinc-500">
-                      {h.date}
-                    </span>
-                    <span className="truncate text-xs text-zinc-700 dark:text-zinc-300">
-                      {h.title}
-                    </span>
-                    <span className="ml-auto flex-shrink-0 text-[10px] text-zinc-400">
-                      {h.type === "parent" ? "학부모" : "학생"}
-                      {h.consultantName ? ` · ${h.consultantName}` : ""}
-                    </span>
-                  </div>
-                ))}
+                {pastHistory.map((h) => {
+                  const isViewing = viewing?.id === h.id;
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      onClick={() => setViewing(h)}
+                      className={`flex items-baseline gap-2 border-l-2 pl-2 text-left transition-colors ${
+                        isViewing
+                          ? "border-blue-500 bg-blue-50/60 dark:border-blue-400 dark:bg-blue-950/40"
+                          : "border-blue-200 hover:bg-zinc-50 dark:border-blue-900 dark:hover:bg-zinc-800/50"
+                      }`}
+                      title="이 상담으로 이동"
+                    >
+                      <span className="w-24 flex-shrink-0 text-[11px] tabular-nums text-zinc-500">
+                        {h.date}
+                      </span>
+                      <span
+                        className={`truncate text-xs ${
+                          isViewing
+                            ? "font-bold text-zinc-900 dark:text-zinc-100"
+                            : "text-zinc-700 dark:text-zinc-300"
+                        }`}
+                      >
+                        {h.title}
+                      </span>
+                      <span className="ml-auto flex-shrink-0 text-[10px] text-zinc-400">
+                        {h.type === "parent" ? "학부모" : "학생"}
+                        {h.consultantName ? ` · ${h.consultantName}` : ""}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
