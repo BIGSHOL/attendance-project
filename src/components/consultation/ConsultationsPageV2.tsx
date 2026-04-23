@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { toSubjectLabel } from "@/lib/labelMap";
+import { cachedFetch } from "@/lib/fetchCache";
 import type { Consultation, Student, Teacher } from "@/types";
 
 /**
@@ -1218,7 +1219,7 @@ export default function ConsultationsPageV2({
         (() => {
           const r = filteredRows.find((row) => row.key === modalRowKey);
           if (!r) return null;
-          return <ConsultationModal row={r} onClose={() => setModalRowKey(null)} />;
+          return <ConsultationModal row={r} month={month} onClose={() => setModalRowKey(null)} />;
         })()}
     </div>
   );
@@ -1227,6 +1228,7 @@ export default function ConsultationsPageV2({
 // 상담 상세 모달 — 선택된 이벤트 행을 중앙 오버레이로 표시
 function ConsultationModal({
   row,
+  month,
   onClose,
 }: {
   row: {
@@ -1237,6 +1239,7 @@ function ConsultationModal({
     consultation: Consultation | null;
     allConsultations: Consultation[];
   };
+  month: string;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1246,6 +1249,34 @@ function ConsultationModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // 이전 월 이력 — 모달 열릴 때 API 호출, 월 변경되면 재조회.
+  const [pastHistory, setPastHistory] = useState<Consultation[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const studentId = row.student.id;
+    const url = `/api/consultations/student-history?studentId=${encodeURIComponent(
+      studentId
+    )}&beforeMonth=${encodeURIComponent(month)}&limit=10`;
+    setHistoryLoading(true);
+    setHistoryError(false);
+    (async () => {
+      try {
+        const data = await cachedFetch<Consultation[]>(url);
+        if (!cancelled) setPastHistory(data);
+      } catch (e) {
+        console.error("[student-history]", e);
+        if (!cancelled) setHistoryError(true);
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [row.student.id, month]);
 
   const c = row.consultation;
   const otherHistory = c
@@ -1359,9 +1390,46 @@ function ConsultationModal({
                 ))}
               </div>
             )}
-            <div className="mt-2 text-[10px] text-zinc-400">
-              ※ 이전 월 이력 연동은 추후 Phase
+          </div>
+
+          {/* 이전 월 이력 — API 조회, 최대 10건 */}
+          <div className="mt-5">
+            <div className="mb-1.5 flex items-baseline gap-2">
+              <span className="text-[11px] font-medium text-zinc-500">
+                이전 월 상담 이력
+                {pastHistory && ` · ${pastHistory.length}건`}
+                {pastHistory && pastHistory.length >= 10 && (
+                  <span className="ml-1 text-[10px] text-zinc-400">(최근 10건)</span>
+                )}
+              </span>
             </div>
+            {historyLoading ? (
+              <div className="text-[11px] text-zinc-400">불러오는 중…</div>
+            ) : historyError ? (
+              <div className="text-[11px] text-red-500">이력 조회 실패</div>
+            ) : !pastHistory || pastHistory.length === 0 ? (
+              <div className="text-[11px] text-zinc-400">이전 월 상담 기록 없음</div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {pastHistory.map((h) => (
+                  <div
+                    key={h.id}
+                    className="flex items-baseline gap-2 border-l-2 border-blue-200 pl-2 dark:border-blue-900"
+                  >
+                    <span className="w-24 flex-shrink-0 text-[11px] tabular-nums text-zinc-500">
+                      {h.date}
+                    </span>
+                    <span className="truncate text-xs text-zinc-700 dark:text-zinc-300">
+                      {h.title}
+                    </span>
+                    <span className="ml-auto flex-shrink-0 text-[10px] text-zinc-400">
+                      {h.type === "parent" ? "학부모" : "학생"}
+                      {h.consultantName ? ` · ${h.consultantName}` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
