@@ -31,7 +31,7 @@ function rowToInspection(r: Row): NoteInspection {
   };
 }
 
-const VALID_STATUS: NoteInspectionStatus[] = ["done", "needs_fix", "missing"];
+const VALID_STATUS: NoteInspectionStatus[] = ["A", "B", "C", "F"];
 
 /**
  * PATCH /api/note-inspections/:id

@@ -31,7 +31,7 @@ function rowToInspection(r: Row): NoteInspection {
   };
 }
 
-const VALID_STATUS: NoteInspectionStatus[] = ["done", "needs_fix", "missing"];
+const VALID_STATUS: NoteInspectionStatus[] = ["A", "B", "C", "F"];
 
 /**
  * GET /api/note-inspections?month=YYYY-MM
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: "date 는 YYYY-MM-DD 형식" }, { status: 400 });
   }
-  const resolvedStatus = (status || "done") as NoteInspectionStatus;
+  const resolvedStatus = (status || "A") as NoteInspectionStatus;
   if (!VALID_STATUS.includes(resolvedStatus)) {
     return NextResponse.json({ error: "status 유효값 아님" }, { status: 400 });
   }

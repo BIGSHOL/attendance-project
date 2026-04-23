@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useNoteInspections } from "@/hooks/useNoteInspections";
 import type {
   NoteInspection,
@@ -37,9 +38,10 @@ function daysInMonth(yyyyMM: string): string[] {
 }
 
 const STATUS_BADGE: Record<NoteInspectionStatus, string> = {
-  done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  needs_fix: "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
-  missing: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300",
+  A: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+  B: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300",
+  C: "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+  F: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300",
 };
 
 interface Props {
@@ -166,10 +168,40 @@ export default function NotesPageV1({
   const totalInspections = scopedInspections.length;
   const inspectedIds = new Set(scopedInspections.map((i) => i.studentId));
   const uninspectedCount = scopedStudents.length - inspectedIds.size;
-  const needsFixCount = scopedInspections.filter((i) => i.status === "needs_fix").length;
-  const missingCount = scopedInspections.filter((i) => i.status === "missing").length;
+  const cGradeCount = scopedInspections.filter((i) => i.status === "C").length;
+  const fGradeCount = scopedInspections.filter((i) => i.status === "F").length;
 
   const monthDays = daysInMonth(month);
+
+  // 학생 이름 검색 + 페이지네이션 (페이지 크기 = 월 일수, V1 상담과 동일)
+  const [studentSearch, setStudentSearch] = useLocalStorage<string>(
+    "notes.v1.studentSearch",
+    ""
+  );
+  const searchedStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return sortedStudents;
+    return sortedStudents.filter(
+      (s) =>
+        (s.name || "").toLowerCase().includes(q) ||
+        (s.school || "").toLowerCase().includes(q) ||
+        (s.grade || "").toLowerCase().includes(q)
+    );
+  }, [sortedStudents, studentSearch]);
+
+  const pageSize = monthDays.length;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(searchedStudents.length / pageSize));
+  useEffect(() => {
+    setPage(1);
+  }, [selectedHomeroom, studentSearch, month]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pagedStudents = useMemo(
+    () => searchedStudents.slice((page - 1) * pageSize, page * pageSize),
+    [searchedStudents, page, pageSize]
+  );
 
   const handleSave = async (input: {
     status: NoteInspectionStatus;
@@ -213,9 +245,9 @@ export default function NotesPageV1({
           tone={uninspectedCount > 0 ? "warn" : "neutral"}
         />
         <KpiCard
-          label="보완·미제출"
-          value={`${needsFixCount + missingCount}건`}
-          tone={needsFixCount + missingCount > 0 ? "alert" : "neutral"}
+          label="C·F 등급"
+          value={`${cGradeCount + fGradeCount}건`}
+          tone={cGradeCount + fGradeCount > 0 ? "alert" : "neutral"}
         />
       </div>
 
@@ -281,14 +313,23 @@ export default function NotesPageV1({
         </section>
 
         <section className="flex flex-col overflow-hidden border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex h-7 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex h-7 items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 px-3 dark:border-zinc-800 dark:bg-zinc-950">
             <span className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
               학생별 노트 검사 현황 ({monthLabel})
               {!isAllView && (
                 <span className="ml-2 font-normal text-zinc-500">· {selectedHomeroom}</span>
               )}
             </span>
-            <span className="text-[10px] text-zinc-500">행 클릭 시 입력·편집</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                placeholder="학생 이름 검색"
+                className="h-5 w-36 rounded-sm border border-zinc-300 bg-white px-1.5 text-[10px] text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <span className="text-[10px] text-zinc-500">행 클릭 시 입력·편집</span>
+            </div>
           </div>
           <div className="overflow-auto">
             <table className="w-full text-xs">
@@ -320,7 +361,7 @@ export default function NotesPageV1({
                 </tr>
               </thead>
               <tbody>
-                {sortedStudents.map((s) => {
+                {pagedStudents.map((s) => {
                   const b = statsByStudent.get(s.id);
                   if (!b) return null;
                   const nothing = b.total === 0;
@@ -356,8 +397,9 @@ export default function NotesPageV1({
                         ) : b.latest ? (
                           <span
                             className={`inline-block rounded-sm px-2 py-0.5 text-[10px] font-bold ${STATUS_BADGE[b.latest.status]}`}
+                            title={NOTE_INSPECTION_STATUS_LABEL[b.latest.status]}
                           >
-                            {NOTE_INSPECTION_STATUS_LABEL[b.latest.status]}
+                            {b.latest.status}
                           </span>
                         ) : (
                           "—"
@@ -384,18 +426,32 @@ export default function NotesPageV1({
                     </tr>
                   );
                 })}
-                {!loading && sortedStudents.length === 0 && (
-                  <tr>
+                {/* 빈 행 패딩 — 좌측 일자 총 높이와 맞춤, 페이지네이션 위치 고정 */}
+                {Array.from({
+                  length: Math.max(0, pageSize - pagedStudents.length),
+                }).map((_, i) => (
+                  <tr
+                    key={`blank-${i}`}
+                    aria-hidden="true"
+                    className="h-7 border-b border-zinc-100 dark:border-zinc-800"
+                  >
+                    <td colSpan={isAllView ? 7 : 6} />
+                  </tr>
+                ))}
+                {!loading && searchedStudents.length === 0 && (
+                  <tr className="pointer-events-none">
                     <td
                       colSpan={isAllView ? 7 : 6}
                       className="px-2 py-4 text-center text-[11px] text-zinc-500"
                     >
-                      학생이 없습니다
+                      {studentSearch.trim()
+                        ? `"${studentSearch.trim()}" 검색 결과가 없습니다`
+                        : "학생이 없습니다"}
                     </td>
                   </tr>
                 )}
-                {loading && sortedStudents.length === 0 && (
-                  <tr>
+                {loading && searchedStudents.length === 0 && (
+                  <tr className="pointer-events-none">
                     <td
                       colSpan={isAllView ? 7 : 6}
                       className="px-2 py-4 text-center text-[11px] text-zinc-400"
@@ -406,6 +462,49 @@ export default function NotesPageV1({
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* 페이지네이션 */}
+          <div className="flex h-7 items-center justify-between border-t border-zinc-200 bg-zinc-50/50 px-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+            {totalPages > 1 ? (
+              <>
+                <span className="tabular-nums">
+                  {searchedStudents.length === 0
+                    ? "0 / 0명"
+                    : `${(page - 1) * pageSize + 1}–${Math.min(
+                        page * pageSize,
+                        searchedStudents.length
+                      )} / ${searchedStudents.length}명`}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-1 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                    aria-label="이전 페이지"
+                  >
+                    ◀
+                  </button>
+                  <span className="tabular-nums">
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-1 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                    aria-label="다음 페이지"
+                  >
+                    ▶
+                  </button>
+                </div>
+              </>
+            ) : (
+              <span className="tabular-nums text-zinc-400">
+                총 {searchedStudents.length}명
+              </span>
+            )}
           </div>
         </section>
       </div>

@@ -174,12 +174,13 @@ export interface Consultation {
 // ==========================================
 
 /**
- * 노트 검사 상태
- *   done       : 정상 검사 완료
- *   needs_fix  : 보완 필요 / 재작성 요청
- *   missing    : 미제출
+ * 노트 검사 등급
+ *   A : 우수
+ *   B : 양호
+ *   C : 미흡 (보완 필요)
+ *   F : 미제출 / 불량
  */
-export type NoteInspectionStatus = "done" | "needs_fix" | "missing";
+export type NoteInspectionStatus = "A" | "B" | "C" | "F";
 
 /** 노트 검사 이벤트 — 학생별/월별로 여러 건 가능 */
 export interface NoteInspection {
@@ -195,11 +196,12 @@ export interface NoteInspection {
   updatedAt: string;         // ISO 8601
 }
 
-/** 노트 검사 상태 라벨 매핑 */
+/** 노트 검사 등급 라벨 (짧은 한글명) */
 export const NOTE_INSPECTION_STATUS_LABEL: Record<NoteInspectionStatus, string> = {
-  done: "완료",
-  needs_fix: "보완",
-  missing: "미제출",
+  A: "우수",
+  B: "양호",
+  C: "미흡",
+  F: "미제출",
 };
 
 // ==========================================

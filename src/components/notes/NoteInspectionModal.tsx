@@ -41,7 +41,7 @@ export default function NoteInspectionModal({
       return todayStr.startsWith(month) ? todayStr : `${month}-01`;
     })();
 
-  const [status, setStatus] = useState<NoteInspectionStatus>(existing?.status ?? "done");
+  const [status, setStatus] = useState<NoteInspectionStatus>(existing?.status ?? "A");
   const [date, setDate] = useState<string>(defaultDate);
   const [memo, setMemo] = useState<string>(existing?.memo ?? "");
   const [saving, setSaving] = useState(false);
@@ -85,13 +85,12 @@ export default function NoteInspectionModal({
     }
   };
 
-  const statusOptions: NoteInspectionStatus[] = ["done", "needs_fix", "missing"];
+  const statusOptions: NoteInspectionStatus[] = ["A", "B", "C", "F"];
   const statusColor: Record<NoteInspectionStatus, string> = {
-    done: "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800",
-    needs_fix:
-      "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800",
-    missing:
-      "bg-red-100 text-red-800 border-red-300 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800",
+    A: "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800",
+    B: "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800",
+    C: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800",
+    F: "bg-red-100 text-red-800 border-red-300 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800",
   };
 
   return (
@@ -141,13 +140,17 @@ export default function NoteInspectionModal({
                   key={s}
                   type="button"
                   onClick={() => setStatus(s)}
-                  className={`rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`flex-1 rounded-sm border px-2 py-1.5 text-xs font-medium transition-colors ${
                     status === s
                       ? statusColor[s]
                       : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
                   }`}
+                  title={NOTE_INSPECTION_STATUS_LABEL[s]}
                 >
-                  {NOTE_INSPECTION_STATUS_LABEL[s]}
+                  <span className="font-bold">{s}</span>
+                  <span className="ml-1 text-[10px] opacity-80">
+                    {NOTE_INSPECTION_STATUS_LABEL[s]}
+                  </span>
                 </button>
               ))}
             </div>

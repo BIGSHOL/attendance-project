@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useNoteInspections } from "@/hooks/useNoteInspections";
 import { toSubjectLabel } from "@/lib/labelMap";
@@ -40,14 +40,10 @@ function subjectBadgeClass(label: string): string {
 }
 
 const STATUS_PILL: Record<NoteInspectionStatus, string> = {
-  done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  needs_fix: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
-  missing: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300",
-};
-const STATUS_ICON: Record<NoteInspectionStatus, string> = {
-  done: "✓",
-  needs_fix: "△",
-  missing: "✕",
+  A: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+  B: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300",
+  C: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
+  F: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300",
 };
 
 function donutColor(pct: number): string {
@@ -278,6 +274,22 @@ export default function NotesPageV2({
     });
   }, [rows, statusFilter, studentSearch]);
 
+  // 페이지네이션 — 25명 고정 (V2 상담과 동일)
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  useEffect(() => {
+    setPage(1);
+  }, [selectedHomeroom, statusFilter, studentSearch, month]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pagedRows = useMemo(
+    () => filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredRows, page]
+  );
+  const blankCount = Math.max(0, PAGE_SIZE - pagedRows.length);
+
   // 모달 저장 핸들러
   const teacherNameForCreate = isAllView ? selectedHomeroom : selectedHomeroom;
   const handleSave = async (input: {
@@ -466,9 +478,10 @@ export default function NotesPageV2({
             {(
               [
                 ["all", "전체"],
-                ["done", "완료"],
-                ["needs_fix", "보완"],
-                ["missing", "미제출"],
+                ["A", "A"],
+                ["B", "B"],
+                ["C", "C"],
+                ["F", "F"],
                 ["pending", "미검사"],
               ] as const
             ).map(([k, label]) => (
@@ -538,8 +551,9 @@ export default function NotesPageV2({
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((r, i) => {
+              {pagedRows.map((r, i) => {
                 const latest = r.latest;
+                const idx = (page - 1) * PAGE_SIZE + i + 1;
                 return (
                   <tr
                     key={r.student.id}
@@ -553,15 +567,15 @@ export default function NotesPageV2({
                     }`}
                   >
                     <td className="px-2 py-1 text-center text-[10px] tabular-nums text-zinc-400">
-                      {String(i + 1).padStart(2, "0")}
+                      {String(idx).padStart(2, "0")}
                     </td>
                     <td className="px-2 py-1 text-center">
                       {latest ? (
                         <span
-                          className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-bold ${STATUS_PILL[latest.status]}`}
-                          title={NOTE_INSPECTION_STATUS_LABEL[latest.status]}
+                          className={`inline-flex h-5 min-w-5 items-center justify-center rounded-sm px-1.5 text-[11px] font-bold ${STATUS_PILL[latest.status]}`}
+                          title={`${latest.status} · ${NOTE_INSPECTION_STATUS_LABEL[latest.status]}`}
                         >
-                          {STATUS_ICON[latest.status]}
+                          {latest.status}
                         </span>
                       ) : (
                         <span
@@ -603,9 +617,19 @@ export default function NotesPageV2({
                   </tr>
                 );
               })}
+              {/* 빈 행 패딩 — 페이지네이션 위치 고정 */}
+              {Array.from({ length: blankCount }).map((_, i) => (
+                <tr
+                  key={`blank-${i}`}
+                  aria-hidden="true"
+                  className="h-8 border-b border-zinc-100 dark:border-zinc-800"
+                >
+                  <td colSpan={7} />
+                </tr>
+              ))}
               {filteredRows.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={7} className="px-2 py-6 text-center text-[11px] text-zinc-400">
+                <tr className="pointer-events-none">
+                  <td colSpan={7} className="px-2 py-3 text-center text-[11px] text-zinc-500">
                     {studentSearch.trim()
                       ? `"${studentSearch.trim()}" 검색 결과가 없습니다`
                       : "학생이 없습니다"}
@@ -613,14 +637,53 @@ export default function NotesPageV2({
                 </tr>
               )}
               {loading && filteredRows.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-2 py-6 text-center text-[11px] text-zinc-400">
+                <tr className="pointer-events-none">
+                  <td colSpan={7} className="px-2 py-3 text-center text-[11px] text-zinc-400">
                     불러오는 중…
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* 페이지네이션 */}
+        <div className="flex h-7 flex-shrink-0 items-center justify-between border-t border-zinc-200 bg-zinc-50/50 px-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+          <span className="tabular-nums">
+            {filteredRows.length === 0
+              ? "0명"
+              : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(
+                  page * PAGE_SIZE,
+                  filteredRows.length
+                )} / ${filteredRows.length}명`}
+          </span>
+          {totalPages > 1 ? (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-1 text-zinc-500 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                aria-label="이전 페이지"
+              >
+                ◀
+              </button>
+              <span className="tabular-nums">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-1 text-zinc-500 hover:text-zinc-900 disabled:opacity-30 dark:hover:text-zinc-100"
+                aria-label="다음 페이지"
+              >
+                ▶
+              </button>
+            </div>
+          ) : (
+            <span className="text-zinc-400">한 페이지</span>
+          )}
         </div>
       </main>
 
