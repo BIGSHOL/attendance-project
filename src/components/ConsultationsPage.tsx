@@ -338,8 +338,32 @@ export default function ConsultationsPage() {
     [scopedStudents]
   );
 
+  // 선생님 이름 → 과목 레이블 (과목 필터 판정용 — scopedConsultations 보다 먼저 선언)
+  const subjectByTeacher = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of teachers) {
+      const label = (t.subjects || []).map(toSubjectLabel).filter(Boolean).join("/");
+      m.set(t.name, label);
+    }
+    return m;
+  }, [teachers]);
+
   const scopedConsultations = useMemo(() => {
-    if (isAllView) return consultations;
+    if (isAllView) {
+      // 과목 필터 미적용 시 그대로
+      if (subjectFilter === "all") return consultations;
+      // 전체 담임 + 과목 필터: 상담자(consultantName) 의 과목이 필터와 일치하는 것만
+      const matchSubj = (s: string): boolean => {
+        if (subjectFilter === "복수 과목") return s.includes("/");
+        if (subjectFilter === "미지정") return !s;
+        return s === subjectFilter;
+      };
+      return consultations.filter((c) => {
+        const matched = teachers.find((t) => matchesTeacher(c.consultantName, t));
+        if (!matched) return matchSubj("");
+        return matchSubj(subjectByTeacher.get(matched.name) || "");
+      });
+    }
 
     if (isSubjectView) {
       // 해당 과목 담임들의 staff 객체 & alias 집합
@@ -375,7 +399,7 @@ export default function ConsultationsPage() {
                 .includes(n)
             ))
     );
-  }, [consultations, isAllView, isSubjectView, selectedHomeroom, subjectTeacherNames, scopedStudentIds, staffByKey]);
+  }, [consultations, isAllView, isSubjectView, selectedHomeroom, subjectTeacherNames, scopedStudentIds, staffByKey, subjectFilter, teachers, subjectByTeacher]);
 
   // 일자별 상담 수 집계
   const consultationsByDate = useMemo(() => {
@@ -424,16 +448,6 @@ export default function ConsultationsPage() {
       return a.name.localeCompare(b.name);
     });
   }, [scopedStudents, matrixByStudent]);
-
-  // 선생님 이름 → 과목 레이블 (과목 필터 판정용)
-  const subjectByTeacher = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const t of teachers) {
-      const label = (t.subjects || []).map(toSubjectLabel).filter(Boolean).join("/");
-      m.set(t.name, label);
-    }
-    return m;
-  }, [teachers]);
 
   // 전체 담임 뷰 — 과목별 담임 수/학생 수 (필터 칩 노출용)
   const subjectChips = useMemo(() => {
