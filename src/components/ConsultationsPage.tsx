@@ -980,6 +980,20 @@ export default function ConsultationsPage() {
                 <div className="flex h-7 flex-shrink-0 items-center border-b border-zinc-200 bg-zinc-50 px-2 text-[11px] font-bold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
                   {monthLabel} 상담기간
                 </div>
+                {/* 우측 과목 필터 칩 바와 행 높이 동기화 — 전체 담임 뷰에서만 노출.
+                    border + px·py 까지 동일하게 맞춰 좌우 행이 픽셀 단위로 일치. */}
+                {isAllView && subjectChips.length > 0 && (
+                  <div
+                    aria-hidden="true"
+                    className="flex flex-shrink-0 items-center gap-1 border-b border-zinc-200 bg-zinc-50/60 px-2 py-1 dark:border-zinc-800 dark:bg-zinc-900/40"
+                  >
+                    <span className="rounded-sm border border-transparent px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
+                      {subjectFilter === "all"
+                        ? "전체 과목"
+                        : `과목: ${subjectFilter}`}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-zinc-100 dark:bg-zinc-800">
