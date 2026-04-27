@@ -1029,7 +1029,7 @@ export default function ConsultationsPageV2({
                   상담
                 </th>
                 <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
-                  {isAllView ? "담임" : "반명"}
+                  {isAllView ? "상담자" : "반명"}
                 </th>
                 <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
                   학생
@@ -1083,24 +1083,46 @@ export default function ConsultationsPageV2({
                     </td>
                     <td className="overflow-hidden px-2 py-1 whitespace-nowrap">
                       {isAllView ? (
-                        r.homeroomNames.length > 0 ? (
+                        // 전체 담임 뷰: 실제 상담자(consultantName) 1명만 표시.
+                        //   미상담 행이면 담임 후보를 fallback 으로 표시.
+                        c?.consultantName ? (
+                          (() => {
+                            // ijw-calander 포맷 "정유진(Yoojin)" 에서 한글명 우선 추출
+                            const raw = c.consultantName!;
+                            const m = raw.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
+                            const display = m ? m[1].trim() : raw;
+                            // 상담자가 어느 과목 선생님인지 매칭 → 뱃지 색상
+                            const matched = teachers.find((t) => {
+                              if (t.name === raw) return true;
+                              if (t.englishName && t.englishName === raw) return true;
+                              if (m && (t.name === m[1].trim() || t.name === m[2].trim()))
+                                return true;
+                              if (
+                                m &&
+                                t.englishName &&
+                                (t.englishName === m[1].trim() || t.englishName === m[2].trim())
+                              )
+                                return true;
+                              return false;
+                            });
+                            const subj = matched ? subjectByTeacher.get(matched.name) || "" : "";
+                            return (
+                              <span
+                                className={`inline-block max-w-full truncate rounded-sm px-1.5 py-0.5 align-middle text-[10px] font-medium ${subjectBadgeClass(subj)}`}
+                                title={raw}
+                              >
+                                {display}
+                              </span>
+                            );
+                          })()
+                        ) : r.homeroomNames.length > 0 ? (
+                          // 미상담: 담임 후보를 회색으로 표시
                           <span
-                            className="inline-block max-w-full truncate align-middle text-[10px] font-medium text-zinc-700 dark:text-zinc-300"
-                            title={r.homeroomNames.join(", ")}
+                            className="inline-block max-w-full truncate align-middle text-[10px] text-zinc-500"
+                            title={`담임: ${r.homeroomNames.join(", ")}`}
                           >
-                            {r.homeroomNames.map((hr, i) => {
-                              const subj = subjectByTeacher.get(hr) || "";
-                              const cls = subjectBadgeClass(subj);
-                              return (
-                                <span
-                                  key={hr}
-                                  className={`mr-0.5 inline-block rounded-sm px-1 py-0.5 text-[10px] font-medium ${cls}`}
-                                >
-                                  {hr}
-                                  {i < r.homeroomNames.length - 1 ? "" : ""}
-                                </span>
-                              );
-                            })}
+                            <span className="text-[9px] text-zinc-400">담임 </span>
+                            {r.homeroomNames.join(", ")}
                           </span>
                         ) : (
                           <span className="text-[10px] text-zinc-400">—</span>
