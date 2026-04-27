@@ -1101,14 +1101,15 @@ export default function ConsultationsPage() {
                                 </span>
                               ) : (
                                 <div className="flex flex-wrap gap-1">
-                                  {bucket.dates.map((d) => {
+                                  {bucket.dates.map((d, di) => {
                                     // 해당 학생 × 날짜의 상담 찾기 (여러 건이면 첫 번째)
                                     const match = scopedConsultations.find(
                                       (c) => c.studentId === s.id && c.date === d
                                     );
                                     return (
                                       <button
-                                        key={d}
+                                        // 같은 날짜 복수 상담 시 키 중복 방지 위해 인덱스 합성
+                                        key={`${d}-${di}`}
                                         type="button"
                                         onClick={() => match && setSelectedConsultation(match)}
                                         disabled={!match}
