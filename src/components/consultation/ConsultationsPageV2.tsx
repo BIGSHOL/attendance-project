@@ -431,9 +431,22 @@ export default function ConsultationsPageV2({
     consultation: Consultation | null; // null 이면 미상담
     // 같은 학생의 당월 전체 상담 — 모달에서 "지난 상담" 리스트용
     allConsultations: Consultation[];
+    // 상담자(consultantName)의 과목 레이블 — 과목 필터·뱃지 색상용. done 한정.
+    consultantSubject?: string;
   };
   const studentRows = useMemo<EventRow[]>(() => {
     const rows: EventRow[] = [];
+    // consultantName 매칭 결과 캐시
+    const consultantSubjectCache = new Map<string, string>();
+    const resolveConsultantSubject = (consultantName: string | undefined): string => {
+      if (!consultantName) return "";
+      const cached = consultantSubjectCache.get(consultantName);
+      if (cached !== undefined) return cached;
+      const matched = teachers.find((t) => matchesTeacher(consultantName, t));
+      const subj = matched ? subjectByTeacher.get(matched.name) || "" : "";
+      consultantSubjectCache.set(consultantName, subj);
+      return subj;
+    };
     for (const s of scopedStudents) {
       const list = consultationsByStudent.get(s.id) || [];
       const className = classNameOfStudent(s);
@@ -460,6 +473,7 @@ export default function ConsultationsPageV2({
             status: "done",
             consultation: c,
             allConsultations: list,
+            consultantSubject: resolveConsultantSubject(c.consultantName),
           });
         }
       }
@@ -476,7 +490,7 @@ export default function ConsultationsPageV2({
     });
     return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopedStudents, consultationsByStudent, selectedTeacher, selectedHomeroom, teachersByStudent]);
+  }, [scopedStudents, consultationsByStudent, selectedTeacher, selectedHomeroom, teachersByStudent, teachers, subjectByTeacher]);
 
   // 필터 적용 — 이벤트 행(상담 1건 또는 미상담) 단위
   const filteredRows = useMemo(() => {
@@ -485,14 +499,19 @@ export default function ConsultationsPageV2({
       if (statusFilter === "done" && r.status !== "done") return false;
       if (statusFilter === "pending" && r.status !== "pending") return false;
       if (!isAllView && classFilter !== "all" && r.className !== classFilter) return false;
-      // 전체 담임 뷰 + 과목 필터 — 담임 한 명이라도 해당 과목이면 표시
+      // 전체 담임 뷰 + 과목 필터.
+      //   - 상담된 행: 실제 상담자(consultantName) 의 과목 기준으로 판정
+      //     (학생이 여러 과목 담임을 가져도 이 상담을 한 사람의 과목만 봄)
+      //   - 미상담 행: 담임 후보 중 한 명이라도 해당 과목이면 통과
       if (isAllView && subjectFilter !== "all") {
-        const hit = r.homeroomNames.some((hr) => {
-          const subj = subjectByTeacher.get(hr) || "";
+        const matchSubj = (subj: string): boolean => {
           if (subjectFilter === "복수 과목") return subj.includes("/");
           if (subjectFilter === "미지정") return !subj;
           return subj === subjectFilter;
-        });
+        };
+        const hit = r.consultation
+          ? matchSubj(r.consultantSubject || "")
+          : r.homeroomNames.some((hr) => matchSubj(subjectByTeacher.get(hr) || ""));
         if (!hit) return false;
       }
       if (q) {
@@ -1086,24 +1105,10 @@ export default function ConsultationsPageV2({
                         c?.consultantName ? (
                           (() => {
                             // ijw-calander 포맷 "정유진(Yoojin)" 에서 한글명 우선 추출
-                            const raw = c.consultantName!;
-                            const m = raw.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
-                            const display = m ? m[1].trim() : raw;
-                            // 상담자가 어느 과목 선생님인지 매칭 → 뱃지 색상
-                            const matched = teachers.find((t) => {
-                              if (t.name === raw) return true;
-                              if (t.englishName && t.englishName === raw) return true;
-                              if (m && (t.name === m[1].trim() || t.name === m[2].trim()))
-                                return true;
-                              if (
-                                m &&
-                                t.englishName &&
-                                (t.englishName === m[1].trim() || t.englishName === m[2].trim())
-                              )
-                                return true;
-                              return false;
-                            });
-                            const subj = matched ? subjectByTeacher.get(matched.name) || "" : "";
+                            const raw = c.consultantName;
+                            const mm = raw.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
+                            const display = mm ? mm[1].trim() : raw;
+                            const subj = r.consultantSubject || "";
                             return (
                               <span
                                 className={`inline-block max-w-full truncate rounded-sm px-1.5 py-0.5 align-middle text-[10px] font-medium ${subjectBadgeClass(subj)}`}
