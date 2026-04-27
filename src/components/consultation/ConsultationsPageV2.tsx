@@ -1011,39 +1011,37 @@ export default function ConsultationsPageV2({
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           <table className="w-full table-fixed text-xs">
             <colgroup>
-              <col className="w-10" />
-              <col className="w-12" />
-              <col className="w-40" />
-              <col className="w-24" />
-              <col className="w-32" />
-              <col className="w-24" />
-              <col />
+              <col className="w-9" />
               <col className="w-8" />
+              <col className="w-24" />
+              <col className="w-20" />
+              <col className="w-24" />
+              <col className="w-14" />
+              <col />
             </colgroup>
             <thead className="sticky top-0 z-10 bg-zinc-100 dark:bg-zinc-800">
               <tr>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-center font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                <th className="border-b border-zinc-300 px-1 py-1 text-center font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
                   #
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-center font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
-                  상담
+                <th className="border-b border-zinc-300 px-1 py-1 text-center font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                  ✓
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                <th className="border-b border-zinc-300 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
                   {isAllView ? "상담자" : "반명"}
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                <th className="border-b border-zinc-300 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
                   학생
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                <th className="border-b border-zinc-300 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
                   학교·학년
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
-                  마지막 상담일
+                <th className="border-b border-zinc-300 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400 whitespace-nowrap">
+                  상담일
                 </th>
-                <th className="border-b border-zinc-300 px-2 py-1.5 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+                <th className="border-b border-zinc-300 px-2 py-1 text-left font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
                   상담 제목
                 </th>
-                <th className="w-8 border-b border-zinc-300 px-1 py-1.5 dark:border-zinc-700"></th>
               </tr>
             </thead>
             <tbody>
@@ -1061,20 +1059,20 @@ export default function ConsultationsPageV2({
                     }`}
                     onClick={() => setModalRowKey(r.key)}
                   >
-                    <td className="px-2 py-1 text-center text-[10px] tabular-nums text-zinc-400">
+                    <td className="px-1 py-1 text-center text-[10px] tabular-nums text-zinc-400">
                       {String(idx).padStart(2, "0")}
                     </td>
-                    <td className="px-2 py-1 text-center">
+                    <td className="px-1 py-1 text-center">
                       {r.status === "done" ? (
                         <span
-                          className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-[11px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
                           title="상담 완료"
                         >
                           ✓
                         </span>
                       ) : (
                         <span
-                          className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[11px] font-bold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
                           title="미상담"
                         >
                           !
@@ -1167,11 +1165,6 @@ export default function ConsultationsPageV2({
                     >
                       {c?.title || "—"}
                     </td>
-                    <td className="px-1 py-1 text-center">
-                      <span className="inline-block text-[11px] text-zinc-400" aria-hidden="true">
-                        ▶
-                      </span>
-                    </td>
                   </tr>
                 );
               })}
@@ -1182,12 +1175,12 @@ export default function ConsultationsPageV2({
                   aria-hidden="true"
                   className="h-8 border-b border-zinc-100 dark:border-zinc-800"
                 >
-                  <td colSpan={8} />
+                  <td colSpan={7} />
                 </tr>
               ))}
               {filteredRows.length === 0 && studentSearch.trim() && (
                 <tr className="pointer-events-none">
-                  <td colSpan={8} className="px-2 py-3 text-center text-[11px] text-zinc-500">
+                  <td colSpan={7} className="px-2 py-3 text-center text-[11px] text-zinc-500">
                     &quot;{studentSearch.trim()}&quot; 검색 결과가 없습니다
                   </td>
                 </tr>
