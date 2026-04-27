@@ -189,6 +189,11 @@ export default function ConsultationsPage() {
     "consultations.studentSearch",
     ""
   );
+  // 전체 담임 뷰 전용 — 과목(섹션 키) 필터 (V2 와 동일 영속화 키 분리)
+  const [subjectFilter, setSubjectFilter] = useLocalStorage<string>(
+    "consultations.v1.subjectFilter",
+    "all"
+  );
   const { teachers, loading: staffLoading } = useStaff();
   const { students, loading: studentsLoading } = useStudents();
   const { consultations, loading: consultationsLoading } = useConsultations(selectedMonth);
@@ -420,17 +425,73 @@ export default function ConsultationsPage() {
     });
   }, [scopedStudents, matrixByStudent]);
 
-  // 학생 이름 검색 필터 적용 — 공백/대소문자 무시 substring 매칭
+  // 선생님 이름 → 과목 레이블 (과목 필터 판정용)
+  const subjectByTeacher = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of teachers) {
+      const label = (t.subjects || []).map(toSubjectLabel).filter(Boolean).join("/");
+      m.set(t.name, label);
+    }
+    return m;
+  }, [teachers]);
+
+  // 전체 담임 뷰 — 과목별 담임 수/학생 수 (필터 칩 노출용)
+  const subjectChips = useMemo(() => {
+    if (!isAllView) return [] as { key: string; teacherCount: number; total: number }[];
+    const groups = new Map<string, { teachers: Set<string>; students: Set<string> }>();
+    for (const h of homerooms) {
+      const subj = h.subject;
+      const key = !subj ? "미지정" : subj.includes("/") ? "복수 과목" : subj;
+      if (!groups.has(key)) groups.set(key, { teachers: new Set(), students: new Set() });
+      const g = groups.get(key)!;
+      g.teachers.add(h.name);
+      for (const s of studentsByHomeroom.get(h.name) ?? []) g.students.add(s.id);
+    }
+    const SECTION_ORDER = ["수학", "영어", "고등수학", "과학", "국어", "사회"];
+    return Array.from(groups.entries())
+      .sort((a, b) => {
+        if (a[0] === "미지정") return 1;
+        if (b[0] === "미지정") return -1;
+        if (a[0] === "복수 과목") return 1;
+        if (b[0] === "복수 과목") return -1;
+        const ai = SECTION_ORDER.indexOf(a[0]);
+        const bi = SECTION_ORDER.indexOf(b[0]);
+        if (ai === -1 && bi === -1) return a[0].localeCompare(b[0], "ko");
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      })
+      .map(([key, g]) => ({
+        key,
+        teacherCount: g.teachers.size,
+        total: g.students.size,
+      }));
+  }, [isAllView, homerooms, studentsByHomeroom]);
+
+  // 학생 이름 검색 + 과목 필터 적용
   const searchedStudents = useMemo(() => {
     const q = studentSearch.trim().toLowerCase();
-    if (!q) return sortedStudents;
+    const matchSubj = (s: string): boolean => {
+      if (subjectFilter === "복수 과목") return s.includes("/");
+      if (subjectFilter === "미지정") return !s;
+      return s === subjectFilter;
+    };
     return sortedStudents.filter((s) => {
-      const name = (s.name || "").toLowerCase();
-      const grade = (s.grade || "").toLowerCase();
-      const school = (s.school || "").toLowerCase();
-      return name.includes(q) || grade.includes(q) || school.includes(q);
+      // 과목 필터 — 전체 담임 뷰에서만, 학생의 담임 중 한 명이라도 해당 과목이면 통과
+      if (isAllView && subjectFilter !== "all") {
+        const hrs = teachersByStudent.get(s.id) ?? [];
+        const hit = hrs.some((hr) => matchSubj(subjectByTeacher.get(hr) || ""));
+        if (!hit) return false;
+      }
+      if (q) {
+        const name = (s.name || "").toLowerCase();
+        const grade = (s.grade || "").toLowerCase();
+        const school = (s.school || "").toLowerCase();
+        if (!name.includes(q) && !grade.includes(q) && !school.includes(q)) return false;
+      }
+      return true;
     });
-  }, [sortedStudents, studentSearch]);
+  }, [sortedStudents, studentSearch, subjectFilter, isAllView, teachersByStudent, subjectByTeacher]);
 
   // 학생 목록 페이지네이션: 페이지 크기 = 월 일수 (좌측 날짜 행 수와 일치)
   const pageSize = useMemo(() => {
@@ -443,7 +504,7 @@ export default function ConsultationsPage() {
   useEffect(() => {
     // 월/담임/과목/검색어 바뀌면 1페이지로 리셋
     setStudentsPage(1);
-  }, [selectedMonth, selectedHomeroom, studentSearch]);
+  }, [selectedMonth, selectedHomeroom, studentSearch, subjectFilter]);
 
   useEffect(() => {
     // 현재 페이지가 전체 페이지 초과 시 조정
@@ -1007,6 +1068,42 @@ export default function ConsultationsPage() {
                     </span>
                   </div>
                 </div>
+                {/* 과목 필터 칩 — 전체 담임 뷰에서만 */}
+                {isAllView && subjectChips.length > 0 && (
+                  <div className="flex flex-shrink-0 flex-wrap items-center gap-1 border-b border-zinc-200 bg-zinc-50/60 px-3 py-1 dark:border-zinc-800 dark:bg-zinc-900/40">
+                    <span className="text-[10px] text-zinc-500">과목 :</span>
+                    <button
+                      type="button"
+                      onClick={() => setSubjectFilter("all")}
+                      className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                        subjectFilter === "all"
+                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/50 dark:text-blue-300"
+                          : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+                      }`}
+                      title={`전체 담임 ${homerooms.length}명`}
+                    >
+                      전체
+                    </button>
+                    {subjectChips.map((sb) => {
+                      const active = subjectFilter === sb.key;
+                      return (
+                        <button
+                          key={sb.key}
+                          type="button"
+                          onClick={() => setSubjectFilter(sb.key)}
+                          className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                            active
+                              ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/50 dark:text-blue-300"
+                              : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+                          }`}
+                          title={`${sb.key} · 담임 ${sb.teacherCount}명 · 학생 ${sb.total}명`}
+                        >
+                          {sb.key} {sb.teacherCount}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 z-10 bg-zinc-100 dark:bg-zinc-800">
