@@ -857,19 +857,30 @@ export default function SettlementPage() {
           }
         }
 
+        // 이 학생 × 이 과목 선생님들의 payment_shares (영어 강사)
+        //   영어는 payments 가 아니라 payment_shares 에 저장되므로,
+        //   여기서도 함께 봐야 청구액(시수 검증의 분자) 이 0 으로 누락되지 않음.
+        const studentTeacherShares = allShares.filter(
+          (sh) => sh.student_id === s.id && teacherIds.has(sh.teacher_staff_id)
+        );
+
         // 선생님별 시수/수납 breakdown
         const teacherBreakdown: Array<{ teacherName: string; units: number; paid: number }> = [];
         let units = 0;
         for (const tid of teacherIds) {
           const tUnits = hoursByStudentTeacher.get(`${s.id}|${tid}`) || 0;
-          const tPaid = allPayments
+          // payments(charge_amount) + 같은 학생 영어 share(allocated_charge) 합산
+          const tPaymentCharge = allPayments
             .filter((p) => p.teacher_staff_id === tid)
             .reduce((a, p) => a + (p.charge_amount || 0), 0);
+          const tShareCharge = studentTeacherShares
+            .filter((sh) => sh.teacher_staff_id === tid)
+            .reduce((a, sh) => a + (sh.allocated_charge || 0), 0);
           units += tUnits;
           teacherBreakdown.push({
             teacherName: teacherById.get(tid)?.name || tid,
             units: tUnits,
-            paid: tPaid,
+            paid: tPaymentCharge + tShareCharge,
           });
         }
 
@@ -878,7 +889,16 @@ export default function SettlementPage() {
           (p) => p.teacher_staff_id && teacherIds.has(p.teacher_staff_id)
         );
         // teacher_staff_id 가 없으면 (레거시) 과목 분리 불가 → 폴백으로 모든 수납을 첫 과목에만 반영
-        const paid = subjectPayments.reduce((a, p) => a + (p.charge_amount || 0), 0);
+        const paymentsCharge = subjectPayments.reduce(
+          (a, p) => a + (p.charge_amount || 0),
+          0
+        );
+        // 영어: payment_shares.allocated_charge 를 추가 (수학·과학은 shares 비어 있어 영향 없음)
+        const sharesCharge = studentTeacherShares.reduce(
+          (a, sh) => a + (sh.allocated_charge || 0),
+          0
+        );
+        const paid = paymentsCharge + sharesCharge;
 
         // 과목의 선생님 중 첫 번째로 발견되는 tier 오버라이드 사용
         let tierOverrideId: string | undefined;
@@ -892,8 +912,13 @@ export default function SettlementPage() {
         const diffSessions = expectedSessions - units;
         const diffAmount = paid - units * unitPrice;
 
-        // 시수도 0이고 수납도 0이면 skip
-        if (units === 0 && subjectPayments.length === 0) continue;
+        // 시수도 0이고 수납도 0이면 skip (payments 든 shares 든 둘 다 비어야 함)
+        if (
+          units === 0 &&
+          subjectPayments.length === 0 &&
+          studentTeacherShares.length === 0
+        )
+          continue;
 
         rows.push({
           student: s,
@@ -905,7 +930,8 @@ export default function SettlementPage() {
           expectedSessions,
           diffSessions,
           diffAmount,
-          hasPayment: subjectPayments.length > 0,
+          hasPayment:
+            subjectPayments.length > 0 || studentTeacherShares.length > 0,
           teacherBreakdown,
         });
       }
@@ -914,7 +940,7 @@ export default function SettlementPage() {
     // 차이가 있는 항목 우선 정렬 (절대값 큰 순)
     rows.sort((a, b) => Math.abs(b.diffSessions) - Math.abs(a.diffSessions));
     return rows;
-  }, [students, teachers, attendanceRecords, monthPayments, salaryConfig, tierOverrides, year, month]);
+  }, [students, teachers, attendanceRecords, monthPayments, allShares, salaryConfig, tierOverrides, year, month]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
