@@ -378,7 +378,7 @@ function StudentRowImpl({
               isValid ? "cursor-pointer hover:brightness-95" : "cursor-not-allowed"
             } ${
               isActive
-                ? "ring-2 ring-inset ring-blue-600 z-20"
+                ? "attendance-active-ring z-20"
                 : peerEditor
                 ? "ring-2 ring-inset ring-fuchsia-500 animate-pulse"
                 : isToday && isScheduledDay
@@ -433,7 +433,8 @@ function StudentRowImpl({
                 className="absolute inset-0 flex items-center justify-center text-[14px] font-bold text-blue-700 bg-white/60"
                 title="입력 중 — Enter 로 확정"
               >
-                {cellInputBuffer || "_"}
+                {cellInputBuffer}
+                <span className="attendance-caret ml-0.5 inline-block w-px self-stretch bg-blue-700" />
               </span>
             )}
 
