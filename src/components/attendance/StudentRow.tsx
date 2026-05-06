@@ -55,6 +55,19 @@ interface Props {
   activeDateKey?: string;
   /** 활성 셀 입력 버퍼 — 사용자가 타이핑 중인 미커밋 텍스트 (소수점 포함) */
   cellInputBuffer?: string;
+  /** 입력 중 onChange — 새 버퍼 값으로 갱신 */
+  onCellInputChange?: (value: string) => void;
+  /** 입력 중 키 이벤트 — Enter/Tab/Arrow/Esc 시 호출 */
+  onCellInputAction?: (
+    action:
+      | "commit-down"
+      | "commit-up"
+      | "commit-left"
+      | "commit-right"
+      | "commit-tab-fwd"
+      | "commit-tab-back"
+      | "cancel"
+  ) => void;
 }
 
 function StudentRowImpl({
@@ -84,6 +97,8 @@ function StudentRowImpl({
   editingByPeers,
   activeDateKey,
   cellInputBuffer,
+  onCellInputChange,
+  onCellInputAction,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -434,14 +449,58 @@ function StudentRowImpl({
               </span>
             )}
 
-            {/* 입력 버퍼 (활성 셀에서 사용자가 타이핑 중일 때 우선 표시) */}
+            {/* 입력 버퍼 — 실제 <input> 으로 렌더해 브라우저 네이티브 caret 깜빡임 사용 */}
             {isActive && cellInputBuffer !== undefined && (
-              <span
-                className="absolute inset-0 z-40 flex items-center justify-center text-[14px] font-bold text-blue-700 bg-white/60"
-                title="입력 중 — Enter 로 확정"
-              >
-                {cellInputBuffer}
-              </span>
+              <input
+                autoFocus
+                type="text"
+                inputMode="decimal"
+                value={cellInputBuffer}
+                onChange={(e) => {
+                  // 숫자/소수점/콤마 만 허용 — 허용 외 문자 입력 시 무시
+                  const v = e.target.value;
+                  if (v === "" || /^[0-9]*[.,]?[0-9]*$/.test(v)) {
+                    onCellInputChange?.(v.replace(",", "."));
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onCellInputAction?.(e.shiftKey ? "commit-up" : "commit-down");
+                  } else if (e.key === "Tab") {
+                    e.preventDefault();
+                    onCellInputAction?.(
+                      e.shiftKey ? "commit-tab-back" : "commit-tab-fwd"
+                    );
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    onCellInputAction?.("commit-up");
+                  } else if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    onCellInputAction?.("commit-down");
+                  } else if (e.key === "ArrowLeft") {
+                    // 입력 중 ←: 캐럿이 처음에 있으면 커밋+이동, 아니면 텍스트 내 이동
+                    const t = e.currentTarget;
+                    if (t.selectionStart === 0 && t.selectionEnd === 0) {
+                      e.preventDefault();
+                      onCellInputAction?.("commit-left");
+                    }
+                  } else if (e.key === "ArrowRight") {
+                    const t = e.currentTarget;
+                    if (
+                      t.selectionStart === t.value.length &&
+                      t.selectionEnd === t.value.length
+                    ) {
+                      e.preventDefault();
+                      onCellInputAction?.("commit-right");
+                    }
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    onCellInputAction?.("cancel");
+                  }
+                }}
+                className="absolute inset-0 z-40 w-full h-full text-center text-[14px] font-bold text-blue-700 bg-white/80 outline-none border-0 p-0"
+              />
             )}
 
             {/* 출석값 (중앙).

@@ -242,6 +242,63 @@ export default function AttendanceTable({
     [cellInput, setCellValue]
   );
 
+  // 입력 모드(<input>) onChange 콜백 — 버퍼 갱신
+  const handleCellInputChange = useCallback((value: string) => {
+    setCellInput(value);
+  }, []);
+
+  // 입력 모드 키 액션 — 커밋 + 이동, 취소
+  const handleCellInputAction = useCallback(
+    (
+      action:
+        | "commit-down"
+        | "commit-up"
+        | "commit-left"
+        | "commit-right"
+        | "commit-tab-fwd"
+        | "commit-tab-back"
+        | "cancel"
+    ) => {
+      const cur = activeCell;
+      if (!cur) return;
+      // 취소
+      if (action === "cancel") {
+        setCellInput(null);
+        return;
+      }
+      // 버퍼 커밋
+      const buf = cellInput;
+      if (buf !== null) {
+        const trimmed = buf.trim();
+        setCellInput(null);
+        if (trimmed !== "" && trimmed !== ".") {
+          const n = Number(trimmed);
+          if (!isNaN(n)) setCellValue(cur.studentId, cur.dateKey, n);
+        }
+      }
+      // 이동
+      const stus = visibleStudentsRef.current;
+      const dks = dateKeysRef.current;
+      const row = stus.findIndex((s) => s.id === cur.studentId);
+      const col = dks.indexOf(cur.dateKey);
+      if (row < 0 || col < 0) return;
+      let dx = 0,
+        dy = 0;
+      if (action === "commit-down") dy = 1;
+      else if (action === "commit-up") dy = -1;
+      else if (action === "commit-right") dx = 1;
+      else if (action === "commit-left") dx = -1;
+      else if (action === "commit-tab-fwd") dx = 1;
+      else if (action === "commit-tab-back") dx = -1;
+      const newRow = Math.max(0, Math.min(stus.length - 1, row + dy));
+      const newCol = Math.max(0, Math.min(dks.length - 1, col + dx));
+      const ns = stus[newRow];
+      const nk = dks[newCol];
+      if (ns && nk) setActiveCell({ studentId: ns.id, dateKey: nk });
+    },
+    [activeCell, cellInput, setCellValue]
+  );
+
   // 우클릭: 컨텍스트 메뉴
   const handleCellRightClick = useCallback(
     (e: React.MouseEvent, studentId: string, dateKey: string) => {
@@ -497,6 +554,8 @@ export default function AttendanceTable({
               ? cellInput
               : undefined
           }
+          onCellInputChange={handleCellInputChange}
+          onCellInputAction={handleCellInputAction}
         />
       ));
     }
