@@ -140,6 +140,51 @@ export default function AttendanceTable({
     Array<{ studentId: string; dateKey: string; oldValue: number | null }>
   >([]);
 
+  // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
+  // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
+  // (renderRows 의 로직을 그대로 재현)
+  const DAY_ORDER_IDX_NAV = ["월", "화", "수", "목", "금", "토", "일"];
+  const navStudents = useMemo(() => {
+    if (sortMode === "name" || sortMode === "day") {
+      const getFirstDayIdx = (s: Student): number => {
+        if (!s.days || s.days.length === 0) return 999;
+        const sorted = [...s.days].sort(
+          (a, b) =>
+            DAY_ORDER_IDX_NAV.indexOf(a) - DAY_ORDER_IDX_NAV.indexOf(b)
+        );
+        return DAY_ORDER_IDX_NAV.indexOf(sorted[0]);
+      };
+      return [...visibleStudents].sort((a, b) => {
+        if (sortMode === "day") {
+          const diff = getFirstDayIdx(a) - getFirstDayIdx(b);
+          if (diff !== 0) return diff;
+        }
+        return a.name.localeCompare(b.name, "ko");
+      });
+    }
+    // class mode — 그룹별로 정렬, 접힌 그룹은 제외
+    const groupMap = new Map<string, Student[]>();
+    for (const s of visibleStudents) {
+      const group = s.group || "미분류";
+      if (!groupMap.has(group)) groupMap.set(group, []);
+      groupMap.get(group)!.push(s);
+    }
+    const allGroups = Array.from(groupMap.keys());
+    const orderedGroups = [
+      ...groupOrder.filter((g) => allGroups.includes(g)),
+      ...allGroups.filter((g) => !groupOrder.includes(g)),
+    ];
+    const out: Student[] = [];
+    for (const group of orderedGroups) {
+      if (collapsedGroups.has(group)) continue;
+      const gss = groupMap.get(group) || [];
+      const sorted = [...gss].sort((a, b) => a.name.localeCompare(b.name, "ko"));
+      out.push(...sorted);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleStudents, sortMode, groupOrder, collapsedGroups]);
+
   // 그룹별 학생 정렬
   const { rows, groups } = useMemo(() => {
     if (sortMode === "name") {
@@ -318,10 +363,11 @@ export default function AttendanceTable({
     () => dates.map((d) => formatDateKey(d)),
     [dates]
   );
-  const visibleStudentsRef = useRef(visibleStudents);
+  // navStudents = 화면 표시 순서 (그룹/정렬/접힘 반영). 키 네비게이션 기준.
+  const visibleStudentsRef = useRef(navStudents);
   const dateKeysRef = useRef(dateKeysForNav);
   useEffect(() => {
-    visibleStudentsRef.current = visibleStudents;
+    visibleStudentsRef.current = navStudents;
     dateKeysRef.current = dateKeysForNav;
   });
 
