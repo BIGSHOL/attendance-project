@@ -441,7 +441,6 @@ function StudentRowImpl({
                 title="입력 중 — Enter 로 확정"
               >
                 {cellInputBuffer}
-                <span className="ml-0.5 inline-block w-0.5 self-stretch bg-blue-700 animate-pulse" />
               </span>
             )}
 
