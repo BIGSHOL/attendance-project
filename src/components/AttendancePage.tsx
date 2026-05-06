@@ -45,6 +45,8 @@ import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
 import AttendanceTable from "./attendance/AttendanceTable";
 import ViewOptionsMenu from "./attendance/ViewOptionsMenu";
+import { createWorkbook, addSheet, writeFile } from "@/lib/excelExport";
+import { formatDateKey, getDaysInMonth } from "@/lib/date";
 import dynamic from "next/dynamic";
 
 // 큰 모달들은 초기 번들에서 분리 — 열릴 때 로드
@@ -1301,6 +1303,89 @@ export default function AttendancePage() {
     [updateHomework, markEditing]
   );
 
+  // ─── 출석부 엑셀 내보내기 ──────────────────────────
+  //   현재 선택 선생님 + 월 의 학생별 출석 grid 를 .xlsx 로 다운로드.
+  //   세션 모드면 세션 범위, 월별 모드면 월 전체 일자 사용.
+  const handleExportAttendanceExcel = useCallback(() => {
+    if (!selectedTeacher || studentRows.length === 0) return;
+    const exportDates =
+      viewMode === "session" && selectedSession
+        ? expandSessionDatesContiguous(selectedSession)
+        : getDaysInMonth(year, month);
+
+    const ym = `${year}년 ${String(month).padStart(2, "0")}월`;
+    const teacherName = selectedTeacher.name;
+
+    const dayLabels = ["일", "월", "화", "수", "목", "금", "토"];
+
+    // 헤더: 고정 열 + 날짜 (예: 5/1(금))
+    const fixedHeader = [
+      "#",
+      "이름",
+      "학교",
+      "학년",
+      "반",
+      "수업요일",
+      "단가",
+      "등록차수",
+      "출석합계",
+      ...exportDates.map((d) => {
+        const m = d.getMonth() + 1;
+        const dd = d.getDate();
+        return `${m}/${dd}(${dayLabels[d.getDay()]})`;
+      }),
+    ];
+
+    const rows: (string | number | null)[][] = [
+      [`${teacherName} ${ym} 출석부`],
+      [],
+      fixedHeader,
+    ];
+
+    studentRows.forEach((s, i) => {
+      const setting = matchSalarySetting(s, salaryConfig, undefined, tierOverrides[s.id]);
+      const unitPrice = setting?.unitPrice || setting?.baseTuition || 0;
+      const term = termCountMap?.get(s.id);
+      const monthTotal = exportDates.reduce((sum, d) => {
+        const v = s.attendance?.[formatDateKey(d)];
+        return sum + (typeof v === "number" && v > 0 ? v : 0);
+      }, 0);
+      const cells = exportDates.map((d) => {
+        const v = s.attendance?.[formatDateKey(d)];
+        return typeof v === "number" ? v : "";
+      });
+      rows.push([
+        i + 1,
+        s.name,
+        s.school || "",
+        s.grade || "",
+        s.group || "",
+        (s.days || []).join(""),
+        unitPrice,
+        term ?? "",
+        Math.round(monthTotal * 10) / 10,
+        ...cells,
+      ]);
+    });
+
+    const wb = createWorkbook();
+    addSheet(wb, `${teacherName} ${ym}`, rows, { maxColWidth: 16 });
+    writeFile(
+      wb,
+      `출석부_${teacherName}_${year}-${String(month).padStart(2, "0")}.xlsx`
+    );
+  }, [
+    selectedTeacher,
+    studentRows,
+    viewMode,
+    selectedSession,
+    year,
+    month,
+    salaryConfig,
+    tierOverrides,
+    termCountMap,
+  ]);
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* 상단 1행: 통계 + 주요 네비게이션 */}
@@ -1426,6 +1511,16 @@ export default function AttendancePage() {
             선생님 없음
           </span>
         )}
+
+        {/* 엑셀 내보내기 — 누구나 가능 */}
+        <button
+          onClick={handleExportAttendanceExcel}
+          disabled={!selectedTeacher || studentRows.length === 0}
+          className="rounded-sm border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          title="현재 보이는 출석부를 .xlsx 로 다운로드"
+        >
+          📥 엑셀
+        </button>
 
         {/* 시트 동기화 (관리자 이상만 + 시트 등록된 선생님만) */}
         {isAdmin && currentSheetUrl && (

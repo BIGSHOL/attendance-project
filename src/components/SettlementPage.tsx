@@ -22,6 +22,7 @@ import { isDateInSession } from "@/lib/sessionUtils";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
 import { computeTeacherMonthPayroll } from "@/lib/teacherPayroll";
 import { filterStudentsByMonth } from "@/lib/studentFilter";
+import { createWorkbook, addSheet, writeFile } from "@/lib/excelExport";
 import BulkSyncSettings from "./settlement/BulkSyncSettings";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
@@ -944,6 +945,101 @@ export default function SettlementPage() {
 
   const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
+  // ─── 엑셀 내보내기 ────────────────────────────────
+  //   현재 화면에 보이는 정산 + 시수 검증을 .xlsx 한 파일로 다운로드.
+  const handleExportExcel = useCallback(() => {
+    const wb = createWorkbook();
+    const ym = `${year}년 ${String(month).padStart(2, "0")}월`;
+
+    // 시트 1: 월별 정산
+    const settlementHeader = [
+      "#",
+      "선생님",
+      "과목",
+      "급여유형",
+      "담당학생",
+      "출석",
+      "기본급여",
+      "인센티브",
+      "최종지급액",
+      "확정",
+    ];
+    const SAL_TYPE_LABEL: Record<string, string> = {
+      commission: "비율제",
+      fixed: "급여제",
+      mixed: "혼합",
+      part_time: "파트타임",
+    };
+    const settlementRows: (string | number | null)[][] = [
+      [`월별 정산 (${ym})`],
+      [],
+      settlementHeader,
+      ...filteredSettlements.map((s, i) => [
+        i + 1,
+        s.teacher.name,
+        (s.teacher.subjects || []).join("/") || "-",
+        SAL_TYPE_LABEL[s.salaryType] ?? s.salaryType,
+        s.studentCount,
+        Math.round(s.totalAttendance * 10) / 10,
+        s.baseSalary,
+        s.finalSalary - s.baseSalary,
+        s.finalSalary,
+        s.settlement.isFinalized ? "확정" : "",
+      ]),
+      [],
+      [
+        "합계",
+        "",
+        "",
+        "",
+        totals.studentCount,
+        Math.round(totals.totalAttendance * 10) / 10,
+        totals.baseSalary,
+        totals.finalSalary - totals.baseSalary,
+        totals.finalSalary,
+        "",
+      ],
+    ];
+    addSheet(wb, "월별 정산", settlementRows);
+
+    // 시트 2: 시수 검증
+    const checksHeader = [
+      "#",
+      "학생",
+      "학교",
+      "과목",
+      "선생님",
+      "기준단가",
+      "청구액",
+      "예상시수",
+      "실제시수",
+      "차이(회)",
+      "차이(원)",
+    ];
+    const checksRows: (string | number | null)[][] = [
+      [`시수 검증 (${ym})`],
+      [`청구액 ÷ 기준단가 vs 실제 출석시수 — + 는 청구 대비 수업이 남음, − 는 더 들음`],
+      [],
+      checksHeader,
+      ...studentChecks.map((r, i) => [
+        i + 1,
+        r.student.name,
+        r.student.school || "",
+        r.subject,
+        r.teacherNames || "-",
+        r.unitPrice || 0,
+        r.paid || 0,
+        Math.round(r.expectedSessions * 100) / 100,
+        Math.round(r.units * 100) / 100,
+        Math.round(r.diffSessions * 100) / 100,
+        Math.round(r.diffAmount),
+      ]),
+    ];
+    addSheet(wb, "시수 검증", checksRows);
+
+    writeFile(wb, `정산_${year}-${String(month).padStart(2, "0")}.xlsx`);
+  }, [year, month, filteredSettlements, totals, studentChecks]);
+
   const prevMonth = () => {
     if (month === 1) { setYear(year - 1); setMonth(12); }
     else setMonth(month - 1);
@@ -990,6 +1086,15 @@ export default function SettlementPage() {
         </h2>
 
         <div className="flex items-center gap-2">
+          {/* 엑셀 내보내기 — 누구나 가능 */}
+          <button
+            onClick={handleExportExcel}
+            disabled={loading || filteredSettlements.length === 0}
+            className="rounded-sm border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+            title="현재 보이는 정산 + 시수 검증을 .xlsx 로 다운로드"
+          >
+            📥 엑셀
+          </button>
           {/* 관리자+: 전체 시트 순차 동기화 + 설정 */}
           {isAdmin && (
             <>
