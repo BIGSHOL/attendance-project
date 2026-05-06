@@ -122,6 +122,20 @@ export default function AttendanceTable({
     dateKey: string;
   } | null>(null);
 
+  // 키보드 입력용 활성 셀 (시트의 selected cell 과 동등)
+  //   클릭 또는 키보드 네비게이션으로 설정. 숫자 키 입력·Tab/Enter/방향키·
+  //   Backspace/Esc·Ctrl+Z 모두 활성 셀이 있을 때만 동작.
+  const [activeCell, setActiveCell] = useState<{
+    studentId: string;
+    dateKey: string;
+  } | null>(null);
+
+  // Undo 스택 — 최근 50개 변경 (학생, 날짜, 이전 값) 보관.
+  //   Ctrl+Z 시 마지막 항목 pop 하여 역적용.
+  const undoStackRef = useRef<
+    Array<{ studentId: string; dateKey: string; oldValue: number | null }>
+  >([]);
+
   // 그룹별 학생 정렬
   const { rows, groups } = useMemo(() => {
     if (sortMode === "name") {
@@ -181,18 +195,41 @@ export default function AttendanceTable({
     studentsRef.current = students;
     onAttendanceChangeRef.current = onAttendanceChange;
   });
-  const handleCellClick = useCallback((studentId: string, dateKey: string) => {
-    const student = studentsRef.current.find((s) => s.id === studentId);
-    const currentValue = student?.attendance?.[dateKey];
+  // undo 스택에 푸시 (값이 실제로 바뀔 때만, 최대 50개 유지)
+  const pushUndo = useCallback(
+    (studentId: string, dateKey: string, newValue: number | null) => {
+      const s = studentsRef.current.find((x) => x.id === studentId);
+      const oldValue = s?.attendance?.[dateKey] ?? null;
+      if (oldValue === newValue) return;
+      undoStackRef.current.push({ studentId, dateKey, oldValue });
+      if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    },
+    []
+  );
 
-    if (currentValue === undefined || currentValue === null) {
-      onAttendanceChangeRef.current(studentId, dateKey, 1);
-    } else if (currentValue > 0) {
-      onAttendanceChangeRef.current(studentId, dateKey, 0);
-    } else {
-      onAttendanceChangeRef.current(studentId, dateKey, null);
-    }
-  }, []);
+  // 셀 값 설정 (undo 기록 포함)
+  const setCellValue = useCallback(
+    (studentId: string, dateKey: string, value: number | null) => {
+      pushUndo(studentId, dateKey, value);
+      onAttendanceChangeRef.current(studentId, dateKey, value);
+    },
+    [pushUndo]
+  );
+
+  const handleCellClick = useCallback(
+    (studentId: string, dateKey: string) => {
+      // 클릭은 활성 셀 지정 + 기존 토글 동작 동시 수행
+      setActiveCell({ studentId, dateKey });
+      const student = studentsRef.current.find((s) => s.id === studentId);
+      const currentValue = student?.attendance?.[dateKey];
+      let newValue: number | null;
+      if (currentValue === undefined || currentValue === null) newValue = 1;
+      else if (currentValue > 0) newValue = 0;
+      else newValue = null;
+      setCellValue(studentId, dateKey, newValue);
+    },
+    [setCellValue]
+  );
 
   // 우클릭: 컨텍스트 메뉴
   const handleCellRightClick = useCallback(
@@ -202,6 +239,144 @@ export default function AttendanceTable({
     },
     []
   );
+
+  // ─── 키보드 네비게이션 / 입력 / Undo ───────────────
+  //   시트와 동일한 사용성: 활성 셀에서 0~9 직접 타이핑·방향키·Tab/Enter·
+  //   Backspace/Delete·Esc·Ctrl+Z 지원.
+  //
+  //   Navigation grid: visibleStudents × dates 기준. 컨텍스트 메뉴/모달이
+  //   열려 있거나 input/textarea 에 포커스된 경우 무시.
+  const dateKeysForNav = useMemo(
+    () => dates.map((d) => formatDateKey(d)),
+    [dates]
+  );
+  const visibleStudentsRef = useRef(visibleStudents);
+  const dateKeysRef = useRef(dateKeysForNav);
+  useEffect(() => {
+    visibleStudentsRef.current = visibleStudents;
+    dateKeysRef.current = dateKeysForNav;
+  });
+
+  // 월/과목 변경 시 활성 셀·undo 스택 리셋 (이전 월 셀에 대한 잘못된 적용 방지)
+  useEffect(() => {
+    setActiveCell(null);
+    undoStackRef.current = [];
+  }, [year, month, subject]);
+
+  // 활성 셀이 화면 밖이면 자동 스크롤
+  useEffect(() => {
+    if (!activeCell) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-cell-key="${activeCell.studentId}|${activeCell.dateKey}"]`
+    );
+    if (el) {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [activeCell]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // 활성 셀이 없으면 무시
+      if (!activeCell) return;
+      // 컨텍스트 메뉴(메모/색상 등) 열려 있으면 무시
+      if (contextMenu) return;
+      // 입력/textarea/contenteditable 에 포커스되어 있으면 무시
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      )
+        return;
+
+      // Ctrl/Cmd + Z → undo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        const last = undoStackRef.current.pop();
+        if (last) {
+          // undo 자체는 다시 undo 스택에 쌓지 않음 (재귀 방지)
+          onAttendanceChangeRef.current(
+            last.studentId,
+            last.dateKey,
+            last.oldValue
+          );
+          setActiveCell({ studentId: last.studentId, dateKey: last.dateKey });
+        }
+        return;
+      }
+
+      const moveActive = (dx: number, dy: number) => {
+        const stus = visibleStudentsRef.current;
+        const dks = dateKeysRef.current;
+        const row = stus.findIndex((s) => s.id === activeCell.studentId);
+        const col = dks.indexOf(activeCell.dateKey);
+        if (row < 0 || col < 0) return;
+        const newRow = Math.max(0, Math.min(stus.length - 1, row + dy));
+        const newCol = Math.max(0, Math.min(dks.length - 1, col + dx));
+        const ns = stus[newRow];
+        const nk = dks[newCol];
+        if (ns && nk) setActiveCell({ studentId: ns.id, dateKey: nk });
+      };
+
+      // 숫자 0~9 → 셀 값 설정 후 우측 이동
+      if (e.key >= "0" && e.key <= "9") {
+        e.preventDefault();
+        const v = Number(e.key);
+        setCellValue(activeCell.studentId, activeCell.dateKey, v);
+        moveActive(1, 0);
+        return;
+      }
+
+      // Backspace / Delete → 셀 초기화 (이동 없음)
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        setCellValue(activeCell.studentId, activeCell.dateKey, null);
+        return;
+      }
+
+      // 방향키
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        moveActive(-1, 0);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        moveActive(1, 0);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveActive(0, -1);
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveActive(0, 1);
+        return;
+      }
+      // Tab : 좌/우 이동, Enter : 위/아래 이동 (Shift 로 방향 반전)
+      if (e.key === "Tab") {
+        e.preventDefault();
+        moveActive(e.shiftKey ? -1 : 1, 0);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        moveActive(0, e.shiftKey ? -1 : 1);
+        return;
+      }
+      // Esc → 비활성
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setActiveCell(null);
+        return;
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [activeCell, contextMenu, setCellValue]);
 
   // 고정 컬럼 수 계산
   // 기본: #, 이름, 학교, 요일 (4) + 출석, 등록 (2) = 6
@@ -267,6 +442,9 @@ export default function AttendanceTable({
           onCellClick={handleCellClick}
           onCellRightClick={handleCellRightClick}
           editingByPeers={editingByPeers}
+          activeDateKey={
+            activeCell?.studentId === student.id ? activeCell.dateKey : undefined
+          }
         />
       ));
     }
@@ -338,6 +516,11 @@ export default function AttendanceTable({
               onHideStudent={onHideStudent}
               onCellClick={handleCellClick}
               onCellRightClick={handleCellRightClick}
+              activeDateKey={
+                activeCell?.studentId === student.id
+                  ? activeCell.dateKey
+                  : undefined
+              }
             />
           );
           globalIdx++;

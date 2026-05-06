@@ -51,6 +51,8 @@ interface Props {
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
   /** 다른 사용자가 편집 중인 셀 정보 */
   editingByPeers?: Map<string, { email: string; name: string }>;
+  /** 키보드 입력용 활성 셀 — 이 학생 행에서 활성된 날짜 (없으면 undefined) */
+  activeDateKey?: string;
 }
 
 function StudentRowImpl({
@@ -78,6 +80,7 @@ function StudentRowImpl({
   onCellClick,
   onCellRightClick,
   editingByPeers,
+  activeDateKey,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -360,16 +363,20 @@ function StudentRowImpl({
           .filter(Boolean)
           .join(" | ");
 
+        const isActive = activeDateKey === dateKey;
         return (
           <td
             key={dateKey}
+            data-cell-key={`${student.id}|${dateKey}`}
             title={cellTitle || undefined}
             onClick={() => isValid && onCellClick(student.id, dateKey)}
             onContextMenu={(e) => isValid && onCellRightClick(e, student.id, dateKey)}
             className={`relative text-center select-none border-r border-b border-zinc-300 transition-colors ${
               isValid ? "cursor-pointer hover:brightness-95" : "cursor-not-allowed"
             } ${
-              peerEditor
+              isActive
+                ? "ring-2 ring-inset ring-blue-600 z-20"
+                : peerEditor
                 ? "ring-2 ring-inset ring-fuchsia-500 animate-pulse"
                 : isToday && isScheduledDay
                 ? "ring-1 ring-inset ring-blue-400"
