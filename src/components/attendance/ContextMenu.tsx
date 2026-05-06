@@ -3,56 +3,34 @@
 import { useEffect, useRef, useState } from "react";
 import { CELL_COLORS } from "@/types";
 
-type Mode = "menu" | "memo" | "color" | "custom";
+type Mode = "menu" | "memo" | "color";
 
 interface Props {
   x: number;
   y: number;
-  currentValue?: number | null;
   currentMemo?: string;
   currentColor?: string;
-  canCustomValue?: boolean; // 관리자 이상만 커스텀 숫자 입력 가능
-  onSelectValue: (value: number | null) => void;
   onSaveMemo: (memo: string) => void;
   onSelectColor: (color: string | null) => void;
   onClose: () => void;
 }
 
-const ATTENDANCE_VALUES = [
-  { label: "1", value: 1 },
-  { label: "0.5", value: 0.5 },
-  { label: "1.5", value: 1.5 },
-  { label: "2", value: 2 },
-  { label: "2.5", value: 2.5 },
-  { label: "3", value: 3 },
-  { label: "결석", value: 0 },
-  { label: "초기화", value: null },
-];
-
 export default function ContextMenu({
   x,
   y,
-  currentValue,
   currentMemo,
   currentColor,
-  canCustomValue,
-  onSelectValue,
   onSaveMemo,
   onSelectColor,
   onClose,
 }: Props) {
   const [mode, setMode] = useState<Mode>("menu");
   const [memo, setMemo] = useState(currentMemo || "");
-  const [customInput, setCustomInput] = useState(
-    currentValue !== null && currentValue !== undefined ? String(currentValue) : ""
-  );
   const menuRef = useRef<HTMLDivElement>(null);
   const memoRef = useRef<HTMLTextAreaElement>(null);
-  const customRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (mode === "memo") memoRef.current?.focus();
-    if (mode === "custom") customRef.current?.focus();
   }, [mode]);
 
   useEffect(() => {
@@ -77,33 +55,10 @@ export default function ContextMenu({
     <div ref={menuRef} style={style} className="w-48 rounded-sm border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
       {mode === "menu" && (
         <div className="p-1">
-          <div className="grid grid-cols-4 gap-1 p-1">
-            {ATTENDANCE_VALUES.map((item) => (
-              <button
-                key={String(item.value)}
-                onClick={() => { onSelectValue(item.value); onClose(); }}
-                className={`rounded px-1.5 py-1 text-xs font-medium transition-colors ${
-                  item.value === 0
-                    ? "bg-red-100 text-red-700 hover:bg-red-200"
-                    : item.value === null
-                    ? "bg-zinc-100 text-zinc-500 hover:bg-zinc-200"
-                    : "bg-zinc-50 text-zinc-700 hover:bg-zinc-100"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="px-2 py-1 text-[10px] text-zinc-400 border-b border-zinc-100">
+            숫자 값은 셀 클릭 후 키보드(0~9·소수점)로 입력
           </div>
-          <div className="border-t border-zinc-100 mt-1 pt-1 space-y-0.5">
-            {canCustomValue && (
-              <button
-                onClick={() => setMode("custom")}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700"
-              >
-                커스텀 값 입력
-                <span className="ml-1 text-[10px] text-zinc-400">(관리자)</span>
-              </button>
-            )}
+          <div className="space-y-0.5 mt-1">
             <button
               onClick={() => setMode("memo")}
               className="w-full rounded px-2 py-1.5 text-left text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -122,54 +77,6 @@ export default function ContextMenu({
                   style={{ backgroundColor: currentColor }}
                 />
               )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {mode === "custom" && (
-        <div className="p-2">
-          <p className="text-xs font-medium text-zinc-500 mb-1">커스텀 숫자 값</p>
-          <input
-            ref={customRef}
-            type="number"
-            step="0.1"
-            value={customInput}
-            onChange={(e) => setCustomInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                const n = Number(customInput);
-                if (!isNaN(n) && customInput.trim() !== "") {
-                  onSelectValue(n);
-                  onClose();
-                }
-              }
-            }}
-            className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-200"
-            placeholder="예: 4, 0.25, 1.75 (Enter로 저장)"
-          />
-          <p className="mt-1 text-[10px] text-zinc-400">
-            기본 버튼에 없는 값도 입력 가능합니다
-          </p>
-          <div className="flex gap-1 mt-2">
-            <button
-              onClick={() => setMode("menu")}
-              className="flex-1 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-200"
-            >
-              뒤로
-            </button>
-            <button
-              onClick={() => {
-                const n = Number(customInput);
-                if (!isNaN(n) && customInput.trim() !== "") {
-                  onSelectValue(n);
-                  onClose();
-                }
-              }}
-              className="flex-1 rounded bg-blue-500 px-2 py-1 text-xs text-white hover:bg-blue-600"
-            >
-              저장
             </button>
           </div>
         </div>

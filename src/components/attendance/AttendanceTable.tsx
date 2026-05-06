@@ -30,7 +30,6 @@ interface Props {
   /** 학생 id → 실급여(= calculateStudentSalary 결과) */
   actualSalaryByStudent?: Map<string, number>;
   sortMode: SortMode;
-  canCustomValue?: boolean;
   /** 세션 모드 등에서 날짜 범위를 외부에서 지정할 때 사용 */
   overrideDates?: Date[];
   cellWidthPx: number;
@@ -66,7 +65,6 @@ export default function AttendanceTable({
   paidAmountByStudent,
   actualSalaryByStudent,
   sortMode,
-  canCustomValue,
   overrideDates,
   cellWidthPx,
   cellHeightPx,
@@ -129,6 +127,12 @@ export default function AttendanceTable({
     studentId: string;
     dateKey: string;
   } | null>(null);
+
+  // 셀 입력 버퍼 — 활성 셀에 누적 중인 숫자/소수점 문자열.
+  //   "1", "0.5", "1.5", "2.25" 등 자유롭게 타이핑 가능.
+  //   Enter/Tab/Arrow → 파싱 후 셀에 저장 + 이동.
+  //   Esc → 입력 취소.
+  const [cellInput, setCellInput] = useState<string | null>(null);
 
   // Undo 스택 — 최근 50개 변경 (학생, 날짜, 이전 값) 보관.
   //   Ctrl+Z 시 마지막 항목 pop 하여 역적용.
@@ -218,17 +222,24 @@ export default function AttendanceTable({
 
   const handleCellClick = useCallback(
     (studentId: string, dateKey: string) => {
-      // 클릭은 활성 셀 지정 + 기존 토글 동작 동시 수행
-      setActiveCell({ studentId, dateKey });
-      const student = studentsRef.current.find((s) => s.id === studentId);
-      const currentValue = student?.attendance?.[dateKey];
-      let newValue: number | null;
-      if (currentValue === undefined || currentValue === null) newValue = 1;
-      else if (currentValue > 0) newValue = 0;
-      else newValue = null;
-      setCellValue(studentId, dateKey, newValue);
+      // 다른 셀 클릭 시: 이전 버퍼가 있으면 기존 셀에 커밋
+      setActiveCell((prev) => {
+        if (
+          prev &&
+          (prev.studentId !== studentId || prev.dateKey !== dateKey) &&
+          cellInput !== null
+        ) {
+          const trimmed = cellInput.trim();
+          if (trimmed !== "" && trimmed !== ".") {
+            const n = Number(trimmed);
+            if (!isNaN(n)) setCellValue(prev.studentId, prev.dateKey, n);
+          }
+        }
+        return { studentId, dateKey };
+      });
+      setCellInput(null);
     },
-    [setCellValue]
+    [cellInput, setCellValue]
   );
 
   // 우클릭: 컨텍스트 메뉴
@@ -257,9 +268,10 @@ export default function AttendanceTable({
     dateKeysRef.current = dateKeysForNav;
   });
 
-  // 월/과목 변경 시 활성 셀·undo 스택 리셋 (이전 월 셀에 대한 잘못된 적용 방지)
+  // 월/과목 변경 시 활성 셀·입력 버퍼·undo 스택 리셋
   useEffect(() => {
     setActiveCell(null);
+    setCellInput(null);
     undoStackRef.current = [];
   }, [year, month, subject]);
 
@@ -290,12 +302,12 @@ export default function AttendanceTable({
       )
         return;
 
-      // Ctrl/Cmd + Z → undo
+      // Ctrl/Cmd + Z → undo (버퍼 입력 중에도 즉시 동작)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
         e.preventDefault();
+        setCellInput(null);
         const last = undoStackRef.current.pop();
         if (last) {
-          // undo 자체는 다시 undo 스택에 쌓지 않음 (재귀 방지)
           onAttendanceChangeRef.current(
             last.studentId,
             last.dateKey,
@@ -319,64 +331,99 @@ export default function AttendanceTable({
         if (ns && nk) setActiveCell({ studentId: ns.id, dateKey: nk });
       };
 
-      // 숫자 0~9 → 셀 값 설정 후 우측 이동
-      if (e.key >= "0" && e.key <= "9") {
+      // 버퍼 커밋: 현재 cellInput 을 파싱해 셀에 저장. 빈/잘못된 값이면 noop.
+      const commitBuffer = () => {
+        if (cellInput === null) return;
+        const trimmed = cellInput.trim();
+        setCellInput(null);
+        if (trimmed === "" || trimmed === ".") return;
+        const n = Number(trimmed);
+        if (!isNaN(n)) {
+          setCellValue(activeCell.studentId, activeCell.dateKey, n);
+        }
+      };
+
+      // 숫자 / 소수점 — 버퍼 누적
+      const isDigit = e.key >= "0" && e.key <= "9";
+      const isDot = e.key === "." || e.key === ",";
+      if (isDigit || isDot) {
         e.preventDefault();
-        const v = Number(e.key);
-        setCellValue(activeCell.studentId, activeCell.dateKey, v);
-        moveActive(1, 0);
+        // 두 번째 . 은 무시 (1.5.5 같은 잘못된 입력 방지)
+        if (isDot && cellInput !== null && cellInput.includes(".")) return;
+        // ',' 는 '.' 으로 정규화 (한국 키보드 일부에서 . 입력 어려운 환경 대비)
+        const ch = isDot ? "." : e.key;
+        setCellInput((prev) => (prev === null ? ch : prev + ch));
         return;
       }
 
-      // Backspace / Delete → 셀 초기화 (이동 없음)
+      // Backspace / Delete
+      //   - 버퍼 입력 중이면 마지막 글자 제거 (빈 문자열이 되면 null 로)
+      //   - 입력 중이 아니면 셀 값 초기화
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
-        setCellValue(activeCell.studentId, activeCell.dateKey, null);
+        if (cellInput !== null) {
+          setCellInput((prev) => {
+            if (prev === null) return null;
+            const next = prev.slice(0, -1);
+            return next.length === 0 ? null : next;
+          });
+        } else {
+          setCellValue(activeCell.studentId, activeCell.dateKey, null);
+        }
         return;
       }
 
-      // 방향키
+      // 방향키 / Tab / Enter — 버퍼 있으면 커밋 후 이동
       if (e.key === "ArrowLeft") {
         e.preventDefault();
+        commitBuffer();
         moveActive(-1, 0);
         return;
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
+        commitBuffer();
         moveActive(1, 0);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
+        commitBuffer();
         moveActive(0, -1);
         return;
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        commitBuffer();
         moveActive(0, 1);
         return;
       }
-      // Tab : 좌/우 이동, Enter : 위/아래 이동 (Shift 로 방향 반전)
       if (e.key === "Tab") {
         e.preventDefault();
+        commitBuffer();
         moveActive(e.shiftKey ? -1 : 1, 0);
         return;
       }
       if (e.key === "Enter") {
         e.preventDefault();
+        commitBuffer();
         moveActive(0, e.shiftKey ? -1 : 1);
         return;
       }
-      // Esc → 비활성
+      // Esc — 버퍼 있으면 취소, 없으면 비활성
       if (e.key === "Escape") {
         e.preventDefault();
-        setActiveCell(null);
+        if (cellInput !== null) {
+          setCellInput(null);
+        } else {
+          setActiveCell(null);
+        }
         return;
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeCell, contextMenu, setCellValue]);
+  }, [activeCell, contextMenu, setCellValue, cellInput]);
 
   // 고정 컬럼 수 계산
   // 기본: #, 이름, 학교, 요일 (4) + 출석, 등록 (2) = 6
@@ -444,6 +491,11 @@ export default function AttendanceTable({
           editingByPeers={editingByPeers}
           activeDateKey={
             activeCell?.studentId === student.id ? activeCell.dateKey : undefined
+          }
+          cellInputBuffer={
+            activeCell?.studentId === student.id && cellInput !== null
+              ? cellInput
+              : undefined
           }
         />
       ));
@@ -519,6 +571,11 @@ export default function AttendanceTable({
               activeDateKey={
                 activeCell?.studentId === student.id
                   ? activeCell.dateKey
+                  : undefined
+              }
+              cellInputBuffer={
+                activeCell?.studentId === student.id && cellInput !== null
+                  ? cellInput
                   : undefined
               }
             />
@@ -629,16 +686,13 @@ export default function AttendanceTable({
         )}
       </table>
 
-      {/* 컨텍스트 메뉴 */}
+      {/* 컨텍스트 메뉴 — 메모/색상만 (숫자 입력은 키보드로 통일) */}
       {contextMenu && contextStudent && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          currentValue={contextStudent.attendance?.[contextMenu.dateKey]}
           currentMemo={contextStudent.memos?.[contextMenu.dateKey]}
           currentColor={contextStudent.cellColors?.[contextMenu.dateKey]}
-          canCustomValue={canCustomValue}
-          onSelectValue={(v) => onAttendanceChange(contextMenu.studentId, contextMenu.dateKey, v)}
           onSaveMemo={(m) => onMemoChange(contextMenu.studentId, contextMenu.dateKey, m)}
           onSelectColor={(c) => onCellColorChange(contextMenu.studentId, contextMenu.dateKey, c)}
           onClose={() => setContextMenu(null)}

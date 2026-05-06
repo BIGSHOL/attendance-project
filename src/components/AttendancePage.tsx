@@ -1636,7 +1636,6 @@ export default function AttendancePage() {
             paidAmountByStudent={paidAmountByStudent}
             actualSalaryByStudent={actualSalaryByStudent}
             sortMode={sortMode}
-            canCustomValue={isAdmin}
             overrideDates={viewMode === "session" && selectedSession ? expandSessionDatesContiguous(selectedSession) : undefined}
             cellWidthPx={cellWidthPx}
             cellHeightPx={cellHeightPx}

@@ -53,6 +53,8 @@ interface Props {
   editingByPeers?: Map<string, { email: string; name: string }>;
   /** 키보드 입력용 활성 셀 — 이 학생 행에서 활성된 날짜 (없으면 undefined) */
   activeDateKey?: string;
+  /** 활성 셀 입력 버퍼 — 사용자가 타이핑 중인 미커밋 텍스트 (소수점 포함) */
+  cellInputBuffer?: string;
 }
 
 function StudentRowImpl({
@@ -81,6 +83,7 @@ function StudentRowImpl({
   onCellRightClick,
   editingByPeers,
   activeDateKey,
+  cellInputBuffer,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -424,10 +427,21 @@ function StudentRowImpl({
               </span>
             )}
 
+            {/* 입력 버퍼 (활성 셀에서 사용자가 타이핑 중일 때 우선 표시) */}
+            {isActive && cellInputBuffer !== undefined && (
+              <span
+                className="absolute inset-0 flex items-center justify-center text-[14px] font-bold text-blue-700 bg-white/60"
+                title="입력 중 — Enter 로 확정"
+              >
+                {cellInputBuffer || "_"}
+              </span>
+            )}
+
             {/* 출석값 (중앙).
                 재원 외(빗금) 셀이어도 value > 0 이면 표시 — 퇴원 후 보강 출석을
                 확인할 수 있도록. 재원 외 + 결석(0) 은 의미 없어 생략. */}
-            {value !== undefined && value !== null && (isValid || value > 0) && (
+            {!(isActive && cellInputBuffer !== undefined) &&
+              value !== undefined && value !== null && (isValid || value > 0) && (
               <span
                 className={`absolute inset-0 flex items-center justify-center text-[14px] font-bold ${
                   value === 0 ? "text-white" : "text-zinc-800"
