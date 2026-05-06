@@ -79,24 +79,3 @@ body {
   }
 }
 
-/* ==========================================
-   출석부 활성 셀 — 시트의 "selected cell" 같은 느낌
-   ========================================== */
-
-/* 입력 중 깜빡이는 caret */
-@keyframes attendance-caret-blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
-}
-.attendance-caret {
-  animation: attendance-caret-blink 1s step-end infinite;
-}
-
-/* 활성 셀 ring 자체가 부드럽게 깜빡 (입력 전에도 살아있는 느낌) */
-@keyframes attendance-active-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 2px rgb(37 99 235); }
-  50% { box-shadow: inset 0 0 0 2px rgb(96 165 250); }
-}
-.attendance-active-ring {
-  animation: attendance-active-pulse 1.1s ease-in-out infinite;
-}

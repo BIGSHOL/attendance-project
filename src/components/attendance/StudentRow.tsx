@@ -378,7 +378,7 @@ function StudentRowImpl({
               isValid ? "cursor-pointer hover:brightness-95" : "cursor-not-allowed"
             } ${
               isActive
-                ? "attendance-active-ring z-20"
+                ? "z-20"
                 : peerEditor
                 ? "ring-2 ring-inset ring-fuchsia-500 animate-pulse"
                 : isToday && isScheduledDay
@@ -392,6 +392,13 @@ function StudentRowImpl({
               height: cellHeightPx,
             }}
           >
+            {/* 활성 셀: 깜빡이는 ring (Tailwind animate-pulse) */}
+            {isActive && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-30 ring-2 ring-inset ring-blue-600 animate-pulse"
+              />
+            )}
             {/* 첫수업 / 반이동(from) 뱃지 */}
             {isFirstClass && (
               <span className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none overflow-hidden">
@@ -430,11 +437,11 @@ function StudentRowImpl({
             {/* 입력 버퍼 (활성 셀에서 사용자가 타이핑 중일 때 우선 표시) */}
             {isActive && cellInputBuffer !== undefined && (
               <span
-                className="absolute inset-0 flex items-center justify-center text-[14px] font-bold text-blue-700 bg-white/60"
+                className="absolute inset-0 z-40 flex items-center justify-center text-[14px] font-bold text-blue-700 bg-white/60"
                 title="입력 중 — Enter 로 확정"
               >
                 {cellInputBuffer}
-                <span className="attendance-caret ml-0.5 inline-block w-px self-stretch bg-blue-700" />
+                <span className="ml-0.5 inline-block w-0.5 self-stretch bg-blue-700 animate-pulse" />
               </span>
             )}
 
