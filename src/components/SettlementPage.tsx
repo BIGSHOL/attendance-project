@@ -120,77 +120,186 @@ export default function SettlementPage() {
     [excludedSyncIds, setExcludedSyncIds]
   );
 
-  const handleBulkSync = useCallback(async () => {
-    if (bulkSync?.running) return;
-    // 동기화 대상: 시트 URL 등록된 선생님 (설정에서 제외된 선생님 제거)
-    const targets: Array<{ teacher: Teacher; sheetUrl: string }> = [];
-    for (const sheet of teacherSheets) {
-      if (!sheet.sheet_url) continue;
-      if (excludedSyncIds.has(sheet.teacher_id)) continue;
-      const teacher = teachers.find((t) => t.id === sheet.teacher_id);
-      if (teacher) targets.push({ teacher, sheetUrl: sheet.sheet_url });
-    }
-    if (targets.length === 0) {
-      alert("동기화할 시트가 없습니다. 선생님 페이지에서 시트 URL을 먼저 등록해주세요.");
-      return;
-    }
-    if (
-      !confirm(
-        `${year}년 ${month}월 탭을 ${targets.length}명 전체 순차 동기화합니다.\n` +
-          `선생님 한 명당 수 초~수십 초 걸릴 수 있습니다. 진행하시겠습니까?`
-      )
-    )
-      return;
-
-    setBulkSync({
-      running: true,
-      current: 0,
-      total: targets.length,
-      currentName: "",
-      results: [],
-      done: false,
-    });
-
-    const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
-    const collected: TeacherSyncResult[] = [];
-    for (let i = 0; i < targets.length; i++) {
-      const { teacher, sheetUrl } = targets[i];
-      setBulkSync((prev) =>
-        prev ? { ...prev, current: i, currentName: teacher.name } : prev
-      );
-      try {
-        const result = await syncTeacherSheet(
-          teacher.id,
-          teacher.name,
-          sheetUrl,
-          students,
-          "2026-03",
-          exactMonth,
-          salaryConfig,
-          teacher.subjects?.[0]
+  /**
+   * 전체 동기화 실행기.
+   *   targetIds 없이 호출 = 전체 (excludedSyncIds 제외).
+   *   targetIds 지정 = 그 부분집합만 (실패 재시도용).
+   */
+  const runBulkSync = useCallback(
+    async (targetIds?: Set<string>) => {
+      if (bulkSync?.running) return;
+      const targets: Array<{ teacher: Teacher; sheetUrl: string }> = [];
+      for (const sheet of teacherSheets) {
+        if (!sheet.sheet_url) continue;
+        if (targetIds) {
+          if (!targetIds.has(sheet.teacher_id)) continue;
+        } else {
+          if (excludedSyncIds.has(sheet.teacher_id)) continue;
+        }
+        const teacher = teachers.find((t) => t.id === sheet.teacher_id);
+        if (teacher) targets.push({ teacher, sheetUrl: sheet.sheet_url });
+      }
+      if (targets.length === 0) {
+        alert(
+          targetIds
+            ? "재시도할 대상이 없습니다."
+            : "동기화할 시트가 없습니다. 선생님 페이지에서 시트 URL을 먼저 등록해주세요."
         );
-        collected.push(result);
-        if (result.success) markSynced(teacher.id);
-      } catch (e) {
-        collected.push({
-          teacherId: teacher.id,
-          teacherName: teacher.name,
-          success: false,
-          error: (e as Error).message,
-          months: [],
-        });
+        return;
+      }
+      if (
+        !targetIds &&
+        !confirm(
+          `${year}년 ${month}월 탭을 ${targets.length}명 전체 순차 동기화합니다.\n` +
+            `선생님 한 명당 수 초~수십 초 걸릴 수 있습니다. 진행하시겠습니까?`
+        )
+      )
+        return;
+
+      setBulkSync({
+        running: true,
+        current: 0,
+        total: targets.length,
+        currentName: "",
+        results: [],
+        done: false,
+      });
+
+      const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
+      const collected: TeacherSyncResult[] = [];
+      for (let i = 0; i < targets.length; i++) {
+        const { teacher, sheetUrl } = targets[i];
+        setBulkSync((prev) =>
+          prev ? { ...prev, current: i, currentName: teacher.name } : prev
+        );
+        try {
+          const result = await syncTeacherSheet(
+            teacher.id,
+            teacher.name,
+            sheetUrl,
+            students,
+            "2026-03",
+            exactMonth,
+            salaryConfig,
+            teacher.subjects?.[0]
+          );
+          collected.push(result);
+          if (result.success) markSynced(teacher.id);
+        } catch (e) {
+          collected.push({
+            teacherId: teacher.id,
+            teacherName: teacher.name,
+            success: false,
+            error: (e as Error).message,
+            months: [],
+          });
+        }
+      }
+
+      setBulkSync({
+        running: false,
+        current: targets.length,
+        total: targets.length,
+        currentName: "",
+        results: collected,
+        done: true,
+      });
+    },
+    [
+      bulkSync,
+      teacherSheets,
+      teachers,
+      students,
+      salaryConfig,
+      year,
+      month,
+      markSynced,
+      excludedSyncIds,
+    ]
+  );
+
+  // 기존 콜사이트 호환 — 인자 없이 호출하면 전체 동기화
+  const handleBulkSync = useCallback(() => runBulkSync(), [runBulkSync]);
+
+  /**
+   * 실패한 선생님만 다시 동기화.
+   *   bulkSync.results 에서 success=false 또는 month-level error 가 있는 항목 추출.
+   */
+  const handleRetryFailed = useCallback(() => {
+    if (!bulkSync || !bulkSync.done) return;
+    const failedIds = new Set<string>();
+    for (const r of bulkSync.results) {
+      const hasError = !r.success || !!r.error || r.months.some((m) => m.error);
+      if (hasError) failedIds.add(r.teacherId);
+    }
+    if (failedIds.size === 0) {
+      alert("실패한 선생님이 없습니다.");
+      return;
+    }
+    runBulkSync(failedIds);
+  }, [bulkSync, runBulkSync]);
+
+  /**
+   * 동기화 결과 .txt 다운로드 — 시각 stamp 포함.
+   *   감사·디버그 용도. 진행 중에도 부분 결과 다운로드 가능.
+   */
+  const handleDownloadSyncResults = useCallback(() => {
+    if (!bulkSync) return;
+    const now = new Date();
+    const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const human = now.toISOString().replace("T", " ").slice(0, 19);
+
+    const lines: string[] = [];
+    lines.push(`# 출석부 동기화 결과 — ${year}년 ${month}월`);
+    lines.push(`# 생성 시각: ${human} (UTC)`);
+    lines.push(
+      `# 진행: ${bulkSync.results.length}/${bulkSync.total}명${
+        bulkSync.done ? " (완료)" : " (진행 중)"
+      }`
+    );
+    lines.push("");
+    let okCount = 0;
+    let failCount = 0;
+    for (const r of bulkSync.results) {
+      const hasError = !r.success || !!r.error || r.months.some((m) => m.error);
+      if (hasError) failCount++;
+      else okCount++;
+      const status = hasError ? "실패" : "성공";
+      lines.push(`[${status}] ${r.teacherName}`);
+      if (r.error) lines.push(`  오류: ${r.error}`);
+      for (const m of r.months) {
+        if (m.error) {
+          lines.push(`  - ${m.sheetName}: 오류 — ${m.error}`);
+        } else {
+          const parts = [`학생 ${m.matched}/${m.total}`];
+          if (m.unmatched > 0) parts.push(`실패 ${m.unmatched}`);
+          if (m.memoCount > 0) parts.push(`메모 ${m.memoCount}`);
+          if (m.tierMatched > 0) parts.push(`tier ${m.tierMatched}`);
+          if (m.tierUnmatched > 0) parts.push(`tier 실패 ${m.tierUnmatched}`);
+          lines.push(`  - ${m.sheetName}: ${parts.join(" · ")}`);
+        }
+      }
+      if (!r.error && r.months.length === 0) {
+        lines.push(`  (해당 월 탭 없음)`);
       }
     }
+    lines.push("");
+    lines.push(`# 요약: 성공 ${okCount}명 · 실패 ${failCount}명`);
 
-    setBulkSync({
-      running: false,
-      current: targets.length,
-      total: targets.length,
-      currentName: "",
-      results: collected,
-      done: true,
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/plain;charset=utf-8",
     });
-  }, [bulkSync, teacherSheets, teachers, students, salaryConfig, year, month, markSynced, excludedSyncIds]);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `동기화결과_${year}-${String(month).padStart(2, "0")}_${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }, [bulkSync, year, month]);
 
   // 동기화 설정 팝오버에 전달할 "시트 URL 등록된 선생님" 목록
   const syncCandidateTeachers = useMemo(() => {
@@ -1735,17 +1844,47 @@ export default function SettlementPage() {
               )}
             </div>
 
-            {bulkSync.done && (
-              <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                <button
-                  type="button"
-                  onClick={() => setBulkSync(null)}
-                  className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                >
-                  닫기
-                </button>
-              </div>
-            )}
+            {bulkSync.done && (() => {
+              const failedCount = bulkSync.results.filter(
+                (r) => !r.success || !!r.error || r.months.some((m) => m.error)
+              ).length;
+              return (
+                <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {failedCount > 0
+                      ? `❌ 실패 ${failedCount}명 — "실패만 다시" 로 재시도 가능`
+                      : "✓ 모든 선생님 동기화 완료"}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadSyncResults}
+                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="결과를 .txt 파일로 다운로드 (감사/디버그)"
+                    >
+                      📥 결과 다운로드
+                    </button>
+                    {failedCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRetryFailed}
+                        className="rounded-sm bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
+                        title="실패한 선생님만 다시 동기화"
+                      >
+                        ↺ 실패만 다시 ({failedCount})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setBulkSync(null)}
+                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      닫기
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
