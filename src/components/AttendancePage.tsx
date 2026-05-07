@@ -129,8 +129,35 @@ export default function AttendancePage() {
 
   // 셀 크기 (localStorage 저장)
   const [cellWidth, setCellWidth] = useLocalStorage<CellSize>("attendance.cellWidth", "md");
+  // 사용자 정의 폭 (px) — 드래그 리사이즈로 설정. null 이면 cellWidth 의 기본값 사용.
+  //   ViewOptionsMenu 에서 S/M/L 누르면 customCellWidthPx 가 자동 reset 되도록 setter 래핑.
+  const [customCellWidthPx, setCustomCellWidthPxRaw] = useLocalStorage<
+    number | null
+  >("attendance.customCellWidthPx", null);
   const [cellHeight, setCellHeight] = useLocalStorage<CellSize>("attendance.cellHeight", "md");
-  const cellWidthPx = CELL_WIDTH[cellWidth];
+  // cellWidthPx 결정: customCellWidthPx 우선 (드래그로 설정), 없으면 S/M/L 기본값.
+  const cellWidthPx =
+    typeof customCellWidthPx === "number" && customCellWidthPx > 0
+      ? customCellWidthPx
+      : CELL_WIDTH[cellWidth];
+
+  // S/M/L 버튼 누르면 사용자 정의 폭 reset.
+  const handleCellWidthPreset = useCallback(
+    (size: CellSize) => {
+      setCellWidth(size);
+      setCustomCellWidthPxRaw(null);
+    },
+    [setCellWidth, setCustomCellWidthPxRaw]
+  );
+
+  // 드래그로 폭 갱신 (음수/너무 작은 값 방어).
+  const handleColumnResize = useCallback(
+    (px: number) => {
+      const clamped = Math.max(20, Math.min(200, Math.round(px)));
+      setCustomCellWidthPxRaw(clamped);
+    },
+    [setCustomCellWidthPxRaw]
+  );
   const cellHeightPx = CELL_HEIGHT[cellHeight];
 
   // 숨김 행/열
@@ -1675,7 +1702,7 @@ export default function AttendancePage() {
           hideZeroAttendance={hideZeroAttendance}
           setHideZeroAttendance={setHideZeroAttendance}
           cellWidth={cellWidth}
-          setCellWidth={setCellWidth}
+          setCellWidth={handleCellWidthPreset}
           cellHeight={cellHeight}
           setCellHeight={setCellHeight}
         />
@@ -1889,6 +1916,7 @@ export default function AttendancePage() {
             editingByPeers={editingByPeers}
             setEditingCell={setEditingCell}
             onShowBreakdown={setBreakdownStudentId}
+            onColumnResize={handleColumnResize}
           />
         )}
       </div>

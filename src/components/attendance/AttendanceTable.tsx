@@ -59,6 +59,11 @@ interface Props {
    *   학생 ℹ 버튼 클릭 시 부모(AttendancePage) 가 모달 열도록.
    */
   onShowBreakdown?: (studentId: string) => void;
+  /**
+   * 일자 컬럼 폭 드래그 리사이즈 (audit H).
+   *   thead 핸들 드래그 → 새 폭(px) 호출. 부모가 cellWidthPx 갱신.
+   */
+  onColumnResize?: (px: number) => void;
 }
 
 export default function AttendanceTable({
@@ -92,6 +97,7 @@ export default function AttendanceTable({
   onHomeworkChange,
   editingByPeers,
   onShowBreakdown,
+  onColumnResize,
 }: Props) {
   const allDates = useMemo(
     () => overrideDates && overrideDates.length > 0 ? overrideDates : getDaysInMonth(year, month),
@@ -187,6 +193,14 @@ export default function AttendanceTable({
   //   mouseup 시 시작 셀 값을 selection 영역 전체에 채우고 종료.
   const [isDragFilling, setIsDragFilling] = useState(false);
   const dragFillStartValueRef = useRef<number | null>(null);
+
+  // 일자 컬럼 폭 드래그 리사이즈 (audit H).
+  //   resizing.startX = 시작 mouse X, startWidth = 시작 시점 cellWidthPx.
+  //   드래그 중 시각화 + 부드러운 갱신.
+  const resizingRef = useRef<{ startX: number; startWidth: number } | null>(
+    null
+  );
+  const [isResizing, setIsResizing] = useState(false);
 
   // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
   // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
@@ -484,6 +498,46 @@ export default function AttendanceTable({
     },
     [selectedKeys, setCellValue]
   );
+
+  /**
+   * 일자 컬럼 폭 드래그 리사이즈 — thead 핸들 mousedown.
+   *   document mousemove → 새 폭 계산 → onColumnResize.
+   */
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (!onColumnResize) return;
+      e.preventDefault();
+      e.stopPropagation();
+      resizingRef.current = { startX: e.clientX, startWidth: cellWidthPx };
+      setIsResizing(true);
+    },
+    [cellWidthPx, onColumnResize]
+  );
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMove = (e: MouseEvent) => {
+      const r = resizingRef.current;
+      if (!r) return;
+      const delta = e.clientX - r.startX;
+      onColumnResize?.(r.startWidth + delta);
+    };
+    const onUp = () => {
+      resizingRef.current = null;
+      setIsResizing(false);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    // 드래그 중 텍스트 선택/cursor 변경
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [isResizing, onColumnResize]);
 
   /**
    * 드래그 채우기 시작 — 활성 셀 우하단 핸들 mousedown 콜백.
@@ -1102,7 +1156,7 @@ export default function AttendanceTable({
                       onHideDate(dateKey);
                     }
                   }}
-                  className={`px-0 py-1 text-center cursor-context-menu border-r border-zinc-600 ${headerBg}`}
+                  className={`relative px-0 py-1 text-center cursor-context-menu border-r border-zinc-600 ${headerBg}`}
                 >
                   <div className={`text-[11px] ${dayLabelColor}`}>
                     {info.dayLabel}
@@ -1111,6 +1165,17 @@ export default function AttendanceTable({
                     )}
                   </div>
                   <div className="text-[13px] font-bold">{info.date}</div>
+                  {/* 컬럼 폭 드래그 핸들 (audit H) — 헤더 우측 1px 영역, 호버 시 강조.
+                      mousedown → 모든 일자 컬럼 동일 폭으로 갱신. */}
+                  {onColumnResize && (
+                    <span
+                      role="separator"
+                      aria-label="일자 컬럼 폭 조절"
+                      title="드래그하여 일자 컬럼 폭 조절"
+                      onMouseDown={handleResizeStart}
+                      className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-blue-400/60"
+                    />
+                  )}
                 </th>
               );
             })}
