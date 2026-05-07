@@ -783,6 +783,25 @@ export default function AttendanceTable({
             {dateInfos.map((info, i) => {
               const dateKey = formatDateKey(dates[i]);
               const holidayName = holidayNameMap?.get(dateKey);
+              // 헤더 배경 우선순위: 오늘 > 공휴일 > 일요일 > 토요일 > 기본.
+              //   본문 셀의 색상 정책과 시각적으로 매칭 — 운영자가 헤더만 봐도
+              //   주말·휴일을 즉시 식별 가능 (audit #19).
+              const headerBg = info.isToday
+                ? "bg-blue-600"
+                : holidayName
+                  ? "bg-red-900/60"
+                  : info.isSunday
+                    ? "bg-red-950/40"
+                    : info.isSaturday
+                      ? "bg-blue-950/40"
+                      : "";
+              const dayLabelColor = holidayName
+                ? "text-red-300"
+                : info.isSunday
+                  ? "text-red-300"
+                  : info.isSaturday
+                    ? "text-blue-300"
+                    : "text-zinc-400";
               return (
                 <th
                   key={i}
@@ -794,22 +813,13 @@ export default function AttendanceTable({
                       onHideDate(dateKey);
                     }
                   }}
-                  className={`px-0 py-1 text-center cursor-context-menu border-r border-zinc-600 ${
-                    info.isToday ? "bg-blue-600" : holidayName ? "bg-red-900/60" : ""
-                  }`}
+                  className={`px-0 py-1 text-center cursor-context-menu border-r border-zinc-600 ${headerBg}`}
                 >
-                  <div
-                    className={`text-[11px] ${
-                      holidayName
-                        ? "text-red-300"
-                        : highlightWeekends && info.isSunday
-                        ? "text-red-300"
-                        : highlightWeekends && info.isSaturday
-                        ? "text-blue-300"
-                        : "text-zinc-400"
-                    }`}
-                  >
+                  <div className={`text-[11px] ${dayLabelColor}`}>
                     {info.dayLabel}
+                    {holidayName && (
+                      <span className="ml-0.5 text-[9px] opacity-80">🎉</span>
+                    )}
                   </div>
                   <div className="text-[13px] font-bold">{info.date}</div>
                 </th>
