@@ -44,6 +44,7 @@ import { SkeletonTable } from "@/components/ui/Skeleton";
 import { CELL_WIDTH, CELL_HEIGHT, type CellSize } from "@/lib/cellSize";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useHiddenCells } from "@/hooks/useHiddenCells";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import AttendanceTable from "./attendance/AttendanceTable";
 import ViewOptionsMenu from "./attendance/ViewOptionsMenu";
 import { createWorkbook, addSheet, writeFile } from "@/lib/excelExport";
@@ -55,6 +56,11 @@ const SettlementModal = dynamic(() => import("./attendance/SettlementModal"), { 
 const SessionSettingsModal = dynamic(() => import("./attendance/SessionSettingsModal"), { ssr: false });
 const StudentBreakdownModal = dynamic(
   () => import("./attendance/StudentBreakdownModal"),
+  { ssr: false }
+);
+// 모바일 뷰 — 768px 미만에서 활성화
+const MobileAttendanceView = dynamic(
+  () => import("./attendance/MobileAttendanceView"),
   { ssr: false }
 );
 
@@ -135,6 +141,8 @@ export default function AttendancePage() {
   // 모달
   const [isSettlementOpen, setSettlementOpen] = useState(false);
   const [isSessionSettingsOpen, setSessionSettingsOpen] = useState(false);
+  // 모바일 감지 — 768px 미만이면 카드형 입력 뷰로 전환 (audit #15)
+  const isMobile = useIsMobile(768);
   // 정산 breakdown 모달 (audit #6) — student.id 보유 시 열림
   const [breakdownStudentId, setBreakdownStudentId] = useState<string | null>(
     null
@@ -1805,6 +1813,21 @@ export default function AttendancePage() {
           <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">
             선생님을 선택해주세요.
           </div>
+        ) : isMobile ? (
+          <MobileAttendanceView
+            students={studentRows}
+            year={year}
+            month={month}
+            overrideDates={
+              viewMode === "session" && selectedSession
+                ? expandSessionDatesContiguous(selectedSession)
+                : undefined
+            }
+            holidayDateSet={holidayDateSet}
+            holidayNameMap={holidayNameMap}
+            onAttendanceChange={handleAttendanceChange}
+            onMemoChange={handleMemoChange}
+          />
         ) : (
           <AttendanceTable
             students={studentRows}
