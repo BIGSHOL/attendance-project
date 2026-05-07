@@ -86,6 +86,10 @@ export default function AttendancePage() {
 
   // 표시 옵션 (localStorage 영속화 — CLAUDE.md 규칙)
   const [sortMode, setSortMode] = useState<SortMode>("class");
+  const [studentSearch, setStudentSearch] = useLocalStorage<string>(
+    "attendance.studentSearch",
+    ""
+  );
   const [highlightWeekends, setHighlightWeekends] = useLocalStorage<boolean>(
     "attendance.highlightWeekends",
     false
@@ -1617,6 +1621,26 @@ export default function AttendancePage() {
           </button>
         </div>
 
+        {/* 학생 검색 — 이름/학교/학년 substring (대소문자 무시) */}
+        <div className="relative ml-1">
+          <input
+            type="text"
+            value={studentSearch}
+            onChange={(e) => setStudentSearch(e.target.value)}
+            placeholder="🔎 학생 검색 (이름/학교/학년)"
+            className="rounded-sm border border-zinc-300 bg-white px-2.5 py-1.5 text-sm w-56 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+          {studentSearch && (
+            <button
+              onClick={() => setStudentSearch("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm px-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"
+              title="검색어 지우기"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
         <div className="flex-1 min-w-[8px]" />
 
         {/* 보기 모드 (월/세션) */}
@@ -1731,6 +1755,7 @@ export default function AttendancePage() {
             paidAmountByStudent={paidAmountByStudent}
             actualSalaryByStudent={actualSalaryByStudent}
             sortMode={sortMode}
+            studentSearch={studentSearch}
             overrideDates={viewMode === "session" && selectedSession ? expandSessionDatesContiguous(selectedSession) : undefined}
             cellWidthPx={cellWidthPx}
             cellHeightPx={cellHeightPx}

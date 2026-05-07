@@ -30,6 +30,11 @@ interface Props {
   /** 학생 id → 실급여(= calculateStudentSalary 결과) */
   actualSalaryByStudent?: Map<string, number>;
   sortMode: SortMode;
+  /**
+   * 학생 검색어 — 이름/학교/학년 substring (대소문자 무시).
+   *   visibleStudents 단계에서 filter (계산 결과에는 영향 없음 — 표시만 좁힘).
+   */
+  studentSearch?: string;
   /** 세션 모드 등에서 날짜 범위를 외부에서 지정할 때 사용 */
   overrideDates?: Date[];
   cellWidthPx: number;
@@ -65,6 +70,7 @@ export default function AttendanceTable({
   paidAmountByStudent,
   actualSalaryByStudent,
   sortMode,
+  studentSearch,
   overrideDates,
   cellWidthPx,
   cellHeightPx,
@@ -102,11 +108,26 @@ export default function AttendanceTable({
   );
   const dateInfos = useMemo(() => dates.map(formatDateDisplay), [dates]);
 
-  // 숨긴 학생 필터링
-  const visibleStudents = useMemo(
-    () => students.filter((s) => !hiddenStudentSet.has(s.id)),
-    [students, hiddenStudentSet]
-  );
+  // 숨긴 학생 필터링 + 검색어 필터.
+  //   검색어는 이름/학교/학년 substring 매칭 (대소문자 무시).
+  //   계산 결과(상단 시수·실급여 등)는 studentRows 단계에서 이미 결정되므로,
+  //   여기서 좁히는 건 화면 표시 줄 뿐.
+  const visibleStudents = useMemo(() => {
+    const q = (studentSearch || "").trim().toLowerCase();
+    return students.filter((s) => {
+      if (hiddenStudentSet.has(s.id)) return false;
+      if (!q) return true;
+      const haystack = [
+        s.name || "",
+        s.school || "",
+        s.grade || "",
+        s.group || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [students, hiddenStudentSet, studentSearch]);
 
   // 그룹 접기 상태
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -541,9 +562,21 @@ export default function AttendanceTable({
   const unit: "U" | "T" = subject === "english" ? "U" : "T";
 
   if (visibleStudents.length === 0) {
+    const hasSearch = !!(studentSearch && studentSearch.trim().length > 0);
     return (
-      <div className="flex items-center justify-center h-64 text-zinc-400 text-sm">
-        표시할 학생이 없습니다.
+      <div className="flex flex-col items-center justify-center h-64 text-zinc-400 text-sm gap-1">
+        {hasSearch ? (
+          <>
+            <span>
+              &ldquo;{studentSearch}&rdquo; 검색 결과 없음.
+            </span>
+            <span className="text-xs">
+              상단의 검색창에서 ✕ 를 눌러 검색어를 지우면 전체 학생이 다시 보입니다.
+            </span>
+          </>
+        ) : (
+          <span>표시할 학생이 없습니다.</span>
+        )}
       </div>
     );
   }
