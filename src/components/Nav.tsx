@@ -73,8 +73,11 @@ export default function Nav({ email }: NavProps) {
               }`}
             >
               <span>{item.icon}</span>
-              {/* lg 이상에서만 라벨 표시 — 좁은 화면은 아이콘만 */}
-              <span className="hidden lg:inline">{item.label}</span>
+              {/* xl 이상에서만 라벨 표시 — 좁은 화면은 아이콘만.
+                  whitespace-nowrap 으로 라벨이 세로로 깨지지 않게 보호. */}
+              <span className="hidden xl:inline whitespace-nowrap">
+                {item.label}
+              </span>
             </Link>
           );
         })}
