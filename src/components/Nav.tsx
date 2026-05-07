@@ -37,6 +37,9 @@ export default function Nav({ email }: NavProps) {
     ...(isMaster ? [{ href: "/admin/users", label: "사용자 관리", icon: "👤" }] : []),
     ...(isAdmin ? [{ href: "/admin/audit", label: "변경 이력", icon: "📜" }] : []),
     ...(isAdmin ? [{ href: "/admin/blog", label: "블로그", icon: "📝" }] : []),
+    ...(isAdmin
+      ? [{ href: "/admin/migration-check", label: "정합성 점검", icon: "🔍" }]
+      : []),
     // 도움말은 누구나 (선생님 / 관리자 / 마스터)
     ...(isAdmin || isTeacher
       ? [{ href: "/help", label: "도움말", icon: "📖" }]
