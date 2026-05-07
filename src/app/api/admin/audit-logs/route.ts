@@ -4,7 +4,11 @@ import { requireAdmin } from "@/lib/apiAuth";
 
 /**
  * GET /api/admin/audit-logs
- *   ?table=...&user=...&from=YYYY-MM-DD&to=YYYY-MM-DD&page=1&pageSize=50
+ *   ?table=...           — 단일 테이블 (legacy, single-select)
+ *   ?tables=a,b,c        — 다중 테이블 (audit #16)
+ *   ?actions=insert,update — 다중 action (audit #16)
+ *   ?user=...&record_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD
+ *   &page=1&pageSize=50
  * 마스터/관리자만
  */
 export async function GET(request: NextRequest) {
@@ -14,6 +18,8 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const table = searchParams.get("table");
+  const tablesParam = searchParams.get("tables");
+  const actionsParam = searchParams.get("actions");
   const user = searchParams.get("user");
   const recordId = searchParams.get("record_id");
   const from = searchParams.get("from");
@@ -26,7 +32,24 @@ export async function GET(request: NextRequest) {
     .select("*", { count: "exact" })
     .order("edited_at", { ascending: false });
 
-  if (table) q = q.eq("table_name", table);
+  // 테이블 필터 — tables(다중) 우선, 없으면 table(legacy single)
+  const tableList = tablesParam
+    ? tablesParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  if (tableList.length > 0) {
+    q = q.in("table_name", tableList);
+  } else if (table) {
+    q = q.eq("table_name", table);
+  }
+
+  // action 필터 (다중)
+  const actionList = actionsParam
+    ? actionsParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  if (actionList.length > 0) {
+    q = q.in("action", actionList);
+  }
+
   if (user) q = q.ilike("edited_by", `%${user}%`);
   if (recordId) q = q.eq("record_id", recordId);
   if (from) q = q.gte("edited_at", from);

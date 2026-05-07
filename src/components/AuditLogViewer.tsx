@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Pagination from "./Pagination";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { toSubjectLabel } from "@/lib/labelMap";
 
@@ -424,7 +424,9 @@ function ChangesCell({ changes, action }: { changes: Record<string, unknown>; ac
 }
 
 export default function AuditLogViewer() {
-  const [tableFilter, setTableFilter] = useLocalStorage<string>("audit.table", "");
+  // 다중 테이블·다중 action 필터 (audit #16) — chip 토글 방식
+  const [tablesFilter, setTablesFilter] = useLocalStorageSet("audit.tables");
+  const [actionsFilter, setActionsFilter] = useLocalStorageSet("audit.actions");
   const [userFilter, setUserFilter] = useLocalStorage<string>("audit.user", "");
   const [fromDate, setFromDate] = useLocalStorage<string>("audit.from", "");
   const [toDate, setToDate] = useLocalStorage<string>("audit.to", "");
@@ -441,7 +443,12 @@ export default function AuditLogViewer() {
         page: String(page),
         pageSize: String(PAGE_SIZE),
       });
-      if (tableFilter) params.set("table", tableFilter);
+      if (tablesFilter.size > 0) {
+        params.set("tables", Array.from(tablesFilter).join(","));
+      }
+      if (actionsFilter.size > 0) {
+        params.set("actions", Array.from(actionsFilter).join(","));
+      }
       if (userFilter) params.set("user", userFilter);
       if (fromDate) params.set("from", fromDate);
       if (toDate) params.set("to", toDate);
@@ -455,7 +462,7 @@ export default function AuditLogViewer() {
     } finally {
       setLoading(false);
     }
-  }, [tableFilter, userFilter, fromDate, toDate, page]);
+  }, [tablesFilter, actionsFilter, userFilter, fromDate, toDate, page]);
 
   useEffect(() => {
     fetchData();
@@ -464,11 +471,25 @@ export default function AuditLogViewer() {
   // 필터 변경 시 1페이지로
   useEffect(() => {
     setPage(1);
-  }, [tableFilter, userFilter, fromDate, toDate]);
+  }, [tablesFilter, actionsFilter, userFilter, fromDate, toDate]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const tableOptions = useMemo(() => Object.keys(TABLE_LABELS), []);
+  const actionOptions = useMemo(() => Object.keys(ACTION_LABELS), []);
+
+  const toggleTable = (t: string) => {
+    const next = new Set(tablesFilter);
+    if (next.has(t)) next.delete(t);
+    else next.add(t);
+    setTablesFilter(next);
+  };
+  const toggleAction = (a: string) => {
+    const next = new Set(actionsFilter);
+    if (next.has(a)) next.delete(a);
+    else next.add(a);
+    setActionsFilter(next);
+  };
 
   return (
     <div className="space-y-4">
@@ -477,66 +498,117 @@ export default function AuditLogViewer() {
         <span className="text-xs text-zinc-500">총 {total.toLocaleString()}건</span>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2 border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="space-y-3 border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        {/* 테이블 chip 다중 선택 */}
         <div>
-          <label className="block text-xs text-zinc-500">테이블</label>
-          <select
-            value={tableFilter}
-            onChange={(e) => setTableFilter(e.target.value)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xs font-medium text-zinc-500">테이블</span>
+            {tablesFilter.size > 0 && (
+              <button
+                onClick={() => setTablesFilter(new Set())}
+                className="text-[10px] text-zinc-400 hover:text-zinc-600"
+                title="테이블 필터 모두 해제"
+              >
+                전체 해제
+              </button>
+            )}
+            <span className="text-[10px] text-zinc-400">
+              {tablesFilter.size === 0
+                ? "(미선택 = 전체)"
+                : `${tablesFilter.size}개 선택`}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {tableOptions.map((t) => {
+              const active = tablesFilter.has(t);
+              return (
+                <button
+                  key={t}
+                  onClick={() => toggleTable(t)}
+                  className={`text-xs px-2 py-1 rounded-sm border transition-colors ${
+                    active
+                      ? "bg-blue-100 border-blue-400 text-blue-700 dark:bg-blue-900 dark:border-blue-600 dark:text-blue-300"
+                      : "bg-white border-zinc-300 text-zinc-500 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
+                  }`}
+                >
+                  <span className="mr-1">{active ? "☑" : "☐"}</span>
+                  {TABLE_LABELS[t]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Action chip 다중 선택 + 입력 필드들 */}
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <span className="block text-xs text-zinc-500 mb-1">동작</span>
+            <div className="flex gap-1">
+              {actionOptions.map((a) => {
+                const active = actionsFilter.has(a);
+                return (
+                  <button
+                    key={a}
+                    onClick={() => toggleAction(a)}
+                    className={`text-xs px-2 py-1 rounded-sm border transition-colors ${
+                      active
+                        ? `${ACTION_COLORS[a]} border-current`
+                        : "bg-white border-zinc-300 text-zinc-500 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
+                    }`}
+                  >
+                    <span className="mr-1">{active ? "☑" : "☐"}</span>
+                    {ACTION_LABELS[a]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500">사용자(이메일)</label>
+            <input
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              placeholder="email 일부"
+              className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500">시작일</label>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500">종료일</label>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+            />
+          </div>
+          <button
+            onClick={() => {
+              setTablesFilter(new Set());
+              setActionsFilter(new Set());
+              setUserFilter("");
+              setFromDate("");
+              setToDate("");
+            }}
+            className="rounded-sm border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >
-            <option value="">전체</option>
-            {tableOptions.map((t) => (
-              <option key={t} value={t}>
-                {TABLE_LABELS[t]}
-              </option>
-            ))}
-          </select>
+            초기화
+          </button>
+          <button
+            onClick={fetchData}
+            className="rounded-sm bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-700"
+          >
+            새로고침
+          </button>
         </div>
-        <div>
-          <label className="block text-xs text-zinc-500">사용자(이메일)</label>
-          <input
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            placeholder="email 일부"
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-zinc-500">시작일</label>
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-zinc-500">종료일</label>
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            className="rounded-sm border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-          />
-        </div>
-        <button
-          onClick={() => {
-            setTableFilter("");
-            setUserFilter("");
-            setFromDate("");
-            setToDate("");
-          }}
-          className="rounded-sm border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          초기화
-        </button>
-        <button
-          onClick={fetchData}
-          className="rounded-sm bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-700"
-        >
-          새로고침
-        </button>
       </div>
 
       <div className="overflow-x-auto border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
