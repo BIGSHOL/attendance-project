@@ -1048,6 +1048,28 @@ export default function AttendanceTable({
 
   const contextStudent = contextMenu ? students.find((s) => s.id === contextMenu.studentId) : null;
 
+  /**
+   * 메모 자동완성 추천 (audit J).
+   *   현재 표시 학생들의 모든 메모를 빈도순 정렬해 상위 추천.
+   *   ContextMenu 가 열릴 때만 계산 (콘텍스트 메뉴 의존).
+   */
+  const memoSuggestions = useMemo<string[]>(() => {
+    if (!contextMenu) return [];
+    const counts = new Map<string, number>();
+    for (const s of students) {
+      const memos = s.memos || {};
+      for (const m of Object.values(memos)) {
+        if (!m) continue;
+        const trimmed = m.trim();
+        if (!trimmed) continue;
+        counts.set(trimmed, (counts.get(trimmed) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([m]) => m);
+  }, [contextMenu, students]);
+
   // 선택 범위 통계 — 카운트 (시트 G 에서 sum/avg 도 추가 예정).
   const selectionStats = useMemo(() => {
     if (selectedKeys.size <= 1) return null;
@@ -1206,6 +1228,7 @@ export default function AttendanceTable({
           onSaveMemo={(m) => onMemoChange(contextMenu.studentId, contextMenu.dateKey, m)}
           onSelectColor={(c) => onCellColorChange(contextMenu.studentId, contextMenu.dateKey, c)}
           onClose={() => setContextMenu(null)}
+          memoSuggestions={memoSuggestions}
         />
       )}
       {/* 선택 범위 통계 — 시트 우하단 selection sum 대체 (audit G).
