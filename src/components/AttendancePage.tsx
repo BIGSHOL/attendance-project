@@ -63,6 +63,11 @@ const MobileAttendanceView = dynamic(
   () => import("./attendance/MobileAttendanceView"),
   { ssr: false }
 );
+// 메모 찾기/바꾸기 모달 (audit E)
+const FindReplaceModal = dynamic(
+  () => import("./attendance/FindReplaceModal"),
+  { ssr: false }
+);
 
 type SortMode = "class" | "name" | "day";
 
@@ -147,6 +152,29 @@ export default function AttendancePage() {
   const [breakdownStudentId, setBreakdownStudentId] = useState<string | null>(
     null
   );
+  // 메모 찾기/바꾸기 모달 (audit E) — Ctrl+H 또는 버튼으로 열기
+  const [isFindReplaceOpen, setFindReplaceOpen] = useState(false);
+  // Ctrl+H — 메모 찾기/바꾸기 (시트 단축키와 동일).
+  //   브라우저 기본 동작(history) 가로채기.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
+        // input/textarea 에 포커스되어 있으면 무시 (사용자가 텍스트 편집 중일 수 있음)
+        const t = e.target as HTMLElement | null;
+        if (
+          t &&
+          (t.tagName === "INPUT" ||
+            t.tagName === "TEXTAREA" ||
+            t.isContentEditable)
+        )
+          return;
+        e.preventDefault();
+        setFindReplaceOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   // 급여 설정 (teacher_settings.ratios 와 자동 병합됨)
   const { config: salaryConfig } = useSalaryConfig();
@@ -1925,6 +1953,18 @@ export default function AttendancePage() {
             ? unitPriceByStudent.get(breakdownStudentId)
             : undefined
         }
+      />
+      {/* 메모 찾기/바꾸기 (Ctrl+H, audit E) */}
+      <FindReplaceModal
+        isOpen={isFindReplaceOpen}
+        onClose={() => setFindReplaceOpen(false)}
+        students={studentRows}
+        dates={
+          viewMode === "session" && selectedSession
+            ? expandSessionDatesContiguous(selectedSession)
+            : getDaysInMonth(year, month)
+        }
+        onMemoChange={handleMemoChange}
       />
     </div>
   );
