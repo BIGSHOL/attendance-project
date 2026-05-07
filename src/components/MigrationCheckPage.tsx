@@ -215,20 +215,24 @@ export default function MigrationCheckPage() {
     중등특강2: 36000,
   };
 
-  // tier 단가 mismatch — 우리 DB 와 시트 데이터 마스터 비교
+  // tier 단가 mismatch — 우리 DB 와 시트 데이터 마스터 비교.
+  //   김민주 시트는 수학 단가표라, math subject 의 tier 만 비교 (english 와 이름 충돌 회피).
   const tierMismatches = useMemo(() => {
     const out: Array<{
       tierName: string;
+      subject: string;
       app: number;
       sheet: number;
       diff: number;
     }> = [];
     for (const t of tierPriceTable) {
+      if (t.subject !== "math") continue; // 영어 tier 는 다른 시트 기준
       const sheetPrice = KNOWN_SHEET_PRICES[t.name];
       if (sheetPrice === undefined) continue;
       if (sheetPrice !== t.baseTuition) {
         out.push({
           tierName: t.name,
+          subject: t.subject,
           app: t.baseTuition,
           sheet: sheetPrice,
           diff: sheetPrice - t.baseTuition,
@@ -238,11 +242,13 @@ export default function MigrationCheckPage() {
     return out;
   }, [tierPriceTable]);
 
-  // 시트엔 있는데 우리 salaryConfig 에 없는 tier
+  // 시트엔 있는데 우리 salaryConfig 에 없는 tier (math 기준만)
   const missingTiers = useMemo(() => {
-    const appNames = new Set(tierPriceTable.map((t) => t.name));
+    const mathNames = new Set(
+      tierPriceTable.filter((t) => t.subject === "math").map((t) => t.name)
+    );
     return Object.entries(KNOWN_SHEET_PRICES)
-      .filter(([name]) => !appNames.has(name))
+      .filter(([name]) => !mathNames.has(name))
       .map(([name, price]) => ({ name, price }));
   }, [tierPriceTable]);
 
