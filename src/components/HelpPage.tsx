@@ -102,6 +102,46 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    id: "tier-multi-class",
+    title: "한 학생, 다른 단가 분반 (다행 분리)",
+    icon: "🔧",
+    body: (
+      <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+        <p>
+          한 학생이 같은 선생님에게 <b>다른 단가의 수업 두 개</b>를 듣는 경우
+          (예: 초등 3T 21,250원 + TP2Q 24,000원), 출석부에서 자동으로 두 행으로
+          분리됩니다.
+        </p>
+        <p className="font-semibold mt-2">두 가지 입력 경로</p>
+        <ul className="list-disc list-inside pl-2 space-y-1">
+          <li>
+            <b>시트 → 동기화</b> — 시트에 학생을 두 행으로 입력 (각 행의 F열
+            tier 다름) → 동기화 → 자동 분리
+          </li>
+          <li>
+            <b>앱에서 직접 추가</b> (관리자/마스터) — 학생 상세 페이지의{" "}
+            <b>🔧 수강 분반</b> 섹션에서 <b>+ 분반 추가</b> 버튼 → 모달 입력
+            → 저장
+          </li>
+        </ul>
+        <p className="font-semibold mt-2">자동 vs 수동 보호</p>
+        <ul className="list-disc list-inside pl-2 space-y-0.5">
+          <li>
+            <b>🔄 자동</b> — 시트 동기화 결과. 다음 sync 에서 갱신될 수 있음.
+          </li>
+          <li>
+            <b>🔒 수동</b> — 앱에서 직접 추가. <b>시트 sync 시 보호</b> —
+            덮어쓰지 않음. 동기화 결과 모달에 "보호 N개" 카운터 표시.
+          </li>
+        </ul>
+        <p className="text-xs text-zinc-500 mt-1">
+          🔒 수동 행만 직접 삭제 가능. 자동 행은 시트에서 제거 후 sync 해야
+          정리됨.
+        </p>
+      </div>
+    ),
+  },
+  {
     id: "search",
     title: "학생 빠른 검색",
     icon: "🔎",

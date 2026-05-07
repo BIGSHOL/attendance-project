@@ -5,10 +5,14 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useStudents } from "@/hooks/useStudents";
 import { useStaff } from "@/hooks/useStaff";
+import { useUserRole } from "@/hooks/useUserRole";
+import { useSalaryConfig } from "@/hooks/useSalaryConfig";
+import { useTierOverridesByStudent } from "@/hooks/useTierOverridesByStudent";
 import { findStudentPayments, type PaymentLite } from "@/lib/studentPaymentMatcher";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { Skeleton, SkeletonCard, SkeletonTable } from "@/components/ui/Skeleton";
 import type { Student } from "@/types";
+import TierOverrideModal from "./students/TierOverrideModal";
 
 interface AttendanceRow {
   id: string;
@@ -41,6 +45,13 @@ function shiftMonth(m: string, delta: number): string {
 export default function StudentDetail({ studentId }: Props) {
   const { students, loading: studentsHookLoading } = useStudents();
   const { staff } = useStaff();
+  const { isAdmin } = useUserRole();
+  const { config: salaryConfig } = useSalaryConfig();
+  const {
+    rows: tierOverrides,
+    loading: tierLoading,
+    refetch: refetchTier,
+  } = useTierOverridesByStudent(studentId);
   const [student, setStudent] = useState<Student | null>(null);
   const [studentLoading, setStudentLoading] = useState(true);
   const [studentError, setStudentError] = useState<string | null>(null);
@@ -48,6 +59,8 @@ export default function StudentDetail({ studentId }: Props) {
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
   const [loading, setLoading] = useState(true);
+  const [tierModalOpen, setTierModalOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // 1차: useStudents 훅에서 찾기 (이미 로드된 데이터)
   useEffect(() => {
@@ -320,6 +333,151 @@ export default function StudentDetail({ studentId }: Props) {
         </div>
       </div>
 
+      {/* 수강 분반 (수동 보정) — audit J */}
+      <div className="mt-6">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-zinc-500">
+            🔧 수강 분반 (단가 매칭)
+            <span className="ml-2 text-[11px] font-normal text-zinc-400">
+              자동 = 시트 sync · 수동 = 관리자가 직접 추가 (sync 시 보호)
+            </span>
+          </h3>
+          {isAdmin && (
+            <button
+              onClick={() => setTierModalOpen(true)}
+              className="rounded-sm bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
+            >
+              + 분반 추가
+            </button>
+          )}
+        </div>
+        <div className="overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          {tierLoading ? (
+            <div className="p-3 text-sm text-zinc-400">불러오는 중...</div>
+          ) : tierOverrides.length === 0 ? (
+            <div className="p-3 text-sm text-zinc-400">
+              분반 정보 없음.{" "}
+              {isAdmin && '"+ 분반 추가" 또는 시트 동기화로 등록.'}
+            </div>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-800/50">
+                  <th className="px-3 py-2 text-left">선생님</th>
+                  <th className="px-3 py-2 text-left">분반</th>
+                  <th className="px-3 py-2 text-left">tier</th>
+                  <th className="px-3 py-2 text-right">단가</th>
+                  <th className="px-3 py-2 text-center">상태</th>
+                  {isAdmin && <th className="px-3 py-2 text-center">작업</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {tierOverrides.map((row) => {
+                  const teacherName =
+                    staffMap.get(row.teacher_id) || row.teacher_id.slice(0, 8);
+                  const tier = (salaryConfig.items || []).find(
+                    (i) => i.id === row.salary_item_id
+                  );
+                  const unitPrice = tier?.unitPrice || tier?.baseTuition || 0;
+                  return (
+                    <tr
+                      key={row.id}
+                      className={`border-b border-zinc-200 last:border-0 dark:border-zinc-800 ${
+                        row.is_manual
+                          ? "bg-blue-50/50 dark:bg-blue-950/30"
+                          : "hover:bg-zinc-50 dark:hover:bg-zinc-800/30"
+                      }`}
+                    >
+                      <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                        {teacherName}
+                      </td>
+                      <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                        {row.class_name || "-"}
+                      </td>
+                      <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                        {row.tier_name}
+                        {!tier && (
+                          <span
+                            className="ml-1 text-amber-600"
+                            title="현재 salaryConfig 에 없는 tier ID"
+                          >
+                            ⚠
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-zinc-700 dark:text-zinc-300">
+                        {unitPrice > 0 ? `${unitPrice.toLocaleString()}원` : "-"}
+                      </td>
+                      <td className="px-3 py-2 text-center text-xs">
+                        {row.is_manual ? (
+                          <span
+                            className="inline-flex rounded-sm bg-blue-100 px-1.5 py-0.5 font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+                            title="앱에서 직접 추가됨 — sync 시 보호"
+                          >
+                            🔒 수동
+                          </span>
+                        ) : (
+                          <span
+                            className="text-zinc-400"
+                            title="시트 동기화 결과 — 다음 sync 에서 갱신 가능"
+                          >
+                            🔄 자동
+                          </span>
+                        )}
+                      </td>
+                      {isAdmin && (
+                        <td className="px-3 py-2 text-center text-xs">
+                          {row.is_manual ? (
+                            <button
+                              disabled={deletingId === row.id}
+                              onClick={async () => {
+                                if (
+                                  !confirm(
+                                    `"${row.tier_name} (${row.class_name || "-"})" 분반을 삭제하시겠습니까?\n관련 출석 기록은 보존됩니다.`
+                                  )
+                                )
+                                  return;
+                                setDeletingId(row.id);
+                                try {
+                                  const res = await fetch(
+                                    `/api/attendance/tier-overrides?id=${encodeURIComponent(row.id)}`,
+                                    { method: "DELETE" }
+                                  );
+                                  if (!res.ok) {
+                                    const j = await res
+                                      .json()
+                                      .catch(() => ({}));
+                                    alert("삭제 실패: " + (j.error || res.status));
+                                  } else {
+                                    refetchTier();
+                                  }
+                                } finally {
+                                  setDeletingId(null);
+                                }
+                              }}
+                              className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                            >
+                              {deletingId === row.id ? "..." : "삭제"}
+                            </button>
+                          ) : (
+                            <span
+                              className="text-zinc-300"
+                              title="자동 row 는 직접 삭제 불가 — 시트에서 제거 후 sync"
+                            >
+                              —
+                            </span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
       {/* 수납 내역 */}
       <div className="mt-6">
         <h3 className="text-sm font-medium text-zinc-500 mb-2">
@@ -369,6 +527,15 @@ export default function StudentDetail({ studentId }: Props) {
           )}
         </div>
       </div>
+
+      {/* 분반 추가 모달 */}
+      <TierOverrideModal
+        isOpen={tierModalOpen}
+        onClose={() => setTierModalOpen(false)}
+        studentId={studentId}
+        studentName={student.name}
+        onSaved={refetchTier}
+      />
     </div>
   );
 }

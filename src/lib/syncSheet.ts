@@ -16,6 +16,11 @@ export interface MonthSyncResult {
   tierMatched: number;
   /** F열에 값은 있었으나 SalaryConfig 항목과 매칭 실패한 수 */
   tierUnmatched: number;
+  /**
+   * 시트 sync 가 갱신 시도했지만 기존 row 의 is_manual=true 라 보호된 수.
+   *   학생 상세 페이지에서 운영자가 직접 추가한 분반은 시트가 덮어쓰지 않음.
+   */
+  tierProtected: number;
   error?: string;
 }
 
@@ -106,6 +111,7 @@ export async function syncTeacherSheet(
       memoCount: 0,
       tierMatched: 0,
       tierUnmatched: 0,
+      tierProtected: 0,
     };
 
     try {
@@ -418,6 +424,8 @@ export async function syncTeacherSheet(
   }
 
   // 3. tier 오버라이드 일괄 저장 (배열 형식 — 분반별 분리 지원)
+  //   사용자가 학생 상세 페이지에서 직접 추가한 row 는 is_manual=true 라
+  //   서버 사이드에서 skip 됨. skip 된 수는 응답의 protectedCount 로 받음.
   const overrideList = Object.values(tierOverrides);
   if (overrideList.length > 0) {
     try {
@@ -430,8 +438,18 @@ export async function syncTeacherSheet(
         const err = await tierRes.json();
         console.warn("[sync] tier 오버라이드 저장 실패:", err.error);
       } else {
+        const json = (await tierRes.json()) as {
+          count?: number;
+          protectedCount?: number;
+        };
+        const protectedN = json.protectedCount || 0;
+        // 보호 카운트는 모든 month 결과에 동일하게 누적 (sync 호출이 전체 단위라
+        //   month 별 분리가 어렵고, UI 가 첫 month 만 봐도 충분).
+        if (protectedN > 0) {
+          for (const m of result.months) m.tierProtected += protectedN;
+        }
         console.log(
-          `[sync] tier 오버라이드 저장 완료: ${overrideList.length}건 (분반별 분리 포함)`
+          `[sync] tier 오버라이드 저장 완료: ${json.count || 0}건 적용 / 보호 ${protectedN}건`
         );
       }
     } catch (e) {

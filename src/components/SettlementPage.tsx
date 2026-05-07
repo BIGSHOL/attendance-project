@@ -276,6 +276,7 @@ export default function SettlementPage() {
           if (m.memoCount > 0) parts.push(`메모 ${m.memoCount}`);
           if (m.tierMatched > 0) parts.push(`tier ${m.tierMatched}`);
           if (m.tierUnmatched > 0) parts.push(`tier 실패 ${m.tierUnmatched}`);
+          if (m.tierProtected > 0) parts.push(`보호 ${m.tierProtected}`);
           lines.push(`  - ${m.sheetName}: ${parts.join(" · ")}`);
         }
       }
@@ -1820,6 +1821,14 @@ export default function SettlementPage() {
                                   {m.sheetName} · 학생 {m.matched}/{m.total}
                                   {m.memoCount > 0 && ` · 메모 ${m.memoCount}`}
                                   {m.tierMatched > 0 && ` · tier ${m.tierMatched}`}
+                                  {m.tierProtected > 0 && (
+                                    <span
+                                      className="text-blue-600 dark:text-blue-400"
+                                      title="학생 상세 페이지에서 직접 추가한 분반 — 시트 sync 가 덮어쓰지 않음"
+                                    >
+                                      {" · 보호 "}{m.tierProtected}
+                                    </span>
+                                  )}
                                 </>
                               )}
                             </div>

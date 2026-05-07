@@ -1851,6 +1851,14 @@ export default function AttendancePage() {
                       )}
                     </span>
                   )}
+                  {m.tierProtected > 0 && (
+                    <span
+                      className="text-blue-600"
+                      title="학생 상세 페이지에서 직접 추가한 분반 — 덮어쓰지 않음"
+                    >
+                      {" · 보호 "}{m.tierProtected}
+                    </span>
+                  )}
                 </span>
               )}
             </div>
