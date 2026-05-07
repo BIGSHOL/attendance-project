@@ -91,6 +91,11 @@ interface Props {
    *   해당 dateKey 셀에 반투명 파란 배경 (활성 셀은 별도 처리).
    */
   selectedDateKeys?: Set<string>;
+  /**
+   * 활성 셀의 드래그 채우기 핸들 mousedown 콜백 (audit C).
+   *   부모(AttendanceTable) 가 document mousemove 추적 시작.
+   */
+  onDragFillStart?: () => void;
 }
 
 function StudentRowImpl({
@@ -125,6 +130,7 @@ function StudentRowImpl({
   onShowBreakdown,
   copiedDateKey,
   selectedDateKeys,
+  onDragFillStart,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -456,6 +462,23 @@ function StudentRowImpl({
                 className="pointer-events-none absolute inset-0 z-30 ring-2 ring-inset ring-blue-600 animate-pulse"
               />
             )}
+            {/* 드래그 채우기 핸들 — 활성 셀 우하단 작은 사각형 (시트 fill handle).
+                cellInputBuffer 입력 중에는 표시 안 함 (input 영역 침범 방지). */}
+            {isActive &&
+              cellInputBuffer === undefined &&
+              onDragFillStart && (
+                <span
+                  role="button"
+                  aria-label="드래그하여 옆 셀에 같은 값 채우기"
+                  title="드래그하여 옆 셀에 같은 값 채우기"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onDragFillStart();
+                  }}
+                  className="absolute right-[-3px] bottom-[-3px] z-40 h-2 w-2 cursor-crosshair bg-blue-700 ring-1 ring-white"
+                />
+              )}
             {/* Ctrl+C 로 복사된 셀: 시트의 점선 marching ants 와 유사 */}
             {isCopied && !isActive && (
               <span

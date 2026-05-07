@@ -182,6 +182,12 @@ export default function AttendanceTable({
     dateKey: string;
   } | null>(null);
 
+  // 시트 드래그 채우기 — 활성 셀 우하단 핸들에서 시작.
+  //   true 면 mousemove 로 selectionFocus 갱신 (Task B 시각화 재사용).
+  //   mouseup 시 시작 셀 값을 selection 영역 전체에 채우고 종료.
+  const [isDragFilling, setIsDragFilling] = useState(false);
+  const dragFillStartValueRef = useRef<number | null>(null);
+
   // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
   // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
   // (renderRows 의 로직을 그대로 재현)
@@ -478,6 +484,57 @@ export default function AttendanceTable({
     },
     [selectedKeys, setCellValue]
   );
+
+  /**
+   * 드래그 채우기 시작 — 활성 셀 우하단 핸들 mousedown 콜백.
+   *   시작 시점 활성 셀 값 보존 + isDragFilling=true.
+   *   document mousemove 가 selectionFocus 갱신, mouseup 이 commit.
+   */
+  const handleDragFillStart = useCallback(() => {
+    if (!activeCell) return;
+    const s = studentsRef.current.find((x) => x.id === activeCell.studentId);
+    const v = s?.attendance?.[activeCell.dateKey];
+    dragFillStartValueRef.current = typeof v === "number" ? v : null;
+    setIsDragFilling(true);
+    setSelectionFocus(null); // 드래그 시작 시 single cell 부터
+  }, [activeCell]);
+
+  // 드래그 채우기 — document level mousemove/mouseup.
+  //   elementFromPoint 로 hover 중인 셀 추출 → data-cell-key → selectionFocus.
+  useEffect(() => {
+    if (!isDragFilling) return;
+    const onMove = (e: MouseEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as
+        | HTMLElement
+        | null;
+      if (!el) return;
+      // td 또는 자식 안에서 가장 가까운 data-cell-key 찾기
+      const cellEl = el.closest<HTMLElement>("[data-cell-key]");
+      if (!cellEl) return;
+      const key = cellEl.getAttribute("data-cell-key");
+      if (!key) return;
+      const sep = key.lastIndexOf("|");
+      if (sep < 0) return;
+      const sid = key.slice(0, sep);
+      const dk = key.slice(sep + 1);
+      setSelectionFocus({ studentId: sid, dateKey: dk });
+    };
+    const onUp = () => {
+      // commit — selection 영역 전체에 시작값 채우기
+      if (selectedKeys.size >= 1) {
+        applyValueToSelection(dragFillStartValueRef.current);
+      }
+      setIsDragFilling(false);
+      setSelectionFocus(null);
+      dragFillStartValueRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [isDragFilling, selectedKeys, applyValueToSelection]);
 
   // 학생 ID → 그 학생 행에서 선택된 dateKey set (StudentRow 에 직접 prop 전달용).
   //   selectedKeys 전체를 매번 prop drill 하면 모든 행 re-render 됨 →
@@ -834,6 +891,7 @@ export default function AttendanceTable({
               : undefined
           }
           selectedDateKeys={selectedByStudent.get(student.id)}
+          onDragFillStart={handleDragFillStart}
         />
       ));
     }
