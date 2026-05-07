@@ -47,7 +47,15 @@ interface Props {
   /** 과목별 단위: 영어=U(유닛), 그 외=T(타임) */
   unit?: "U" | "T";
   onHideStudent?: (studentId: string) => void;
-  onCellClick: (studentId: string, dateKey: string) => void;
+  /**
+   * 셀 클릭 — extendSelection true 시 Shift+클릭 (범위 확장).
+   *   부모(AttendanceTable)에서 anchor 유지, focus 만 갱신.
+   */
+  onCellClick: (
+    studentId: string,
+    dateKey: string,
+    extendSelection?: boolean
+  ) => void;
   onCellRightClick: (e: React.MouseEvent, studentId: string, dateKey: string) => void;
   /** 다른 사용자가 편집 중인 셀 정보 */
   editingByPeers?: Map<string, { email: string; name: string }>;
@@ -78,6 +86,11 @@ interface Props {
    *   해당 행의 dateKey 면 그 셀에 점선 표시.
    */
   copiedDateKey?: string;
+  /**
+   * 범위 선택 중인 dateKey 집합 — 이 행의 학생 ID 기준으로 미리 필터된 set.
+   *   해당 dateKey 셀에 반투명 파란 배경 (활성 셀은 별도 처리).
+   */
+  selectedDateKeys?: Set<string>;
 }
 
 function StudentRowImpl({
@@ -111,6 +124,7 @@ function StudentRowImpl({
   onCellInputAction,
   onShowBreakdown,
   copiedDateKey,
+  selectedDateKeys,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -409,12 +423,13 @@ function StudentRowImpl({
 
         const isActive = activeDateKey === dateKey;
         const isCopied = copiedDateKey === dateKey;
+        const isSelected = !!selectedDateKeys?.has(dateKey) && !isActive;
         return (
           <td
             key={dateKey}
             data-cell-key={`${student.id}|${dateKey}`}
             title={cellTitle || (isCopied ? "Ctrl+C 복사됨 — Ctrl+V 로 붙여넣기" : undefined)}
-            onClick={() => isValid && onCellClick(student.id, dateKey)}
+            onClick={(e) => isValid && onCellClick(student.id, dateKey, e.shiftKey)}
             onContextMenu={(e) => isValid && onCellRightClick(e, student.id, dateKey)}
             className={`relative text-center select-none border-r border-b border-zinc-300 transition-colors ${
               isValid ? "cursor-pointer hover:brightness-95" : "cursor-not-allowed"
@@ -446,6 +461,13 @@ function StudentRowImpl({
               <span
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 z-30 border-2 border-dashed border-blue-500"
+              />
+            )}
+            {/* 범위 선택 — 반투명 파란 오버레이 (시트 selection 과 동등) */}
+            {isSelected && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-20 bg-blue-500/20 ring-1 ring-blue-400/40"
               />
             )}
             {/* 첫수업 / 반이동(from) 뱃지 */}

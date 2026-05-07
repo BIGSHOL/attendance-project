@@ -173,6 +173,15 @@ export default function AttendanceTable({
   const clipboardCellRef = useRef<{ value: number | null } | null>(null);
   const [copiedCellKey, setCopiedCellKey] = useState<string | null>(null);
 
+  // 시트 범위 선택 — activeCell(anchor) + selectionFocus 사이 사각형.
+  //   selectionFocus === null → single cell 선택 (= activeCell).
+  //   Shift+클릭 / Shift+방향키로 focus 갱신.
+  //   범위 입력 시 모든 셀에 동일 값 적용.
+  const [selectionFocus, setSelectionFocus] = useState<{
+    studentId: string;
+    dateKey: string;
+  } | null>(null);
+
   // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
   // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
   // (renderRows 의 로직을 그대로 재현)
@@ -299,8 +308,13 @@ export default function AttendanceTable({
   );
 
   const handleCellClick = useCallback(
-    (studentId: string, dateKey: string) => {
-      // 다른 셀 클릭 시: 이전 버퍼가 있으면 기존 셀에 커밋
+    (studentId: string, dateKey: string, extendSelection: boolean = false) => {
+      // Shift+클릭: 활성 셀(anchor)은 유지, focus 만 갱신 → 범위 선택.
+      if (extendSelection && activeCell) {
+        setSelectionFocus({ studentId, dateKey });
+        return;
+      }
+      // 일반 클릭: anchor 변경 + 기존 범위 해제 + 입력 버퍼 커밋
       setActiveCell((prev) => {
         if (
           prev &&
@@ -315,9 +329,10 @@ export default function AttendanceTable({
         }
         return { studentId, dateKey };
       });
+      setSelectionFocus(null);
       setCellInput(null);
     },
-    [cellInput, setCellValue]
+    [cellInput, setCellValue, activeCell]
   );
 
   // 입력 모드(<input>) onChange 콜백 — 버퍼 갱신
@@ -404,12 +419,86 @@ export default function AttendanceTable({
     dateKeysRef.current = dateKeysForNav;
   });
 
-  // 월/과목 변경 시 활성 셀·입력 버퍼·undo 스택 리셋
+  // 월/과목 변경 시 활성 셀·입력 버퍼·undo 스택·선택 범위 리셋
   useEffect(() => {
     setActiveCell(null);
     setCellInput(null);
+    setSelectionFocus(null);
     undoStackRef.current = [];
   }, [year, month, subject]);
+
+  // 선택 범위 사각형 — anchor(activeCell) ↔ focus(selectionFocus) 기준으로
+  //   navStudents × dates 좌표 공간에서 모든 셀 키 집합을 만든다.
+  //   selectionFocus 가 null 이거나 anchor 와 같으면 single cell 선택.
+  const selectedKeys = useMemo<Set<string>>(() => {
+    if (!activeCell) return new Set();
+    const focus = selectionFocus || activeCell;
+    if (
+      focus.studentId === activeCell.studentId &&
+      focus.dateKey === activeCell.dateKey
+    ) {
+      return new Set([`${activeCell.studentId}|${activeCell.dateKey}`]);
+    }
+    const stus = navStudents;
+    const dks = dateKeysForNav;
+    const rA = stus.findIndex((s) => s.id === activeCell.studentId);
+    const rB = stus.findIndex((s) => s.id === focus.studentId);
+    const cA = dks.indexOf(activeCell.dateKey);
+    const cB = dks.indexOf(focus.dateKey);
+    if (rA < 0 || rB < 0 || cA < 0 || cB < 0) {
+      return new Set([`${activeCell.studentId}|${activeCell.dateKey}`]);
+    }
+    const r1 = Math.min(rA, rB);
+    const r2 = Math.max(rA, rB);
+    const c1 = Math.min(cA, cB);
+    const c2 = Math.max(cA, cB);
+    const out = new Set<string>();
+    for (let r = r1; r <= r2; r++) {
+      const s = stus[r];
+      if (!s) continue;
+      for (let c = c1; c <= c2; c++) {
+        const dk = dks[c];
+        if (dk) out.add(`${s.id}|${dk}`);
+      }
+    }
+    return out;
+  }, [activeCell, selectionFocus, navStudents, dateKeysForNav]);
+
+  // 범위 일괄 적용 — selectedKeys 의 모든 셀에 동일 값 (undo 기록 포함).
+  const applyValueToSelection = useCallback(
+    (value: number | null) => {
+      if (selectedKeys.size === 0) return;
+      for (const key of selectedKeys) {
+        const sep = key.lastIndexOf("|");
+        if (sep < 0) continue;
+        const sid = key.slice(0, sep);
+        const dk = key.slice(sep + 1);
+        setCellValue(sid, dk, value);
+      }
+    },
+    [selectedKeys, setCellValue]
+  );
+
+  // 학생 ID → 그 학생 행에서 선택된 dateKey set (StudentRow 에 직접 prop 전달용).
+  //   selectedKeys 전체를 매번 prop drill 하면 모든 행 re-render 됨 →
+  //   per-student 분할 후 동일 student ID 행만 변경된 set 받도록.
+  const selectedByStudent = useMemo<Map<string, Set<string>>>(() => {
+    const m = new Map<string, Set<string>>();
+    if (selectedKeys.size <= 1) return m;
+    for (const key of selectedKeys) {
+      const sep = key.lastIndexOf("|");
+      if (sep < 0) continue;
+      const sid = key.slice(0, sep);
+      const dk = key.slice(sep + 1);
+      let s = m.get(sid);
+      if (!s) {
+        s = new Set();
+        m.set(sid, s);
+      }
+      s.add(dk);
+    }
+    return m;
+  }, [selectedKeys]);
 
   // 활성 셀이 화면 밖이면 자동 스크롤
   useEffect(() => {
@@ -490,17 +579,40 @@ export default function AttendanceTable({
         const newCol = Math.max(0, Math.min(dks.length - 1, col + dx));
         const ns = stus[newRow];
         const nk = dks[newCol];
-        if (ns && nk) setActiveCell({ studentId: ns.id, dateKey: nk });
+        if (ns && nk) {
+          setActiveCell({ studentId: ns.id, dateKey: nk });
+          setSelectionFocus(null); // 일반 이동 → 범위 해제
+        }
+      };
+
+      // Shift + 방향키 — anchor 유지, focus 만 이동 (범위 확장).
+      //   anchor 는 activeCell, focus 는 selectionFocus 또는 anchor.
+      const extendFocus = (dx: number, dy: number) => {
+        const stus = visibleStudentsRef.current;
+        const dks = dateKeysRef.current;
+        const cur = selectionFocus || activeCell;
+        const row = stus.findIndex((s) => s.id === cur.studentId);
+        const col = dks.indexOf(cur.dateKey);
+        if (row < 0 || col < 0) return;
+        const newRow = Math.max(0, Math.min(stus.length - 1, row + dy));
+        const newCol = Math.max(0, Math.min(dks.length - 1, col + dx));
+        const ns = stus[newRow];
+        const nk = dks[newCol];
+        if (ns && nk) setSelectionFocus({ studentId: ns.id, dateKey: nk });
       };
 
       // 버퍼 커밋: 현재 cellInput 을 파싱해 셀에 저장. 빈/잘못된 값이면 noop.
+      //   범위 선택이 다중이면 모든 셀에 동일 값 적용 (시트 Ctrl+Enter 와 동등).
       const commitBuffer = () => {
         if (cellInput === null) return;
         const trimmed = cellInput.trim();
         setCellInput(null);
         if (trimmed === "" || trimmed === ".") return;
         const n = Number(trimmed);
-        if (!isNaN(n)) {
+        if (isNaN(n)) return;
+        if (selectedKeys.size > 1) {
+          applyValueToSelection(n);
+        } else {
           setCellValue(activeCell.studentId, activeCell.dateKey, n);
         }
       };
@@ -520,7 +632,7 @@ export default function AttendanceTable({
 
       // Backspace / Delete
       //   - 버퍼 입력 중이면 마지막 글자 제거 (빈 문자열이 되면 null 로)
-      //   - 입력 중이 아니면 셀 값 초기화
+      //   - 입력 중이 아니면 셀 값 초기화 (범위 선택 시 모든 셀)
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (cellInput !== null) {
@@ -529,35 +641,55 @@ export default function AttendanceTable({
             const next = prev.slice(0, -1);
             return next.length === 0 ? null : next;
           });
+        } else if (selectedKeys.size > 1) {
+          applyValueToSelection(null);
         } else {
           setCellValue(activeCell.studentId, activeCell.dateKey, null);
         }
         return;
       }
 
-      // 방향키 / Tab / Enter — 버퍼 있으면 커밋 후 이동
+      // 방향키 / Tab / Enter — 버퍼 있으면 커밋 후 이동.
+      //   Shift+방향키 → focus 만 이동 (범위 확장, 시트와 동일).
+      //   Tab/Enter 의 Shift 는 역방향 이동 의미라 범위 확장에 사용 안 함.
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        commitBuffer();
-        moveActive(-1, 0);
+        if (e.shiftKey) {
+          extendFocus(-1, 0);
+        } else {
+          commitBuffer();
+          moveActive(-1, 0);
+        }
         return;
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
-        commitBuffer();
-        moveActive(1, 0);
+        if (e.shiftKey) {
+          extendFocus(1, 0);
+        } else {
+          commitBuffer();
+          moveActive(1, 0);
+        }
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        commitBuffer();
-        moveActive(0, -1);
+        if (e.shiftKey) {
+          extendFocus(0, -1);
+        } else {
+          commitBuffer();
+          moveActive(0, -1);
+        }
         return;
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        commitBuffer();
-        moveActive(0, 1);
+        if (e.shiftKey) {
+          extendFocus(0, 1);
+        } else {
+          commitBuffer();
+          moveActive(0, 1);
+        }
         return;
       }
       if (e.key === "Tab") {
@@ -568,17 +700,28 @@ export default function AttendanceTable({
       }
       if (e.key === "Enter") {
         e.preventDefault();
+        // Ctrl+Enter — 범위 선택 시 anchor 값을 전체에 복사 (시트 패턴).
+        if ((e.ctrlKey || e.metaKey) && selectedKeys.size > 1 && cellInput === null) {
+          const s = studentsRef.current.find(
+            (x) => x.id === activeCell.studentId
+          );
+          const v = s?.attendance?.[activeCell.dateKey];
+          applyValueToSelection(typeof v === "number" ? v : null);
+          return;
+        }
         commitBuffer();
         moveActive(0, e.shiftKey ? -1 : 1);
         return;
       }
-      // Esc — 버퍼 있으면 취소, 복사 표시 있으면 해제, 둘 다 없으면 비활성
+      // Esc — 버퍼 → 복사 → 범위 선택 → 활성 셀 순으로 해제.
       if (e.key === "Escape") {
         e.preventDefault();
         if (cellInput !== null) {
           setCellInput(null);
         } else if (copiedCellKey !== null) {
           setCopiedCellKey(null);
+        } else if (selectionFocus !== null) {
+          setSelectionFocus(null);
         } else {
           setActiveCell(null);
         }
@@ -587,7 +730,16 @@ export default function AttendanceTable({
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeCell, contextMenu, setCellValue, cellInput, copiedCellKey]);
+  }, [
+    activeCell,
+    contextMenu,
+    setCellValue,
+    cellInput,
+    copiedCellKey,
+    selectionFocus,
+    selectedKeys,
+    applyValueToSelection,
+  ]);
 
   // 고정 컬럼 수 계산
   // 기본: #, 이름, 학교, 요일 (4) + 출석, 등록 (2) = 6
@@ -681,6 +833,7 @@ export default function AttendanceTable({
               ? copiedCellKey.slice(student.id.length + 1)
               : undefined
           }
+          selectedDateKeys={selectedByStudent.get(student.id)}
         />
       ));
     }
@@ -768,6 +921,7 @@ export default function AttendanceTable({
                   ? copiedCellKey.slice(student.id.length + 1)
                   : undefined
               }
+              selectedDateKeys={selectedByStudent.get(student.id)}
             />
           );
           globalIdx++;
@@ -781,6 +935,39 @@ export default function AttendanceTable({
   };
 
   const contextStudent = contextMenu ? students.find((s) => s.id === contextMenu.studentId) : null;
+
+  // 선택 범위 통계 — 카운트 (시트 G 에서 sum/avg 도 추가 예정).
+  const selectionStats = useMemo(() => {
+    if (selectedKeys.size <= 1) return null;
+    let count = 0;
+    let nonEmpty = 0;
+    let sum = 0;
+    let max = -Infinity;
+    let min = Infinity;
+    for (const key of selectedKeys) {
+      const sep = key.lastIndexOf("|");
+      if (sep < 0) continue;
+      const sid = key.slice(0, sep);
+      const dk = key.slice(sep + 1);
+      const s = students.find((x) => x.id === sid);
+      const v = s?.attendance?.[dk];
+      count++;
+      if (typeof v === "number") {
+        nonEmpty++;
+        sum += v;
+        if (v > max) max = v;
+        if (v < min) min = v;
+      }
+    }
+    return {
+      count,
+      nonEmpty,
+      sum,
+      avg: nonEmpty > 0 ? sum / nonEmpty : 0,
+      max: nonEmpty > 0 ? max : 0,
+      min: nonEmpty > 0 ? min : 0,
+    };
+  }, [selectedKeys, students]);
 
   return (
     <>
@@ -897,6 +1084,38 @@ export default function AttendanceTable({
           onSelectColor={(c) => onCellColorChange(contextMenu.studentId, contextMenu.dateKey, c)}
           onClose={() => setContextMenu(null)}
         />
+      )}
+      {/* 선택 범위 통계 — 시트 우하단 selection sum 대체 (audit G).
+          selectedKeys.size > 1 일 때만 표시. fixed 위치, 사용자 입력 방해 X. */}
+      {selectionStats && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-sm border border-blue-300 bg-white px-3 py-1.5 text-xs shadow-lg dark:border-blue-700 dark:bg-zinc-900">
+          <span className="font-bold text-blue-700 dark:text-blue-300">
+            🔢 선택 {selectionStats.count}셀
+          </span>
+          <span className="text-zinc-500">·</span>
+          <span className="text-zinc-700 dark:text-zinc-300">
+            <b>합계</b> {selectionStats.sum.toFixed(1)}
+          </span>
+          <span className="text-zinc-500">·</span>
+          <span className="text-zinc-700 dark:text-zinc-300">
+            <b>평균</b> {selectionStats.avg.toFixed(2)}
+          </span>
+          <span className="text-zinc-500">·</span>
+          <span className="text-zinc-700 dark:text-zinc-300">
+            값있음 {selectionStats.nonEmpty}
+          </span>
+          {selectionStats.nonEmpty > 0 && (
+            <>
+              <span className="text-zinc-500">·</span>
+              <span className="text-[10px] text-zinc-500">
+                min {selectionStats.min} / max {selectionStats.max}
+              </span>
+            </>
+          )}
+          <span className="ml-1 text-[10px] text-zinc-400">
+            (숫자 입력 → 일괄 적용 · Esc 해제)
+          </span>
+        </div>
       )}
     </>
   );
