@@ -68,6 +68,11 @@ interface Props {
       | "commit-tab-back"
       | "cancel"
   ) => void;
+  /**
+   * 정산 breakdown 모달 트리거 (audit #6).
+   *   학생 행 ℹ 버튼 클릭 시 부모에서 모달 열기.
+   */
+  onShowBreakdown?: (studentId: string) => void;
 }
 
 function StudentRowImpl({
@@ -99,6 +104,7 @@ function StudentRowImpl({
   cellInputBuffer,
   onCellInputChange,
   onCellInputAction,
+  onShowBreakdown,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -173,6 +179,20 @@ function StudentRowImpl({
         {!hideIdentity && (
           <div className="flex items-center gap-1">
             <span>{student.name}</span>
+            {/* breakdown 버튼 (audit #6) — 시트 N6 수식 단계별 시각화 */}
+            {onShowBreakdown && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onShowBreakdown(student.id);
+                }}
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-zinc-400 hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-950 dark:hover:text-blue-300"
+                title="정산 계산 breakdown — 시트 N6 수식 단계별"
+              >
+                ℹ
+              </button>
+            )}
             {isNew && (
               <span
                 className="inline-flex items-center gap-0.5 rounded-sm bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 px-1.5 py-0.5 text-[11px] font-black text-amber-900 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse ring-1 ring-amber-500"

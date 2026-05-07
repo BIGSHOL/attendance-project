@@ -53,6 +53,10 @@ import dynamic from "next/dynamic";
 // 큰 모달들은 초기 번들에서 분리 — 열릴 때 로드
 const SettlementModal = dynamic(() => import("./attendance/SettlementModal"), { ssr: false });
 const SessionSettingsModal = dynamic(() => import("./attendance/SessionSettingsModal"), { ssr: false });
+const StudentBreakdownModal = dynamic(
+  () => import("./attendance/StudentBreakdownModal"),
+  { ssr: false }
+);
 
 type SortMode = "class" | "name" | "day";
 
@@ -131,6 +135,10 @@ export default function AttendancePage() {
   // 모달
   const [isSettlementOpen, setSettlementOpen] = useState(false);
   const [isSessionSettingsOpen, setSessionSettingsOpen] = useState(false);
+  // 정산 breakdown 모달 (audit #6) — student.id 보유 시 열림
+  const [breakdownStudentId, setBreakdownStudentId] = useState<string | null>(
+    null
+  );
 
   // 급여 설정 (teacher_settings.ratios 와 자동 병합됨)
   const { config: salaryConfig } = useSalaryConfig();
@@ -1829,6 +1837,7 @@ export default function AttendancePage() {
             onHomeworkChange={handleHomeworkChange}
             editingByPeers={editingByPeers}
             setEditingCell={setEditingCell}
+            onShowBreakdown={setBreakdownStudentId}
           />
         )}
       </div>
@@ -1851,6 +1860,48 @@ export default function AttendancePage() {
         year={year}
         subjects={subjects}
         initialSubject={selectedSubject}
+      />
+      {/* 정산 breakdown 모달 (audit #6) — 시트 N6 수식 단계별 시각화 */}
+      <StudentBreakdownModal
+        isOpen={!!breakdownStudentId}
+        onClose={() => setBreakdownStudentId(null)}
+        student={
+          breakdownStudentId
+            ? studentRows.find((s) => s.id === breakdownStudentId) || null
+            : null
+        }
+        year={year}
+        month={month}
+        dates={
+          viewMode === "session" && selectedSession
+            ? expandSessionDatesContiguous(selectedSession)
+            : getDaysInMonth(year, month)
+        }
+        subject={selectedSubject}
+        salaryConfig={salaryConfig}
+        tierOverrideId={
+          breakdownStudentId ? tierOverrides[breakdownStudentId] : undefined
+        }
+        teacherName={selectedTeacher?.name}
+        termCount={
+          breakdownStudentId ? termCountMap.get(breakdownStudentId) : undefined
+        }
+        paidAmount={
+          breakdownStudentId
+            ? paidAmountByStudent.get(breakdownStudentId)
+            : undefined
+        }
+        actualSalary={
+          breakdownStudentId
+            ? actualSalaryByStudent.get(breakdownStudentId)
+            : undefined
+        }
+        blogPenalty={blogPenalty}
+        unitPriceOverride={
+          breakdownStudentId
+            ? unitPriceByStudent.get(breakdownStudentId)
+            : undefined
+        }
       />
     </div>
   );

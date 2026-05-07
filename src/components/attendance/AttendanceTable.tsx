@@ -54,6 +54,11 @@ interface Props {
   /** 다른 사용자가 편집 중인 셀 (key: "studentId|dateKey") → 편집자 정보 */
   editingByPeers?: Map<string, { email: string; name: string }>;
   setEditingCell?: (studentId: string, date: string, editing: boolean) => void;
+  /**
+   * 정산 breakdown 모달 트리거 (audit #6).
+   *   학생 ℹ 버튼 클릭 시 부모(AttendancePage) 가 모달 열도록.
+   */
+  onShowBreakdown?: (studentId: string) => void;
 }
 
 export default function AttendanceTable({
@@ -86,6 +91,7 @@ export default function AttendanceTable({
   onCellColorChange,
   onHomeworkChange,
   editingByPeers,
+  onShowBreakdown,
 }: Props) {
   const allDates = useMemo(
     () => overrideDates && overrideDates.length > 0 ? overrideDates : getDaysInMonth(year, month),
@@ -635,6 +641,7 @@ export default function AttendanceTable({
           }
           onCellInputChange={handleCellInputChange}
           onCellInputAction={handleCellInputAction}
+          onShowBreakdown={onShowBreakdown}
         />
       ));
     }
@@ -716,6 +723,7 @@ export default function AttendanceTable({
                   ? cellInput
                   : undefined
               }
+              onShowBreakdown={onShowBreakdown}
             />
           );
           globalIdx++;
