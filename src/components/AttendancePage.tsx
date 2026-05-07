@@ -68,6 +68,11 @@ const FindReplaceModal = dynamic(
   () => import("./attendance/FindReplaceModal"),
   { ssr: false }
 );
+// 분반 quick-add 모달 — 출석부에서 즉시 분반 추가
+const TierOverrideModal = dynamic(
+  () => import("./students/TierOverrideModal"),
+  { ssr: false }
+);
 
 type SortMode = "class" | "name" | "day";
 
@@ -181,6 +186,8 @@ export default function AttendancePage() {
   );
   // 메모 찾기/바꾸기 모달 (audit E) — Ctrl+H 또는 버튼으로 열기
   const [isFindReplaceOpen, setFindReplaceOpen] = useState(false);
+  // 분반 quick-add 모달 — 학생 행 🔧 버튼으로 열림 (관리자만)
+  const [tierAddStudentId, setTierAddStudentId] = useState<string | null>(null);
   // Ctrl+H — 메모 찾기/바꾸기 (시트 단축키와 동일).
   //   브라우저 기본 동작(history) 가로채기.
   useEffect(() => {
@@ -1924,6 +1931,7 @@ export default function AttendancePage() {
             editingByPeers={editingByPeers}
             setEditingCell={setEditingCell}
             onShowBreakdown={setBreakdownStudentId}
+            onAddTier={isAdmin ? setTierAddStudentId : undefined}
             onColumnResize={handleColumnResize}
           />
         )}
@@ -2002,6 +2010,24 @@ export default function AttendancePage() {
         }
         onMemoChange={handleMemoChange}
       />
+      {/* 분반 quick-add 모달 — 출석부에서 학생 행 🔧 버튼으로 열림.
+          현재 선생님(selectedTeacherId) 자동 prefill — 사용자는 분반 이름 + tier 만 선택. */}
+      {tierAddStudentId && (
+        <TierOverrideModal
+          isOpen={true}
+          onClose={() => setTierAddStudentId(null)}
+          studentId={tierAddStudentId}
+          studentName={
+            studentRows.find((s) => (s.id || "").split("|")[0] === tierAddStudentId)
+              ?.name
+          }
+          prefilledTeacherId={selectedTeacherId}
+          onSaved={() => {
+            // 출석부 화면 즉시 갱신 — student_tier_overrides 새로 로드
+            refetchTierOverrides();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -60,6 +60,11 @@ interface Props {
    */
   onShowBreakdown?: (studentId: string) => void;
   /**
+   * 분반 quick-add (관리자만).
+   *   학생 행 🔧 버튼 클릭 시 부모(AttendancePage) 가 TierOverrideModal 열기.
+   */
+  onAddTier?: (studentId: string) => void;
+  /**
    * 일자 컬럼 폭 드래그 리사이즈 (audit H).
    *   thead 핸들 드래그 → 새 폭(px) 호출. 부모가 cellWidthPx 갱신.
    */
@@ -97,6 +102,7 @@ export default function AttendanceTable({
   onHomeworkChange,
   editingByPeers,
   onShowBreakdown,
+  onAddTier,
   onColumnResize,
 }: Props) {
   const allDates = useMemo(
@@ -939,6 +945,7 @@ export default function AttendanceTable({
           onCellInputChange={handleCellInputChange}
           onCellInputAction={handleCellInputAction}
           onShowBreakdown={onShowBreakdown}
+          onAddTier={onAddTier}
           copiedDateKey={
             copiedCellKey && copiedCellKey.startsWith(student.id + "|")
               ? copiedCellKey.slice(student.id.length + 1)
@@ -1028,6 +1035,7 @@ export default function AttendanceTable({
                   : undefined
               }
               onShowBreakdown={onShowBreakdown}
+              onAddTier={onAddTier}
               copiedDateKey={
                 copiedCellKey && copiedCellKey.startsWith(student.id + "|")
                   ? copiedCellKey.slice(student.id.length + 1)

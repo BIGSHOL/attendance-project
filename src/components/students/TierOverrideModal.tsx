@@ -13,6 +13,11 @@ interface Props {
   studentName?: string;
   /** 저장 성공 후 부모 refetch 트리거 */
   onSaved?: () => void;
+  /**
+   * 모달 열 때 선생님 dropdown 자동 prefill (출석부에서 부르면 현재 선택된 선생님).
+   *   사용자가 dropdown 으로 다른 선생님 선택 가능.
+   */
+  prefilledTeacherId?: string;
 }
 
 /**
@@ -35,6 +40,7 @@ export default function TierOverrideModal({
   studentId,
   studentName,
   onSaved,
+  prefilledTeacherId,
 }: Props) {
   const { teachers } = useStaff();
   const { config } = useSalaryConfig();
@@ -45,15 +51,15 @@ export default function TierOverrideModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 모달 열릴 때 입력 리셋
+  // 모달 열릴 때 입력 리셋. prefilledTeacherId 있으면 선생님 dropdown 자동 선택.
   useEffect(() => {
     if (isOpen) {
-      setTeacherId("");
+      setTeacherId(prefilledTeacherId || "");
       setClassName("");
       setSalaryItemId("");
       setError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, prefilledTeacherId]);
 
   // 선택된 선생님의 과목으로 tier 후보 필터.
   //   선택 안 했으면 전체 표시.

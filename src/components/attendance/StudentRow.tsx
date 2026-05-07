@@ -82,6 +82,12 @@ interface Props {
    */
   onShowBreakdown?: (studentId: string) => void;
   /**
+   * 분반 추가 quick-add (관리자만).
+   *   학생 이름 옆 🔧 버튼 클릭 시 부모에서 TierOverrideModal 열기.
+   *   출석부에서 직접 분반 추가 가능 — 학생 페이지 이동 불필요.
+   */
+  onAddTier?: (studentId: string) => void;
+  /**
    * Ctrl+C 로 복사된 셀 — 시트의 점선 테두리 효과 시각화.
    *   해당 행의 dateKey 면 그 셀에 점선 표시.
    */
@@ -128,6 +134,7 @@ function StudentRowImpl({
   onCellInputChange,
   onCellInputAction,
   onShowBreakdown,
+  onAddTier,
   copiedDateKey,
   selectedDateKeys,
   onDragFillStart,
@@ -217,6 +224,22 @@ function StudentRowImpl({
                 title="정산 계산 breakdown — 시트 N6 수식 단계별"
               >
                 ℹ
+              </button>
+            )}
+            {/* 분반 quick-add 버튼 (관리자만) — 출석부에서 바로 다른 단가 분반 추가 */}
+            {onAddTier && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // student.id 가 "{studentId}|{className}" 일 수 있음 — 원본 ID 만 추출
+                  const realId = (student.id || "").split("|")[0];
+                  onAddTier(realId);
+                }}
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] text-zinc-400 hover:bg-emerald-100 hover:text-emerald-700 dark:hover:bg-emerald-950 dark:hover:text-emerald-300"
+                title="분반 추가 (다른 단가 수업) — 학생 페이지 이동 없이 즉시"
+              >
+                🔧
               </button>
             )}
             {isNew && (
