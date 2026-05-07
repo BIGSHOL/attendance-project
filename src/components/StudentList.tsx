@@ -8,8 +8,18 @@ import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { toStatusLabel, toSubjectLabel } from "@/lib/labelMap";
 import Pagination from "./Pagination";
 import { Skeleton, SkeletonTable } from "@/components/ui/Skeleton";
+import ColumnFilter from "./ColumnFilter";
 
 const PAGE_SIZE = 20;
+type SortKey =
+  | "name"
+  | "school"
+  | "grade"
+  | "subject"
+  | "teacher"
+  | "status"
+  | null;
+type SortDir = "asc" | "desc";
 
 export default function StudentList() {
   const { students: allStudents, loading } = useStudents();
@@ -18,6 +28,30 @@ export default function StudentList() {
   const [search, setSearch] = useLocalStorage<string>("studentList.search", "");
   const [checkedSubjects, setCheckedSubjects] = useLocalStorageSet("studentList.subjects");
   const [statusFilter, setStatusFilter] = useLocalStorage<string>("studentList.status", "active");
+
+  // 컬럼별 정렬 (시트 헤더 클릭 정렬, audit D)
+  const [sortKey, setSortKey] = useLocalStorage<SortKey>("studentList.sortKey", null);
+  const [sortDir, setSortDir] = useLocalStorage<SortDir>("studentList.sortDir", "asc");
+  // 컬럼별 드롭다운 필터 (audit F) — value Set 으로 다중 선택
+  const [schoolFilter, setSchoolFilter] = useLocalStorageSet("studentList.schoolFilter");
+  const [gradeFilter, setGradeFilter] = useLocalStorageSet("studentList.gradeFilter");
+  const [teacherFilter, setTeacherFilter] = useLocalStorageSet("studentList.teacherFilter");
+  const NONE_SENTINEL = "\0__NONE__\0";
+
+  /**
+   * ColumnFilter helper — 선택 set 적용.
+   *   비어 있음(set.size === 0) = 전체 통과.
+   *   NONE_SENTINEL 만 = 모두 차단 (사용자가 "전체 해제" 누른 상태).
+   *   그 외 = set 에 포함된 값만 통과.
+   */
+  const passesColumnFilter = (
+    set: Set<string>,
+    value: string | undefined
+  ): boolean => {
+    if (set.size === 0) return true;
+    if (set.size === 1 && set.has(NONE_SENTINEL)) return false;
+    return set.has(value || "");
+  };
 
   // 선생님 계정이면 본인 담당 학생만 노출
   //   enrollment.staffId === 내 staff_id  또는  enrollment.teacher === 내 이름
@@ -63,6 +97,17 @@ export default function StudentList() {
     setPage(1);
   };
 
+  /**
+   * 학생 → 대표 담당선생님 라벨 (다중이면 첫 번째).
+   *   필터/정렬용. 표시는 별도로 모든 선생님 나열.
+   */
+  const teacherLabel = (s: typeof students[number]): string => {
+    const names = Array.from(
+      new Set((s.enrollments || []).map((e) => e.staffId || e.teacher).filter((n): n is string => !!n))
+    );
+    return names[0] || "";
+  };
+
   const filtered = useMemo(() => {
     let list = students;
     if (statusFilter !== "all") {
@@ -78,8 +123,94 @@ export default function StudentList() {
         s.enrollments?.some((e) => effectiveChecked.has(e.subject))
       );
     }
+    // 컬럼 필터 (audit F)
+    list = list.filter((s) => {
+      if (!passesColumnFilter(schoolFilter, s.school)) return false;
+      if (!passesColumnFilter(gradeFilter, s.grade)) return false;
+      if (!passesColumnFilter(teacherFilter, teacherLabel(s))) return false;
+      return true;
+    });
+    // 컬럼 정렬 (audit D)
+    if (sortKey) {
+      const dir = sortDir === "asc" ? 1 : -1;
+      const key = sortKey;
+      list = [...list].sort((a, b) => {
+        const va =
+          key === "name"
+            ? a.name
+            : key === "school"
+              ? a.school || ""
+              : key === "grade"
+                ? a.grade || ""
+                : key === "subject"
+                  ? (a.enrollments?.[0]?.subject || "")
+                  : key === "teacher"
+                    ? teacherLabel(a)
+                    : key === "status"
+                      ? a.status || ""
+                      : "";
+        const vb =
+          key === "name"
+            ? b.name
+            : key === "school"
+              ? b.school || ""
+              : key === "grade"
+                ? b.grade || ""
+                : key === "subject"
+                  ? (b.enrollments?.[0]?.subject || "")
+                  : key === "teacher"
+                    ? teacherLabel(b)
+                    : key === "status"
+                      ? b.status || ""
+                      : "";
+        return va.localeCompare(vb, "ko") * dir;
+      });
+    }
     return list;
-  }, [students, search, effectiveChecked, allSubjects, statusFilter]);
+  }, [
+    students,
+    search,
+    effectiveChecked,
+    allSubjects,
+    statusFilter,
+    schoolFilter,
+    gradeFilter,
+    teacherFilter,
+    sortKey,
+    sortDir,
+  ]);
+
+  // 컬럼별 unique 값 (필터 드롭다운 옵션). 학생 전체에서 추출 — 현재 필터에
+  // 영향받지 않도록 students 기준 (시트와 동일한 UX).
+  const columnValues = useMemo(() => {
+    const schools = new Set<string>();
+    const grades = new Set<string>();
+    const teachers = new Set<string>();
+    for (const s of students) {
+      if (s.school) schools.add(s.school);
+      if (s.grade) grades.add(s.grade);
+      const t = teacherLabel(s);
+      if (t) teachers.add(t);
+    }
+    return {
+      schools: Array.from(schools).sort((a, b) => a.localeCompare(b, "ko")),
+      grades: Array.from(grades).sort((a, b) => a.localeCompare(b, "ko")),
+      teachers: Array.from(teachers).sort((a, b) => a.localeCompare(b, "ko")),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students]);
+
+  // 컬럼 정렬 변경 helper — 같은 컬럼 다시 클릭 시 dir 토글, 다른 컬럼 클릭 시 asc 시작.
+  const handleSort = (key: SortKey, dir: SortDir) => {
+    setSortKey(key);
+    setSortDir(dir);
+    setPage(1);
+  };
+  const wrapColumnFilter =
+    (setter: (next: Set<string>) => void) => (next: Set<string>) => {
+      setter(next);
+      setPage(1);
+    };
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paged = useMemo(
@@ -174,12 +305,78 @@ export default function StudentList() {
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/50">
               <th className="px-4 py-3 text-left font-medium text-zinc-500">#</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">이름</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">학교</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">학년</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">과목</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">담당선생님</th>
-              <th className="px-4 py-3 text-left font-medium text-zinc-500">상태</th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={[]}
+                  selected={new Set()}
+                  onChange={() => {}}
+                  sortKey={sortKey === "name" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("name", d)}
+                >
+                  이름
+                </ColumnFilter>
+              </th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={columnValues.schools}
+                  selected={schoolFilter}
+                  onChange={wrapColumnFilter(setSchoolFilter)}
+                  sortKey={sortKey === "school" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("school", d)}
+                >
+                  학교
+                </ColumnFilter>
+              </th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={columnValues.grades}
+                  selected={gradeFilter}
+                  onChange={wrapColumnFilter(setGradeFilter)}
+                  sortKey={sortKey === "grade" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("grade", d)}
+                >
+                  학년
+                </ColumnFilter>
+              </th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={[]}
+                  selected={new Set()}
+                  onChange={() => {}}
+                  sortKey={sortKey === "subject" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("subject", d)}
+                >
+                  과목
+                </ColumnFilter>
+              </th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={columnValues.teachers}
+                  selected={teacherFilter}
+                  onChange={wrapColumnFilter(setTeacherFilter)}
+                  sortKey={sortKey === "teacher" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("teacher", d)}
+                >
+                  담당선생님
+                </ColumnFilter>
+              </th>
+              <th className="text-left">
+                <ColumnFilter
+                  values={[]}
+                  selected={new Set()}
+                  onChange={() => {}}
+                  sortKey={sortKey === "status" ? sortKey : null}
+                  sortDir={sortDir}
+                  onSort={(d) => handleSort("status", d)}
+                >
+                  상태
+                </ColumnFilter>
+              </th>
             </tr>
           </thead>
           <tbody>
