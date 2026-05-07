@@ -762,6 +762,36 @@ export default function SettlementPage() {
     );
   }, [filteredSettlements]);
 
+  /**
+   * 메타 요약 — 시트 1~3행 미러링 (audit #5).
+   *   비율제 N명 / 블로그 의무·작성·패널티 / 시트 등록 N/T.
+   *   필터된 settlements 기준 — 과목 필터 등이 반영됨.
+   */
+  const metaSummary = useMemo(() => {
+    const commissionN = filteredSettlements.filter(
+      (s) => s.salaryType === "commission" || s.salaryType === "mixed"
+    ).length;
+    const blogRequiredN = filteredSettlements.filter((s) => s.blogRequired).length;
+    const blogPenaltyN = filteredSettlements.filter((s) => s.blogPenalty).length;
+    const blogWroteN = Math.max(0, blogRequiredN - blogPenaltyN);
+
+    const sheetIdSet = new Set(
+      teacherSheets.filter((sh) => sh.sheet_url).map((sh) => sh.teacher_id)
+    );
+    const sheetsRegisteredN = filteredSettlements.filter((s) =>
+      sheetIdSet.has(s.teacher.id)
+    ).length;
+
+    return {
+      commissionN,
+      blogRequiredN,
+      blogWroteN,
+      blogPenaltyN,
+      sheetsRegisteredN,
+      totalN: filteredSettlements.length,
+    };
+  }, [filteredSettlements, teacherSheets]);
+
   // 학생별 시수 검증: 과목별로 납부액 vs 실제 수강 시수 × 기준단가
   const studentChecks = useMemo(() => {
     const monthStr = `${year}-${String(month).padStart(2, "0")}`;
@@ -1199,12 +1229,28 @@ export default function SettlementPage() {
         })}
       </div>
 
-      {/* 전체 합계 카드 */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
+      {/* 전체 합계 카드 — 8개 메타 KPI (시트 1~3행 미러링) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-4">
         <StatCard label="선생님" value={`${filteredSettlements.length}명`} />
         <StatCard label="총 담당학생" value={`${totals.studentCount}명`} />
         <StatCard label="총 출석" value={`${totals.totalAttendance}회`} />
         <StatCard label="총 지급액" value={`${totals.finalSalary.toLocaleString()}원`} highlight />
+        <StatCard
+          label="비율제"
+          value={`${metaSummary.commissionN}명`}
+        />
+        <StatCard
+          label="블로그 의무"
+          value={`${metaSummary.blogWroteN}/${metaSummary.blogRequiredN}명`}
+        />
+        <StatCard
+          label="블로그 패널티"
+          value={`${metaSummary.blogPenaltyN}명`}
+        />
+        <StatCard
+          label="시트 등록"
+          value={`${metaSummary.sheetsRegisteredN}/${metaSummary.totalN}명`}
+        />
       </div>
 
       {/* 선생님별 정산 표 */}

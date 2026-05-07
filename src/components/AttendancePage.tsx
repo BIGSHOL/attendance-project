@@ -28,6 +28,7 @@ import {
   getEffectiveRatio,
   isAttendanceCountable,
   gradeToGroup,
+  subjectToSalarySubject,
 } from "@/lib/salary";
 import {
   findStudentPayments,
@@ -1142,6 +1143,48 @@ export default function AttendancePage() {
     [stats.totalSalary, salaryConfig.incentives, settlement, adminSalaryInfo.salary]
   );
 
+  /**
+   * 학생 분포 기반 비율 요약 (audit #5 — 시트 1~3행 미러링).
+   *   각 학생의 매칭된 tier × 선생님 오버라이드 → effective ratio.
+   *   같은 비율 학생을 모아 분포(주 비율, 범위, 툴팁) 표시.
+   */
+  const studentRatios = useMemo(() => {
+    if (!selectedTeacher || studentRows.length === 0) return null;
+    const counts = new Map<number, number>();
+    const tiers = new Map<number, Set<string>>();
+    for (const s of studentRows) {
+      const setting = matchSalarySetting(
+        s,
+        salaryConfig,
+        subjectToSalarySubject(selectedSubject),
+        tierOverrides[s.id]
+      );
+      if (!setting) continue;
+      const ratio = getEffectiveRatio(setting, salaryConfig, selectedTeacher.name);
+      counts.set(ratio, (counts.get(ratio) || 0) + 1);
+      if (!tiers.has(ratio)) tiers.set(ratio, new Set());
+      tiers.get(ratio)!.add(setting.name);
+    }
+    if (counts.size === 0) return null;
+    const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const ratios = Array.from(counts.keys()).sort((a, b) => a - b);
+    const tooltip = sorted
+      .map(
+        ([r, n]) =>
+          `${r}% — ${n}명 (${Array.from(tiers.get(r) || []).join(", ")})`
+      )
+      .join("\n");
+    return {
+      dominantRatio: sorted[0][0],
+      dominantCount: sorted[0][1],
+      label:
+        ratios.length === 1
+          ? `${ratios[0]}%`
+          : `${ratios[0]}~${ratios[ratios.length - 1]}%`,
+      tooltip,
+    };
+  }, [studentRows, selectedTeacher, salaryConfig, tierOverrides, selectedSubject]);
+
   // 이번 달 신입/퇴원 수
   const { newCount, leavingCount } = useMemo(() => {
     let n = 0, l = 0;
@@ -1427,6 +1470,20 @@ export default function AttendancePage() {
           <span className="font-semibold">학생</span>
           <span className="font-bold">{stats.studentCount}</span>
         </div>
+
+        {/* 비율 분포 — 시트 1~3행 미러링 */}
+        {studentRatios && (
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-sm bg-purple-50 text-purple-700 text-sm dark:bg-purple-950 dark:text-purple-300"
+            title={studentRatios.tooltip}
+          >
+            <span className="font-semibold">비율</span>
+            <span className="font-bold">{studentRatios.label}</span>
+            <span className="text-xs opacity-70">
+              (주 {studentRatios.dominantRatio}% · {studentRatios.dominantCount}명)
+            </span>
+          </div>
+        )}
 
         {/* 출석 합계 */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-emerald-50 text-emerald-700 text-sm dark:bg-emerald-950 dark:text-emerald-300">
