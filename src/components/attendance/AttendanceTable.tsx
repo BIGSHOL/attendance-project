@@ -167,6 +167,12 @@ export default function AttendanceTable({
     Array<{ studentId: string; dateKey: string; oldValue: number | null }>
   >([]);
 
+  // 시트 Ctrl+C / Ctrl+V 대체 — 셀 값 복사 버퍼.
+  //   Ref 로 저장 (값 변경에 react re-render 불필요).
+  //   복사된 셀은 시각적 표시 (점선 테두리) 위해 별도 state 보관.
+  const clipboardCellRef = useRef<{ value: number | null } | null>(null);
+  const [copiedCellKey, setCopiedCellKey] = useState<string | null>(null);
+
   // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
   // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
   // (renderRows 의 로직을 그대로 재현)
@@ -448,6 +454,32 @@ export default function AttendanceTable({
         return;
       }
 
+      // Ctrl/Cmd + C → 활성 셀 값 복사 (앱 내부 버퍼)
+      //   시트의 Ctrl+C 와 동등 — 복사된 셀은 점선 테두리로 표시.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        // 입력 버퍼 중이면 무시 (사용자가 텍스트 선택해 복사하려는 의도일 수 있음)
+        if (cellInput !== null) return;
+        const s = studentsRef.current.find(
+          (x) => x.id === activeCell.studentId
+        );
+        const v = s?.attendance?.[activeCell.dateKey];
+        const value = typeof v === "number" ? v : null;
+        clipboardCellRef.current = { value };
+        setCopiedCellKey(`${activeCell.studentId}|${activeCell.dateKey}`);
+        return;
+      }
+
+      // Ctrl/Cmd + V → 클립보드 값을 활성 셀에 붙여넣기
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        if (cellInput !== null) setCellInput(null);
+        const clip = clipboardCellRef.current;
+        if (clip === null) return;
+        setCellValue(activeCell.studentId, activeCell.dateKey, clip.value);
+        return;
+      }
+
       const moveActive = (dx: number, dy: number) => {
         const stus = visibleStudentsRef.current;
         const dks = dateKeysRef.current;
@@ -540,11 +572,13 @@ export default function AttendanceTable({
         moveActive(0, e.shiftKey ? -1 : 1);
         return;
       }
-      // Esc — 버퍼 있으면 취소, 없으면 비활성
+      // Esc — 버퍼 있으면 취소, 복사 표시 있으면 해제, 둘 다 없으면 비활성
       if (e.key === "Escape") {
         e.preventDefault();
         if (cellInput !== null) {
           setCellInput(null);
+        } else if (copiedCellKey !== null) {
+          setCopiedCellKey(null);
         } else {
           setActiveCell(null);
         }
@@ -553,7 +587,7 @@ export default function AttendanceTable({
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeCell, contextMenu, setCellValue, cellInput]);
+  }, [activeCell, contextMenu, setCellValue, cellInput, copiedCellKey]);
 
   // 고정 컬럼 수 계산
   // 기본: #, 이름, 학교, 요일 (4) + 출석, 등록 (2) = 6
@@ -642,6 +676,11 @@ export default function AttendanceTable({
           onCellInputChange={handleCellInputChange}
           onCellInputAction={handleCellInputAction}
           onShowBreakdown={onShowBreakdown}
+          copiedDateKey={
+            copiedCellKey && copiedCellKey.startsWith(student.id + "|")
+              ? copiedCellKey.slice(student.id.length + 1)
+              : undefined
+          }
         />
       ));
     }
@@ -724,6 +763,11 @@ export default function AttendanceTable({
                   : undefined
               }
               onShowBreakdown={onShowBreakdown}
+              copiedDateKey={
+                copiedCellKey && copiedCellKey.startsWith(student.id + "|")
+                  ? copiedCellKey.slice(student.id.length + 1)
+                  : undefined
+              }
             />
           );
           globalIdx++;

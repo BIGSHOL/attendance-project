@@ -73,6 +73,11 @@ interface Props {
    *   학생 행 ℹ 버튼 클릭 시 부모에서 모달 열기.
    */
   onShowBreakdown?: (studentId: string) => void;
+  /**
+   * Ctrl+C 로 복사된 셀 — 시트의 점선 테두리 효과 시각화.
+   *   해당 행의 dateKey 면 그 셀에 점선 표시.
+   */
+  copiedDateKey?: string;
 }
 
 function StudentRowImpl({
@@ -105,6 +110,7 @@ function StudentRowImpl({
   onCellInputChange,
   onCellInputAction,
   onShowBreakdown,
+  copiedDateKey,
 }: Props) {
   const isNew = isNewInMonth(student, year, month);
   const isLeaving = isLeavingInMonth(student, year, month);
@@ -402,11 +408,12 @@ function StudentRowImpl({
           .join(" | ");
 
         const isActive = activeDateKey === dateKey;
+        const isCopied = copiedDateKey === dateKey;
         return (
           <td
             key={dateKey}
             data-cell-key={`${student.id}|${dateKey}`}
-            title={cellTitle || undefined}
+            title={cellTitle || (isCopied ? "Ctrl+C 복사됨 — Ctrl+V 로 붙여넣기" : undefined)}
             onClick={() => isValid && onCellClick(student.id, dateKey)}
             onContextMenu={(e) => isValid && onCellRightClick(e, student.id, dateKey)}
             className={`relative text-center select-none border-r border-b border-zinc-300 transition-colors ${
@@ -432,6 +439,13 @@ function StudentRowImpl({
               <span
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 z-30 ring-2 ring-inset ring-blue-600 animate-pulse"
+              />
+            )}
+            {/* Ctrl+C 로 복사된 셀: 시트의 점선 marching ants 와 유사 */}
+            {isCopied && !isActive && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-30 border-2 border-dashed border-blue-500"
               />
             )}
             {/* 첫수업 / 반이동(from) 뱃지 */}
