@@ -50,10 +50,54 @@ const SECTIONS: Section[] = [
         </ol>
         <p className="font-semibold mt-3">우클릭 (메모/색상)</p>
         <ul className="list-disc list-inside pl-2 space-y-0.5">
-          <li>셀 우클릭 → 메모 또는 셀 색상 지정</li>
+          <li>셀 우클릭 → 메모 또는 셀 색상 지정 (자주 쓴 메모 자동완성 chip)</li>
           <li>학생 행 # 우클릭 → 해당 학생 숨김 (정산 영향 없음)</li>
           <li>날짜 헤더 우클릭 → 해당 일자 열 숨김</li>
         </ul>
+      </div>
+    ),
+  },
+  {
+    id: "spreadsheet-features",
+    title: "시트 같은 편의 기능",
+    icon: "📋",
+    body: (
+      <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+        <p>
+          Google Sheets 의 핵심 단축키·동작을 그대로 가져왔습니다.
+        </p>
+        <ul className="list-disc list-inside pl-2 space-y-1">
+          <li>
+            <b>복사/붙여넣기</b> — 활성 셀에서 <kbd>Ctrl+C</kbd> →
+            다른 셀로 이동 → <kbd>Ctrl+V</kbd> (복사된 셀은 점선 테두리)
+          </li>
+          <li>
+            <b>범위 선택</b> — <kbd>Shift</kbd>+클릭 또는 <kbd>Shift</kbd>+
+            방향키로 사각 영역 선택 (반투명 파란)
+          </li>
+          <li>
+            <b>일괄 입력</b> — 범위 선택 상태에서 숫자 입력 → 모든 셀에
+            동일 값. <kbd>Backspace</kbd> 로 일괄 비우기. <kbd>Ctrl+Enter</kbd> 로 anchor 값 복사
+          </li>
+          <li>
+            <b>드래그 채우기</b> — 활성 셀 우하단 작은 사각 → 드래그로
+            옆 셀들 채우기
+          </li>
+          <li>
+            <b>찾기/바꾸기</b> — <kbd>Ctrl+H</kbd> → 메모 일괄 검색·치환
+            (대상 체크박스로 선택 가능)
+          </li>
+          <li>
+            <b>선택 통계</b> — 범위 선택 시 우하단에 합계/평균/min/max/카운트 자동 표시
+          </li>
+          <li>
+            <b>컬럼 폭 조절</b> — 일자 헤더 우측 가장자리 드래그
+            (S/M/L 버튼은 자동 reset)
+          </li>
+        </ul>
+        <p className="text-xs text-zinc-500 mt-2">
+          학생/수납 페이지에서는 컬럼 헤더 클릭 → 정렬 + 깔때기 → 다중 필터.
+        </p>
       </div>
     ),
   },
