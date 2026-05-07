@@ -102,6 +102,28 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    id: "quick-tier-add",
+    title: "출석부에서 빠른 분반 추가 🔧",
+    icon: "🔧",
+    body: (
+      <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+        <p>
+          출석부에서 학생 이름 옆에 작은 <b>🔧</b> 버튼이 보이면 (관리자만),
+          클릭해서 학생 페이지로 이동하지 않고 바로 분반 추가 가능합니다.
+        </p>
+        <ul className="list-disc list-inside pl-2 space-y-0.5">
+          <li>현재 선택된 선생님이 자동으로 모달의 dropdown 에 채워짐</li>
+          <li>분반 이름 + tier 만 선택하면 즉시 저장</li>
+          <li>저장 후 출석부 행이 자동으로 두 행으로 분리됨</li>
+        </ul>
+        <p className="text-xs text-zinc-500">
+          학생 상세 페이지의 "🔧 수강 분반" 섹션에서도 동일한 작업 가능 — 두
+          경로 모두 <code className="font-mono">is_manual=true</code> 로 저장.
+        </p>
+      </div>
+    ),
+  },
+  {
     id: "tier-multi-class",
     title: "한 학생, 다른 단가 분반 (다행 분리)",
     icon: "🔧",
