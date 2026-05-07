@@ -439,7 +439,7 @@ export default function TeacherList() {
         </div>
       </div>
 
-      <div className="flex gap-3 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
+      <div className="flex flex-wrap gap-3 mb-3">
         <input
           type="text"
           placeholder="이름 검색"
@@ -450,7 +450,7 @@ export default function TeacherList() {
       </div>
 
       {/* 과목 체크박스 필터 + 미생성 숨기기 토글 */}
-      <div className="flex items-center gap-2 mb-4 overflow-x-auto [&>*]:flex-shrink-0">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         <button
           onClick={toggleAllSubjects}
           className="text-xs px-2 py-1 rounded border border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"

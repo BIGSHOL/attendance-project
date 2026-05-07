@@ -151,6 +151,101 @@ export default function MigrationCheckPage() {
     );
   }, [students, payments]);
 
+  /**
+   * 점검 5 — payments 의 charge_amount 를 tier 단가로 역산해
+   *   결과가 정수(1~16회) 가 안 되는 케이스 추출. salaryConfig 의 단가가
+   *   실제 시트와 다른 경우 (audit v4 #7) 발견 도구.
+   *
+   * 예) 박지율 중등특강 96,000원 청구.
+   *   - DB tier 단가 12,000원 → 8회. 정수 매칭 OK 지만 실제는 4회.
+   *   - 시트 단가 24,000원이 정답.
+   *
+   * 직접 mismatch 자동 발견은 어려우니 운영자가 비교할 수 있도록
+   *   현재 salaryConfig 의 모든 tier 단가를 한 표로 보여줌 + 김민주 시트
+   *   데이터 마스터의 알려진 단가 표와 수동 비교 가이드.
+   */
+  const tierPriceTable = useMemo(() => {
+    const items = salaryConfig.items || [];
+    return items
+      .map((it) => ({
+        id: it.id,
+        name: it.name,
+        subject: it.subject || "?",
+        baseTuition: it.baseTuition || 0,
+        unitPrice: it.unitPrice || it.baseTuition || 0,
+        ratio: it.type === "percentage" ? it.ratio : null,
+        type: it.type,
+      }))
+      .sort((a, b) => {
+        const subjectOrder = ["math", "english", "other"];
+        const sa = subjectOrder.indexOf(a.subject);
+        const sb = subjectOrder.indexOf(b.subject);
+        if (sa !== sb) return (sa < 0 ? 99 : sa) - (sb < 0 ? 99 : sb);
+        return a.baseTuition - b.baseTuition;
+      });
+  }, [salaryConfig.items]);
+
+  // 김민주 시트 데이터 마스터의 알려진 단가 (audit v4 에서 추출).
+  //   이름 매칭으로 우리 단가와 비교.
+  const KNOWN_SHEET_PRICES: Record<string, number> = {
+    "초등 3T": 21250,
+    "초등 2T": 22500,
+    "중등 3T": 24000,
+    "중등 2T": 25000,
+    "고등 3T": 27250,
+    "고등 2T": 29250,
+    "수학I (대수)": 31250,
+    "수학II (미적분I)": 31250,
+    "미적분 (미적분II)": 31250,
+    "확률과 통계": 31250,
+    수능: 37500,
+    "의치대 초등": 22500,
+    "의치대 중등": 25000,
+    "의치대 고등": 29167,
+    킬러문제: 29250,
+    절대등급: 32500,
+    매쓰몽: 30000,
+    초등특강: 21250,
+    중등특강: 24000,
+    "중등특강(2.5)": 25000,
+    "중등특강(3.33)": 33333,
+    고1특강: 27250,
+    고2특강: 31250,
+    중등함수특강: 30000,
+    중등특강2: 36000,
+  };
+
+  // tier 단가 mismatch — 우리 DB 와 시트 데이터 마스터 비교
+  const tierMismatches = useMemo(() => {
+    const out: Array<{
+      tierName: string;
+      app: number;
+      sheet: number;
+      diff: number;
+    }> = [];
+    for (const t of tierPriceTable) {
+      const sheetPrice = KNOWN_SHEET_PRICES[t.name];
+      if (sheetPrice === undefined) continue;
+      if (sheetPrice !== t.baseTuition) {
+        out.push({
+          tierName: t.name,
+          app: t.baseTuition,
+          sheet: sheetPrice,
+          diff: sheetPrice - t.baseTuition,
+        });
+      }
+    }
+    return out;
+  }, [tierPriceTable]);
+
+  // 시트엔 있는데 우리 salaryConfig 에 없는 tier
+  const missingTiers = useMemo(() => {
+    const appNames = new Set(tierPriceTable.map((t) => t.name));
+    return Object.entries(KNOWN_SHEET_PRICES)
+      .filter(([name]) => !appNames.has(name))
+      .map(([name, price]) => ({ name, price }));
+  }, [tierPriceTable]);
+
   const downloadCsv = (rows: string[][], filename: string) => {
     if (rows.length === 0) return;
     // BOM 추가 — 엑셀에서 한글 깨짐 방지
@@ -368,6 +463,145 @@ export default function MigrationCheckPage() {
           </li>
         )}
       </CheckSection>
+
+      {/* 점검 5 — tier 단가 mismatch (audit v4 #7) */}
+      <CheckSection
+        title="tier 단가 불일치 (시트 ↔ 앱)"
+        emoji="💰"
+        count={tierMismatches.length}
+        description="앱의 salaryConfig 단가와 김민주 시트 데이터 마스터 단가가 다른 것. 정산 금액에 직접 영향 — /admin/salary-config 에서 수정 권장."
+        empty="모든 tier 단가가 시트와 일치 ✓"
+        onDownload={() => {
+          const rows: string[][] = [
+            ["tier_name", "앱 단가(원)", "시트 단가(원)", "차이(원)"],
+            ...tierMismatches.map((m) => [
+              m.tierName,
+              String(m.app),
+              String(m.sheet),
+              String(m.diff),
+            ]),
+          ];
+          downloadCsv(rows, `tier_price_mismatches.csv`);
+        }}
+      >
+        {tierMismatches.map((m) => (
+          <li
+            key={m.tierName}
+            className="text-xs text-zinc-700 dark:text-zinc-300"
+          >
+            <b className="text-amber-700 dark:text-amber-400">{m.tierName}</b>:
+            앱{" "}
+            <span className="line-through text-rose-600">
+              {m.app.toLocaleString()}원
+            </span>{" "}
+            → 시트{" "}
+            <span className="font-semibold text-emerald-600">
+              {m.sheet.toLocaleString()}원
+            </span>{" "}
+            <span className="text-zinc-500">
+              (차이 {m.diff > 0 ? "+" : ""}
+              {m.diff.toLocaleString()}원)
+            </span>
+          </li>
+        ))}
+      </CheckSection>
+
+      {/* 점검 6 — 시트엔 있는데 앱에 없는 tier (audit v4 #6) */}
+      <CheckSection
+        title="시트엔 있는데 앱에 없는 tier"
+        emoji="🆕"
+        count={missingTiers.length}
+        description="김민주 시트 데이터 마스터에는 있지만 앱 salaryConfig 에 등록 안 된 tier. 학생 분반 매칭 실패 가능 — /admin/salary-config 에서 추가 권장."
+        empty="모든 시트 tier 가 앱에 등록됨 ✓"
+        onDownload={() => {
+          const rows: string[][] = [
+            ["tier_name", "권장 단가(원)"],
+            ...missingTiers.map((m) => [m.name, String(m.price)]),
+          ];
+          downloadCsv(rows, `missing_tiers.csv`);
+        }}
+      >
+        {missingTiers.map((m) => (
+          <li key={m.name} className="text-xs text-zinc-600 dark:text-zinc-400">
+            <b>{m.name}</b> — 권장 단가{" "}
+            <span className="font-semibold text-blue-700 dark:text-blue-300">
+              {m.price.toLocaleString()}원
+            </span>
+          </li>
+        ))}
+      </CheckSection>
+
+      {/* 참고: 현재 등록된 tier 단가 표 */}
+      <section className="mb-3 border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-800/50">
+          <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">
+            📊 현재 등록된 tier 단가 ({tierPriceTable.length}개)
+          </span>
+          <span className="text-[11px] text-zinc-500">
+            정산 단가 참고용 — 수정은 /admin/salary-config
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead className="bg-zinc-50 dark:bg-zinc-800/30">
+              <tr>
+                <th className="px-2 py-1 text-left font-medium text-zinc-500">
+                  tier
+                </th>
+                <th className="px-2 py-1 text-left font-medium text-zinc-500">
+                  과목
+                </th>
+                <th className="px-2 py-1 text-right font-medium text-zinc-500">
+                  baseTuition
+                </th>
+                <th className="px-2 py-1 text-right font-medium text-zinc-500">
+                  unitPrice
+                </th>
+                <th className="px-2 py-1 text-right font-medium text-zinc-500">
+                  ratio
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {tierPriceTable.map((t) => {
+                const sheetPrice = KNOWN_SHEET_PRICES[t.name];
+                const mismatch =
+                  sheetPrice !== undefined && sheetPrice !== t.baseTuition;
+                return (
+                  <tr
+                    key={t.id}
+                    className={`border-t border-zinc-100 dark:border-zinc-800 ${
+                      mismatch ? "bg-amber-50 dark:bg-amber-950/30" : ""
+                    }`}
+                  >
+                    <td className="px-2 py-1 font-medium text-zinc-700 dark:text-zinc-300">
+                      {t.name}
+                    </td>
+                    <td className="px-2 py-1 text-zinc-500">{t.subject}</td>
+                    <td className="px-2 py-1 text-right text-zinc-700 dark:text-zinc-300">
+                      {t.baseTuition.toLocaleString()}
+                      {mismatch && (
+                        <span
+                          className="ml-1 text-amber-600"
+                          title={`시트 ${sheetPrice.toLocaleString()}원과 불일치`}
+                        >
+                          ⚠
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-right text-zinc-600">
+                      {t.unitPrice ? t.unitPrice.toLocaleString() : "-"}
+                    </td>
+                    <td className="px-2 py-1 text-right text-zinc-600">
+                      {t.ratio !== null ? `${t.ratio}%` : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
