@@ -1514,7 +1514,7 @@ export default function AttendancePage() {
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* 상단 1행: 통계 + 주요 네비게이션 */}
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1 bg-white dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 pt-2 pb-1 bg-white dark:bg-zinc-900 flex-shrink-0 [&>*]:flex-shrink-0">
         {/* 급여 카드 — 급여제 선생님 본인에게는 "급여제"로 대체 표시 */}
         <button
           onClick={() => setSettlementOpen(true)}
@@ -1693,7 +1693,7 @@ export default function AttendancePage() {
       </div>
 
       {/* 상단 2행: 표시 옵션 */}
-      <div className="flex items-center gap-2 px-3 pb-2 pt-1 border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 overflow-x-auto flex-shrink-0 [&>*]:flex-shrink-0 whitespace-nowrap">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 pb-2 pt-1 border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 flex-shrink-0 [&>*]:flex-shrink-0">
         {/* 보기 — 열 표시 / 화면 옵션 / 셀 크기 통합 팝오버 */}
         <ViewOptionsMenu
           showExpectedBilling={showExpectedBilling}

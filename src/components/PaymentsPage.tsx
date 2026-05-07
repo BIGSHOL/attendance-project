@@ -304,7 +304,7 @@ export default function PaymentsPage() {
 
         {pendingRows && (
           <div className="mt-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-            <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {pendingRows.length}건 파싱 완료 — 납부월 선택:
               </span>
@@ -400,7 +400,7 @@ export default function PaymentsPage() {
 
       {pendingRows && (
         <div className="mb-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-          <div className="flex items-center gap-4 overflow-x-auto [&>*]:flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               {pendingRows.length}건 파싱 완료 — 납부월 선택:
             </span>
@@ -453,7 +453,7 @@ export default function PaymentsPage() {
       </div>
 
       {/* 검색 */}
-      <div className="mt-4 flex gap-3 overflow-x-auto [&>*]:flex-shrink-0">
+      <div className="mt-4 flex flex-wrap gap-3">
         <input
           type="text"
           placeholder="학생 / 수납명 검색"

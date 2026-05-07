@@ -53,8 +53,8 @@ export default function Nav({ email }: NavProps) {
   ];
 
   return (
-    <nav className="flex items-center border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-center gap-0.5 rounded-sm border border-zinc-200 bg-zinc-100 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
+    <nav className="flex flex-wrap items-center gap-y-1 border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex flex-wrap items-center gap-0.5 rounded-sm border border-zinc-200 bg-zinc-100 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
         {navItems.map((item) => {
           const isActive =
             item.href === "/"
@@ -65,27 +65,37 @@ export default function Nav({ email }: NavProps) {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs font-bold transition-all ${
+              title={item.label}
+              className={`flex items-center gap-1.5 rounded-sm px-2 py-1.5 text-xs font-bold transition-all sm:px-3 ${
                 isActive
                   ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
                   : "text-zinc-500 hover:bg-white/60 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700/60 dark:hover:text-zinc-200"
               }`}
             >
               <span>{item.icon}</span>
-              {item.label}
+              {/* lg 이상에서만 라벨 표시 — 좁은 화면은 아이콘만 */}
+              <span className="hidden lg:inline">{item.label}</span>
             </Link>
           );
         })}
       </div>
       {email && (
         <div className="ml-auto flex items-center gap-3 pr-1">
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">{email}</span>
+          {/* 이메일은 md 이상에서만 표시 — 좁으면 공간 절약 */}
+          <span
+            className="hidden md:inline text-xs text-zinc-500 dark:text-zinc-400"
+            title={email}
+          >
+            {email}
+          </span>
           <form action="/auth/signout" method="post">
             <button
               type="submit"
+              title="로그아웃"
               className="rounded-sm border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
             >
-              로그아웃
+              <span className="hidden sm:inline">로그아웃</span>
+              <span className="sm:hidden">↩</span>
             </button>
           </form>
         </div>

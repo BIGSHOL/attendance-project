@@ -229,12 +229,12 @@ export default function StudentDetail({ studentId }: Props) {
         ← 학생 목록
       </Link>
 
-      <div className="mt-4 flex items-center justify-between">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-y-2">
         <div>
           <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
             {student.name}
           </h2>
-          <div className="mt-1 flex items-center gap-3 text-sm text-zinc-500">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-zinc-500">
             <span>{student.school || "-"}</span>
             <span>·</span>
             <span>{student.grade || "-"}</span>

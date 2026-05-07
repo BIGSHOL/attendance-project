@@ -1217,7 +1217,7 @@ export default function SettlementPage() {
   return (
     <div className="mx-auto max-w-6xl">
       {/* 헤더 + 월 페이지네이션 */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-y-2 mb-4">
         <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
           월별 정산
           <span className="ml-2 text-sm font-normal text-zinc-500">
@@ -1225,7 +1225,7 @@ export default function SettlementPage() {
           </span>
         </h2>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* 엑셀 내보내기 — 누구나 가능 */}
           <button
             onClick={handleExportExcel}
@@ -1313,7 +1313,7 @@ export default function SettlementPage() {
       {tab === "settlement" && (
       <>
       {/* 과목 필터 (체크박스 토글) — TeacherList 동일 스타일 */}
-      <div className="flex items-center gap-2 mb-3 overflow-x-auto [&>*]:flex-shrink-0">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
           onClick={toggleAllSubjects}
           className="text-xs px-2 py-1 rounded-sm border border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
