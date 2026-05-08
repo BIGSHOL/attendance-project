@@ -1431,7 +1431,7 @@ export default function AttendancePage() {
   // ─── 출석부 엑셀 내보내기 ──────────────────────────
   //   현재 선택 선생님 + 월 의 학생별 출석 grid 를 .xlsx 로 다운로드.
   //   세션 모드면 세션 범위, 월별 모드면 월 전체 일자 사용.
-  const handleExportAttendanceExcel = useCallback(() => {
+  const handleExportAttendanceExcel = useCallback(async () => {
     if (!selectedTeacher || studentRows.length === 0) return;
     const exportDates =
       viewMode === "session" && selectedSession
@@ -1493,9 +1493,9 @@ export default function AttendancePage() {
       ]);
     });
 
-    const wb = createWorkbook();
-    addSheet(wb, `${teacherName} ${ym}`, rows, { maxColWidth: 16 });
-    writeFile(
+    const wb = await createWorkbook();
+    await addSheet(wb, `${teacherName} ${ym}`, rows, { maxColWidth: 16 });
+    await writeFile(
       wb,
       `출석부_${teacherName}_${year}-${String(month).padStart(2, "0")}.xlsx`
     );

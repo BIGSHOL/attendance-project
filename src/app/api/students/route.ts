@@ -22,7 +22,15 @@ export async function GET() {
       collection(db, "students"),
       where("status", "in", ["active", "withdrawn"])
     );
-    const snap = await getDocs(q);
+
+    // 학생 메타 + virtual_students 를 병렬 fetch (audit v5 #2).
+    //   기존: getDocs(students) 후 → virtual fetch (직렬). virtual 이 Firebase 끝날 때까지 대기.
+    //   변경: 둘 다 동시에 시작. 학생별 enrollments 는 어차피 Firebase 결과 필요해서 그 다음.
+    const [snap, virtualResult] = await Promise.all([
+      getDocs(q),
+      supabase.from("virtual_students").select("*"),
+    ]);
+    const virtualRows = virtualResult.data;
 
     const studentDocs = snap.docs.map((doc) => ({
       id: doc.id,
@@ -53,13 +61,6 @@ export async function GET() {
         return { ...student, enrollments };
       })
     );
-
-    // virtual_students 도 합쳐서 반환.
-    // 중복 판정은 이름+학교+선생님 조합 기준: Firebase 에 같은 학생이 이미 같은 선생님 담당으로
-    // 있으면 virtual 불필요. Firebase 에 다른 선생님 담당으로만 있으면 virtual 은 "이 선생님 담당" 가상 레코드로 유지.
-    const { data: virtualRows } = await supabase
-      .from("virtual_students")
-      .select("*");
 
     const firebaseTeachersByKey = new Map<string, Set<string>>();
     for (const s of withEnrollments) {

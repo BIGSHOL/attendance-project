@@ -1087,8 +1087,8 @@ export default function SettlementPage() {
 
   // ─── 엑셀 내보내기 ────────────────────────────────
   //   현재 화면에 보이는 정산 + 시수 검증을 .xlsx 한 파일로 다운로드.
-  const handleExportExcel = useCallback(() => {
-    const wb = createWorkbook();
+  const handleExportExcel = useCallback(async () => {
+    const wb = await createWorkbook();
     const ym = `${year}년 ${String(month).padStart(2, "0")}월`;
 
     // 시트 1: 월별 정산
@@ -1140,7 +1140,7 @@ export default function SettlementPage() {
         "",
       ],
     ];
-    addSheet(wb, "월별 정산", settlementRows);
+    await addSheet(wb, "월별 정산", settlementRows);
 
     // 시트 2: 시수 검증
     const checksHeader = [
@@ -1175,9 +1175,9 @@ export default function SettlementPage() {
         Math.round(r.diffAmount),
       ]),
     ];
-    addSheet(wb, "시수 검증", checksRows);
+    await addSheet(wb, "시수 검증", checksRows);
 
-    writeFile(wb, `정산_${year}-${String(month).padStart(2, "0")}.xlsx`);
+    await writeFile(wb, `정산_${year}-${String(month).padStart(2, "0")}.xlsx`);
   }, [year, month, filteredSettlements, totals, studentChecks]);
 
   const prevMonth = () => {
