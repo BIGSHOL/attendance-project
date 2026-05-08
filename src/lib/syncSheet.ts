@@ -191,16 +191,26 @@ export async function syncTeacherSheet(
         //  1) Firebase 에 없음 → virtual 학생으로 등록
         //  2) Firebase 에 있지만 이 선생님 담당이 아님 (시트에만 담당으로 기재)
         //     → virtual 학생으로 등록 (원본 Firebase 학생은 그대로 두고 별도 가상 학생 추가)
+        //
+        // ⚠ enrollment 매칭은 teacherId (Firebase staff doc id) 우선.
+        //   기존: e.teacher === teacherName (한글 이름) — staff 이름 표기 변경/오타에 취약.
+        //   기존: e.staffId === teacherName — staffId 는 doc id 라 한글 이름과는 거의 매칭 안 됨.
+        //   → 매칭 실패 케이스가 누적되어 학생이 매번 virtual 로 재등록되어 attendance 가
+        //     Firebase 학생이 아닌 virtual_id 로 저장되는 핵심 버그.
         const isThisTeacher = !!match?.enrollments?.some(
-          (e) => e.teacher === teacherName || e.staffId === teacherName
+          (e) =>
+            e.staffId === teacherId ||
+            e.teacher === teacherName ||
+            e.staffId === teacherName
         );
         if (!match || !isThisTeacher) {
-          // virtualId 에 teacherId 를 포함해 "학생 × 교사" 단위로 고유화.
-          // 같은 이름/학교/학년의 학생이 여러 교사에게 수강하는 경우
-          // (영어 부담임, 초등 복수 과목 담당 등), 예전 포맷
-          // `virtual_{name}_{school}_{grade}` 은 upsert 시 teacher_staff_id 가
-          // 마지막 sync 로 덮어써져 다른 교사의 UI 에서 학생이 사라지는 버그 발생.
-          const virtualId = `virtual_${teacherId}_${entry.studentName}_${entrySchool || "unknown"}_${entry.grade || "unknown"}`;
+          // virtualId 안정성 원칙 (audit V6):
+          //   - teacherId 포함 → 학생×교사 단위 고유화 (영어 부담임 등)
+          //   - school 포함 → 동명이인 구분
+          //   - grade **제외** → 학년 변경 시 ID 가 바뀌면 옛 attendance 가 orphan 되어
+          //     시수 검증/정산에서 누락됨. school+name+teacher 만으로 정체성 안정.
+          //     grade 는 column 으로만 보관해 UI 표시용으로 사용.
+          const virtualId = `virtual_${teacherId}_${entry.studentName}_${entrySchool || "unknown"}`;
           virtualToUpsert[virtualId] = {
             id: virtualId,
             name: entry.studentName,
