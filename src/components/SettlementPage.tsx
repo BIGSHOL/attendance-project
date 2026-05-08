@@ -1858,17 +1858,17 @@ export default function SettlementPage() {
                 (r) => !r.success || !!r.error || r.months.some((m) => m.error)
               ).length;
               return (
-                <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <div className="flex flex-shrink-0 flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800 dark:bg-zinc-950">
+                  <div className="min-w-0 flex-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                     {failedCount > 0
                       ? `❌ 실패 ${failedCount}명 — "실패만 다시" 로 재시도 가능`
                       : "✓ 모든 선생님 동기화 완료"}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-shrink-0 items-center gap-2">
                     <button
                       type="button"
                       onClick={handleDownloadSyncResults}
-                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="whitespace-nowrap rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       title="결과를 .txt 파일로 다운로드 (감사/디버그)"
                     >
                       📥 결과 다운로드
@@ -1877,7 +1877,7 @@ export default function SettlementPage() {
                       <button
                         type="button"
                         onClick={handleRetryFailed}
-                        className="rounded-sm bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
+                        className="whitespace-nowrap rounded-sm bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
                         title="실패한 선생님만 다시 동기화"
                       >
                         ↺ 실패만 다시 ({failedCount})
@@ -1886,7 +1886,7 @@ export default function SettlementPage() {
                     <button
                       type="button"
                       onClick={() => setBulkSync(null)}
-                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="whitespace-nowrap rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
                       닫기
                     </button>
