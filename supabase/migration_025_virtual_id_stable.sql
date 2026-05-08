@@ -111,13 +111,16 @@ UPDATE payment_shares ps
 -- ============================================================
 -- 4) student_tier_overrides: student_id 정규화 + 충돌 시 옛 row 삭제
 -- ============================================================
--- UNIQUE(teacher_id, student_id). 충돌 시 새 row keep (updated_at 으로 정렬해도 동일).
+-- UNIQUE(teacher_id, student_id, class_name) — class_name 포함 3-tuple.
+-- (migration_010 의 idx_student_tier_overrides_triple = COALESCE(class_name, '')
+--  형태로도 존재 가능 → 두 케이스 모두 충족하도록 class_name 을 비교에 포함.)
 DELETE FROM student_tier_overrides sto
  USING id_remap r,
        student_tier_overrides sto_new
  WHERE sto.student_id      = r.old_id
    AND sto_new.student_id  = r.new_id
-   AND sto_new.teacher_id  = sto.teacher_id;
+   AND sto_new.teacher_id  = sto.teacher_id
+   AND COALESCE(sto_new.class_name, '') = COALESCE(sto.class_name, '');
 
 UPDATE student_tier_overrides sto
    SET student_id = r.new_id,
