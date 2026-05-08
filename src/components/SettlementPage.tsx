@@ -24,6 +24,8 @@ import { computeTeacherMonthPayroll } from "@/lib/teacherPayroll";
 import { filterStudentsByMonth } from "@/lib/studentFilter";
 import { createWorkbook, addSheet, writeFile } from "@/lib/excelExport";
 import BulkSyncSettings from "./settlement/BulkSyncSettings";
+import SortableTh from "./settlement/SortableTh";
+import StatCard from "./settlement/StatCard";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -1901,56 +1903,3 @@ export default function SettlementPage() {
   );
 }
 
-function SortableTh<K extends string>({
-  label,
-  sortKey,
-  current,
-  dir,
-  onClick,
-  align = "left",
-}: {
-  label: string;
-  sortKey: K;
-  current: K | "";
-  dir: "asc" | "desc";
-  onClick: (k: K) => void;
-  align?: "left" | "right" | "center";
-}) {
-  const active = current === sortKey;
-  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
-  const alignCls =
-    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
-  const justifyCls =
-    align === "right"
-      ? "justify-end"
-      : align === "center"
-        ? "justify-center"
-        : "justify-start";
-  return (
-    <th className={`px-3 py-3 font-medium text-zinc-500 ${alignCls}`}>
-      <button
-        type="button"
-        onClick={() => onClick(sortKey)}
-        className={`inline-flex w-full items-center gap-1 ${justifyCls} hover:text-zinc-900 dark:hover:text-zinc-100 ${
-          active ? "text-zinc-900 dark:text-zinc-100" : ""
-        }`}
-      >
-        <span>{label}</span>
-        {arrow && (
-          <span className="text-[10px] text-blue-500 dark:text-blue-400">{arrow}</span>
-        )}
-      </button>
-    </th>
-  );
-}
-
-function StatCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className={`border border-zinc-200 px-4 py-3 dark:border-zinc-800 ${highlight ? "bg-blue-50 dark:bg-blue-950" : "bg-white dark:bg-zinc-900"}`}>
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">{label}</p>
-      <p className={`mt-1 text-lg font-bold ${highlight ? "text-blue-600 dark:text-blue-400" : "text-zinc-900 dark:text-zinc-100"}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
