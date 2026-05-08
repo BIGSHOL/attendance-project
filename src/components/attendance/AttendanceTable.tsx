@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import type { Student, SalaryConfig } from "@/types";
 import { DAY_LABELS } from "@/types";
 import { formatDateKey, formatDateDisplay, getDaysInMonth } from "@/lib/date";
+import { useColumnResize } from "@/hooks/useColumnResize";
 import StudentRow from "./StudentRow";
 import GroupHeader from "./GroupHeader";
 import ContextMenu from "./ContextMenu";
@@ -200,13 +201,8 @@ export default function AttendanceTable({
   const [isDragFilling, setIsDragFilling] = useState(false);
   const dragFillStartValueRef = useRef<number | null>(null);
 
-  // 일자 컬럼 폭 드래그 리사이즈 (audit H).
-  //   resizing.startX = 시작 mouse X, startWidth = 시작 시점 cellWidthPx.
-  //   드래그 중 시각화 + 부드러운 갱신.
-  const resizingRef = useRef<{ startX: number; startWidth: number } | null>(
-    null
-  );
-  const [isResizing, setIsResizing] = useState(false);
+  // 일자 컬럼 폭 드래그 리사이즈 (audit H) — split-only 로 hook 분리.
+  const { handleResizeStart } = useColumnResize({ cellWidthPx, onColumnResize });
 
   // 키보드 네비게이션용 학생 순서 — 실제 화면 표시 순서와 일치해야 ArrowUp/Down
   // 이 점프하지 않음. sortMode + groupOrder + collapsedGroups 모두 반영.
@@ -504,46 +500,6 @@ export default function AttendanceTable({
     },
     [selectedKeys, setCellValue]
   );
-
-  /**
-   * 일자 컬럼 폭 드래그 리사이즈 — thead 핸들 mousedown.
-   *   document mousemove → 새 폭 계산 → onColumnResize.
-   */
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (!onColumnResize) return;
-      e.preventDefault();
-      e.stopPropagation();
-      resizingRef.current = { startX: e.clientX, startWidth: cellWidthPx };
-      setIsResizing(true);
-    },
-    [cellWidthPx, onColumnResize]
-  );
-
-  useEffect(() => {
-    if (!isResizing) return;
-    const onMove = (e: MouseEvent) => {
-      const r = resizingRef.current;
-      if (!r) return;
-      const delta = e.clientX - r.startX;
-      onColumnResize?.(r.startWidth + delta);
-    };
-    const onUp = () => {
-      resizingRef.current = null;
-      setIsResizing(false);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    // 드래그 중 텍스트 선택/cursor 변경
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    return () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-  }, [isResizing, onColumnResize]);
 
   /**
    * 드래그 채우기 시작 — 활성 셀 우하단 핸들 mousedown 콜백.
