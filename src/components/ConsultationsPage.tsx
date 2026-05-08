@@ -10,10 +10,12 @@ import HomeroomPicker, { SUBJECT_PREFIX } from "@/components/consultation/Homero
 import ConsultationDetailModal from "@/components/consultation/ConsultationDetailModal";
 import ConsultationSettings from "@/components/consultation/ConsultationSettings";
 import ConsultationsPageV2 from "@/components/consultation/ConsultationsPageV2";
+import KpiCard from "@/components/consultation/KpiCard";
 import NotesPageV1 from "@/components/notes/NotesPageV1";
 import NotesPageV2 from "@/components/notes/NotesPageV2";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
+import { extractNameAliases, matchesTeacher } from "@/lib/consultationHelpers";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 import type { Student, Teacher, Consultation } from "@/types";
 
@@ -98,51 +100,6 @@ function getTeachersOfStudent(
     if (canonical) names.add(canonical);
   }
   return Array.from(names);
-}
-
-/**
- * 이름 문자열에서 가능한 모든 표기 추출
- *   "정유진(Yoojin)" → ["정유진(Yoojin)", "정유진", "Yoojin"]
- *   "Yoojin" → ["Yoojin"]
- *   "정유진" → ["정유진"]
- */
-function extractNameAliases(raw: string): string[] {
-  const s = (raw ?? "").trim();
-  if (!s) return [];
-  const result = new Set<string>([s]);
-  // "한글(영어)" 또는 "영어(한글)" 패턴
-  const m = s.match(/^(.+?)\s*\(\s*(.+?)\s*\)$/);
-  if (m) {
-    result.add(m[1].trim());
-    result.add(m[2].trim());
-  }
-  // 괄호 내부만 있는 경우 제거한 버전
-  const stripped = s.replace(/\s*\([^)]*\)\s*/g, "").trim();
-  if (stripped) result.add(stripped);
-  return Array.from(result);
-}
-
-/**
- * 상담자 이름(ijw-calander 포맷 포함)이 특정 선생님과 일치하는지
- *   - "정유진(Yoojin)" 상담자 vs teacher.name="Yoojin" / englishName=undefined → 매치
- *   - "Sarah" vs teacher.name="강보경" / englishName="Sarah" → 매치
- *   - 정확 일치, 괄호 안/밖 모두 고려
- */
-function matchesTeacher(
-  consultantName: string | undefined,
-  teacher: Teacher | undefined
-): boolean {
-  if (!consultantName || !teacher) return false;
-  const consultantAliases = new Set(
-    extractNameAliases(consultantName).map((n) => n.toLowerCase())
-  );
-  const teacherSources = [teacher.name, teacher.englishName].filter(Boolean) as string[];
-  for (const src of teacherSources) {
-    for (const alias of extractNameAliases(src)) {
-      if (consultantAliases.has(alias.toLowerCase())) return true;
-    }
-  }
-  return false;
 }
 
 function consultationSubjectLabel(c: Consultation): string {
@@ -1460,29 +1417,3 @@ export default function ConsultationsPage() {
   );
 }
 
-// ─── KPI 카드 ──────────────────────────────────────
-function KpiCard({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  tone?: "neutral" | "good" | "warn" | "alert";
-}) {
-  const toneClass = {
-    neutral:
-      "border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100",
-    good: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/50 dark:text-emerald-200",
-    warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/50 dark:text-amber-200",
-    alert:
-      "border-red-200 bg-red-50 text-red-900 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-200",
-  }[tone];
-
-  return (
-    <div className={`border ${toneClass} px-3 py-2`}>
-      <div className="text-[10px] font-medium opacity-70">{label}</div>
-      <div className="text-lg font-bold tabular-nums">{value}</div>
-    </div>
-  );
-}
