@@ -75,29 +75,23 @@ export async function GET(request: NextRequest) {
   const monthsCsv = searchParams.get("months");
   const monthsList = monthsCsv ? monthsCsv.split(",").map((s) => s.trim()).filter(Boolean) : null;
 
-  // PostgREST 기본 1,000건 제한 우회 (월별 수납이 1000건 초과 가능)
-  const pageSize = 1000;
-  let all: unknown[] = [];
-  let from = 0;
-  while (true) {
-    let q = supabase
-      .from("payments")
-      .select("*")
-      .order("student_name", { ascending: true })
-      .order("charge_amount", { ascending: false })
-      .range(from, from + pageSize - 1);
-    if (monthsList && monthsList.length > 0) q = q.in("billing_month", monthsList);
-    else if (month) q = q.eq("billing_month", month);
+  // 단일 쿼리 (audit v5 #5 — pagination loop 제거).
+  //   기존 1000-건 페이지네이션 loop 가 RTT 누적 (월별 2000건 → 2회 = 600ms+).
+  //   PostgREST 는 `.range(0, N-1)` 로 limit 명시 가능. 5000 으로 상향 — 월별 결제가 그 이하.
+  //   PaymentsPage 인라인 편집이 모든 컬럼 필요해서 select("*") 유지 — payload 그대로지만 RTT 절감.
+  const MAX_ROWS = 5000;
+  let q = supabase
+    .from("payments")
+    .select("*")
+    .order("student_name", { ascending: true })
+    .order("charge_amount", { ascending: false })
+    .range(0, MAX_ROWS - 1);
+  if (monthsList && monthsList.length > 0) q = q.in("billing_month", monthsList);
+  else if (month) q = q.eq("billing_month", month);
 
-    const { data, error } = await q;
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    if (!data || data.length === 0) break;
-    all = all.concat(data);
-    if (data.length < pageSize) break;
-    from += pageSize;
+  const { data, error } = await q;
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  return NextResponse.json(all);
+  return NextResponse.json(data || []);
 }

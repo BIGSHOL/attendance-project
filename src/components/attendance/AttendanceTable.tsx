@@ -596,6 +596,32 @@ export default function AttendanceTable({
     };
   }, [isDragFilling, selectedKeys, applyValueToSelection]);
 
+  /**
+   * editingByPeers 학생별 분할 (audit v5 #4 + #9 일부).
+   *   기존: StudentRow 마다 전체 Map prop 받음 → presence sync 때마다 모든 row re-render.
+   *   개선: 학생 ID 별로 sub-Map 만 prop 전달 → 다른 학생 편집은 영향 X.
+   *
+   *   Map.size 변경 없을 때 같은 student 의 sub-Map 도 가급적 같은 reference 유지.
+   *   (presence sync 시점 새 Map 이지만 학생별 sub-Map 은 새로 만들어짐 — 이건 trade-off).
+   */
+  const editingByStudent = useMemo<Map<string, Map<string, { email: string; name: string }>>>(() => {
+    const m = new Map<string, Map<string, { email: string; name: string }>>();
+    if (!editingByPeers || editingByPeers.size === 0) return m;
+    for (const [key, peer] of editingByPeers) {
+      // key = "{studentId}|{dateKey}"
+      const sep = key.lastIndexOf("|");
+      if (sep < 0) continue;
+      const sid = key.slice(0, sep);
+      let sub = m.get(sid);
+      if (!sub) {
+        sub = new Map();
+        m.set(sid, sub);
+      }
+      sub.set(key, peer);
+    }
+    return m;
+  }, [editingByPeers]);
+
   // 학생 ID → 그 학생 행에서 선택된 dateKey set (StudentRow 에 직접 prop 전달용).
   //   selectedKeys 전체를 매번 prop drill 하면 모든 행 re-render 됨 →
   //   per-student 분할 후 동일 student ID 행만 변경된 set 받도록.
@@ -933,7 +959,7 @@ export default function AttendanceTable({
           onHideStudent={onHideStudent}
           onCellClick={handleCellClick}
           onCellRightClick={handleCellRightClick}
-          editingByPeers={editingByPeers}
+          editingByPeers={editingByStudent.get(student.id)}
           activeDateKey={
             activeCell?.studentId === student.id ? activeCell.dateKey : undefined
           }
@@ -1034,6 +1060,7 @@ export default function AttendanceTable({
                   ? cellInput
                   : undefined
               }
+              editingByPeers={editingByStudent.get(student.id)}
               onShowBreakdown={onShowBreakdown}
               onAddTier={onAddTier}
               copiedDateKey={

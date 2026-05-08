@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import {
+  collection,
+  collectionGroup,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/apiAuth";
@@ -23,44 +29,48 @@ export async function GET() {
       where("status", "in", ["active", "withdrawn"])
     );
 
-    // 학생 메타 + virtual_students 를 병렬 fetch (audit v5 #2).
-    //   기존: getDocs(students) 후 → virtual fetch (직렬). virtual 이 Firebase 끝날 때까지 대기.
-    //   변경: 둘 다 동시에 시작. 학생별 enrollments 는 어차피 Firebase 결과 필요해서 그 다음.
-    const [snap, virtualResult] = await Promise.all([
+    // 학생 메타 + virtual_students + 모든 enrollments 를 한 번에 병렬 fetch (audit v5 #2 + #7).
+    //
+    //   기존: getDocs(students) → 503명 × getDocs(student/enrollments) loop = 504 RTT
+    //   개선: getDocs(students) + getDocs(collectionGroup("enrollments")) + virtual = 3 병렬 호출
+    //
+    //   collectionGroup 은 모든 path 의 "enrollments" subcollection 을 평탄화. 503 RTT → 1 RTT.
+    //   부모 doc 참조는 enrollSnap.ref.parent.parent (= students/{id}) 로 학생 ID 추출.
+    const [snap, enrollAllSnap, virtualResult] = await Promise.all([
       getDocs(q),
+      getDocs(collectionGroup(db, "enrollments")),
       supabase.from("virtual_students").select("*"),
     ]);
     const virtualRows = virtualResult.data;
 
-    const studentDocs = snap.docs.map((doc) => ({
+    // 학생 ID 별 enrollments 그룹핑
+    const enrollmentsByStudent = new Map<string, Enrollment[]>();
+    for (const eDoc of enrollAllSnap.docs) {
+      const studentId = eDoc.ref.parent.parent?.id;
+      if (!studentId) continue;
+      const d = eDoc.data();
+      const enrollment: Enrollment = {
+        subject: d.subject || "",
+        classId: d.classId || "",
+        className: d.className || "",
+        staffId: d.staffId || "",
+        teacher: d.teacher || "",
+        days: d.days || [],
+        schedule: d.schedule || [],
+        startDate: d.startDate || "",
+        endDate: d.endDate || "",
+        onHold: d.onHold || false,
+      };
+      const arr = enrollmentsByStudent.get(studentId) || [];
+      arr.push(enrollment);
+      enrollmentsByStudent.set(studentId, arr);
+    }
+
+    const withEnrollments = snap.docs.map((doc) => ({
       id: doc.id,
       ...(doc.data() as Omit<Student, "id">),
+      enrollments: enrollmentsByStudent.get(doc.id) || [],
     }));
-
-    const withEnrollments = await Promise.all(
-      studentDocs.map(async (student) => {
-        const enrollSnap = await getDocs(
-          collection(db, "students", student.id, "enrollments")
-        );
-        const enrollments: Enrollment[] = enrollSnap.docs.map((eDoc) => {
-          const d = eDoc.data();
-          return {
-            subject: d.subject || "",
-            classId: d.classId || "",
-            className: d.className || "",
-            staffId: d.staffId || "",
-            teacher: d.teacher || "",
-            days: d.days || [],
-            schedule: d.schedule || [],
-            startDate: d.startDate || "",
-            endDate: d.endDate || "",
-            onHold: d.onHold || false,
-          };
-        });
-
-        return { ...student, enrollments };
-      })
-    );
 
     const firebaseTeachersByKey = new Map<string, Set<string>>();
     for (const s of withEnrollments) {

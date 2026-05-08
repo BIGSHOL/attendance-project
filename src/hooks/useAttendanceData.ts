@@ -250,26 +250,63 @@ export function useAttendanceData(
     };
   }, [teacherId]);
 
+  /**
+   * Presence track throttle (audit v5 #6).
+   *   기존: setEditingCell 매 호출마다 ch.track() — 셀 입력 매 키 broadcast.
+   *   개선: 300ms throttle (trailing). 다른 사용자에게 최대 0.3초 지연으로 보임.
+   *   editingByMeRef 는 즉시 업데이트 (로컬 상태) — broadcast 만 묶임.
+   */
+  const trackPendingRef = useRef<NodeJS.Timeout | null>(null);
+  const lastTrackAtRef = useRef<number>(0);
+  const THROTTLE_MS = 300;
+
+  const flushTrack = useCallback(() => {
+    const ch = channelRef.current;
+    if (!ch) return;
+    lastTrackAtRef.current = Date.now();
+    trackPendingRef.current = null;
+    ch.track({
+      email: myEmail || "anon",
+      name: myName || (myEmail ? myEmail.split("@")[0] : "익명"),
+      cells: Array.from(editingByMeRef.current),
+    }).catch(() => {
+      // presence 실패는 무시
+    });
+  }, [myEmail, myName]);
+
   const setEditingCell = useCallback(
-    async (rowKey: string, date: string, editing: boolean) => {
+    (rowKey: string, date: string, editing: boolean) => {
       const key = cellKey(rowKey, date);
       if (editing) editingByMeRef.current.add(key);
       else editingByMeRef.current.delete(key);
 
-      const ch = channelRef.current;
-      if (!ch) return;
-      try {
-        await ch.track({
-          email: myEmail || "anon",
-          name: myName || (myEmail ? myEmail.split("@")[0] : "익명"),
-          cells: Array.from(editingByMeRef.current),
-        });
-      } catch {
-        // presence 실패는 무시
+      // throttle: 마지막 broadcast 이후 300ms 지났으면 즉시, 아니면 trailing 예약.
+      const now = Date.now();
+      const elapsed = now - lastTrackAtRef.current;
+      if (elapsed >= THROTTLE_MS) {
+        if (trackPendingRef.current) {
+          clearTimeout(trackPendingRef.current);
+          trackPendingRef.current = null;
+        }
+        flushTrack();
+      } else if (!trackPendingRef.current) {
+        // trailing 예약 — 마지막 상태 보장
+        trackPendingRef.current = setTimeout(flushTrack, THROTTLE_MS - elapsed);
       }
+      // 이미 예약된 trailing 이 있으면 그게 최신 ref.current 를 송신
     },
-    [myEmail, myName]
+    [flushTrack]
   );
+
+  // 컴포넌트 언마운트 시 보류된 track flush 정리
+  useEffect(() => {
+    return () => {
+      if (trackPendingRef.current) {
+        clearTimeout(trackPendingRef.current);
+        trackPendingRef.current = null;
+      }
+    };
+  }, []);
 
   // 공통 낙관적 업데이트 + 서버 upsert (rowKey = studentId|className 기반)
   const optimisticUpdate = useCallback(
