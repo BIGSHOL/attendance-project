@@ -76,17 +76,29 @@ const TierOverrideModal = dynamic(
 
 type SortMode = "class" | "name" | "day";
 
-export default function AttendancePage() {
+interface AttendancePageProps {
+  /**
+   * true 면 보관함 모드 — useStaff 가 퇴사 staff 만 받고, 모든 mutation
+   * 핸들러 no-op + 시트 동기화/sync 결과 토스트/TierOverride 추가 버튼 hide.
+   * localStorage 키도 `archive.*` prefix 로 분리되어 일반 출석부와 충돌 없음.
+   * /admin/archive 페이지에서 이 컴포넌트를 재사용할 때 사용.
+   */
+  archiveMode?: boolean;
+}
+
+export default function AttendancePage({ archiveMode = false }: AttendancePageProps = {}) {
+  // localStorage 키 prefix — archiveMode 면 일반 출석부와 분리.
+  const keyPrefix = archiveMode ? "archive." : "attendance.";
   const now = new Date();
-  const [year, setYear] = useLocalStorage<number>("attendance.year", now.getFullYear());
-  const [month, setMonth] = useLocalStorage<number>("attendance.month", now.getMonth() + 1);
-  const [selectedSubject, setSelectedSubject] = useLocalStorage<string>("attendance.subject", "math");
-  const [selectedTeacherId, setSelectedTeacherId] = useLocalStorage<string>("attendance.teacherId", "");
+  const [year, setYear] = useLocalStorage<number>(`${keyPrefix}year`, now.getFullYear());
+  const [month, setMonth] = useLocalStorage<number>(`${keyPrefix}month`, now.getMonth() + 1);
+  const [selectedSubject, setSelectedSubject] = useLocalStorage<string>(`${keyPrefix}subject`, "math");
+  const [selectedTeacherId, setSelectedTeacherId] = useLocalStorage<string>(`${keyPrefix}teacherId`, "");
 
   // 세션 모드
-  const [viewMode, setViewMode] = useLocalStorage<AttendanceViewMode>("attendance.viewMode", "monthly");
+  const [viewMode, setViewMode] = useLocalStorage<AttendanceViewMode>(`${keyPrefix}viewMode`, "monthly");
   const [selectedSessionId, setSelectedSessionId] = useLocalStorage<string | null>(
-    "attendance.selectedSessionId",
+    `${keyPrefix}selectedSessionId`,
     null
   );
   const { sessions: sessionPeriods } = useSessionPeriods(year, selectedSubject);
@@ -108,38 +120,38 @@ export default function AttendancePage() {
   // 표시 옵션 (localStorage 영속화 — CLAUDE.md 규칙)
   const [sortMode, setSortMode] = useState<SortMode>("class");
   const [studentSearch, setStudentSearch] = useLocalStorage<string>(
-    "attendance.studentSearch",
+    `${keyPrefix}studentSearch`,
     ""
   );
   const [highlightWeekends, setHighlightWeekends] = useLocalStorage<boolean>(
-    "attendance.highlightWeekends",
+    `${keyPrefix}highlightWeekends`,
     false
   );
   const [showExpectedBilling, setShowExpectedBilling] = useLocalStorage<boolean>(
-    "attendance.showExpectedBilling",
+    `${keyPrefix}showExpectedBilling`,
     false
   );
   const [showPaidAmount, setShowPaidAmount] = useLocalStorage<boolean>(
-    "attendance.showPaidAmount",
+    `${keyPrefix}showPaidAmount`,
     false
   );
   const [showActualSalary, setShowActualSalary] = useLocalStorage<boolean>(
-    "attendance.showActualSalary",
+    `${keyPrefix}showActualSalary`,
     false
   );
   const [hideZeroAttendance, setHideZeroAttendance] = useLocalStorage<boolean>(
-    "attendance.hideZeroAttendance",
+    `${keyPrefix}hideZeroAttendance`,
     false
   );
 
   // 셀 크기 (localStorage 저장)
-  const [cellWidth, setCellWidth] = useLocalStorage<CellSize>("attendance.cellWidth", "md");
+  const [cellWidth, setCellWidth] = useLocalStorage<CellSize>(`${keyPrefix}cellWidth`, "md");
   // 사용자 정의 폭 (px) — 드래그 리사이즈로 설정. null 이면 cellWidth 의 기본값 사용.
   //   ViewOptionsMenu 에서 S/M/L 누르면 customCellWidthPx 가 자동 reset 되도록 setter 래핑.
   const [customCellWidthPx, setCustomCellWidthPxRaw] = useLocalStorage<
     number | null
-  >("attendance.customCellWidthPx", null);
-  const [cellHeight, setCellHeight] = useLocalStorage<CellSize>("attendance.cellHeight", "md");
+  >(`${keyPrefix}customCellWidthPx`, null);
+  const [cellHeight, setCellHeight] = useLocalStorage<CellSize>(`${keyPrefix}cellHeight`, "md");
   // cellWidthPx 결정: customCellWidthPx 우선 (드래그로 설정), 없으면 S/M/L 기본값.
   const cellWidthPx =
     typeof customCellWidthPx === "number" && customCellWidthPx > 0
@@ -218,7 +230,10 @@ export default function AttendancePage() {
   const { dateSet: holidayDateSet, nameMap: holidayNameMap } = useHolidays(year);
 
   // 데이터
-  const { teachers, loading: staffLoading } = useStaff();
+  // archiveMode 면 퇴사 staff 만 (status !== "active") 받아 selector 에 표시.
+  const { teachers, loading: staffLoading } = useStaff(
+    archiveMode ? { archived: true } : undefined
+  );
   const { students: allStudents, loading: studentsLoading, refetch: refetchStudents } = useStudents();
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { userRole, isAdmin, isTeacher } = useUserRole();
@@ -1430,6 +1445,31 @@ export default function AttendancePage() {
     [updateHomework, markEditing]
   );
 
+  // archiveMode: 모든 mutation 핸들러를 no-op 으로 wrap (read-only 보장).
+  // useCallback 으로 래핑해 reference 안정화 → AttendanceTable / StudentRow 의 React.memo 보호.
+  const noopAttendance = useCallback(
+    (_rk: string, _dk: string, _v: number | null) => {},
+    []
+  );
+  const noopMemo = useCallback((_rk: string, _dk: string, _m: string) => {}, []);
+  const noopCellColor = useCallback(
+    (_rk: string, _dk: string, _c: string | null) => {},
+    []
+  );
+  const noopHomework = useCallback(
+    (_rk: string, _dk: string, _h: boolean) => {},
+    []
+  );
+  const noopEditingCell = useCallback(
+    (_rk: string, _dk: string, _e: boolean) => {},
+    []
+  );
+  const onAttendanceChangeProp = archiveMode ? noopAttendance : handleAttendanceChange;
+  const onMemoChangeProp = archiveMode ? noopMemo : handleMemoChange;
+  const onCellColorChangeProp = archiveMode ? noopCellColor : handleCellColorChange;
+  const onHomeworkChangeProp = archiveMode ? noopHomework : handleHomeworkChange;
+  const setEditingCellProp = archiveMode ? noopEditingCell : setEditingCell;
+
   // ─── 출석부 엑셀 내보내기 ──────────────────────────
   //   현재 선택 선생님 + 월 의 학생별 출석 grid 를 .xlsx 로 다운로드.
   //   세션 모드면 세션 범위, 월별 모드면 월 전체 일자 사용.
@@ -1663,8 +1703,8 @@ export default function AttendancePage() {
           📥 엑셀
         </button>
 
-        {/* 시트 동기화 (관리자 이상만 + 시트 등록된 선생님만) */}
-        {isAdmin && currentSheetUrl && (
+        {/* 시트 동기화 (관리자 이상만 + 시트 등록된 선생님만, archiveMode 에서 hide) */}
+        {!archiveMode && isAdmin && currentSheetUrl && (
           <button
             onClick={handleSyncSheet}
             disabled={syncing}
@@ -1825,8 +1865,8 @@ export default function AttendancePage() {
         {/* 급여 비율/설정은 선생님 상세 페이지에서 편집 */}
       </div>
 
-      {/* 동기화 결과 토스트 */}
-      {syncResult && (
+      {/* 동기화 결과 토스트 (archiveMode 에서 hide) */}
+      {!archiveMode && syncResult && (
         <div className="absolute top-16 right-3 z-40 max-w-md rounded-sm border border-zinc-300 bg-white p-3 text-xs shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <div className="flex items-center justify-between mb-1">
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
@@ -1897,8 +1937,8 @@ export default function AttendancePage() {
             }
             holidayDateSet={holidayDateSet}
             holidayNameMap={holidayNameMap}
-            onAttendanceChange={handleAttendanceChange}
-            onMemoChange={handleMemoChange}
+            onAttendanceChange={onAttendanceChangeProp}
+            onMemoChange={onMemoChangeProp}
           />
         ) : (
           <AttendanceTable
@@ -1926,14 +1966,14 @@ export default function AttendancePage() {
             termCountMap={termCountMap}
             onHideDate={hideDate}
             onHideStudent={hideStudent}
-            onAttendanceChange={handleAttendanceChange}
-            onMemoChange={handleMemoChange}
-            onCellColorChange={handleCellColorChange}
-            onHomeworkChange={handleHomeworkChange}
+            onAttendanceChange={onAttendanceChangeProp}
+            onMemoChange={onMemoChangeProp}
+            onCellColorChange={onCellColorChangeProp}
+            onHomeworkChange={onHomeworkChangeProp}
             editingByPeers={editingByPeers}
-            setEditingCell={setEditingCell}
+            setEditingCell={setEditingCellProp}
             onShowBreakdown={setBreakdownStudentId}
-            onAddTier={isAdmin ? setTierAddStudentId : undefined}
+            onAddTier={!archiveMode && isAdmin ? setTierAddStudentId : undefined}
             onColumnResize={handleColumnResize}
           />
         )}
@@ -2010,7 +2050,7 @@ export default function AttendancePage() {
             ? expandSessionDatesContiguous(selectedSession)
             : getDaysInMonth(year, month)
         }
-        onMemoChange={handleMemoChange}
+        onMemoChange={onMemoChangeProp}
       />
       {/* 분반 quick-add 모달 — 출석부에서 학생 행 🔧 버튼으로 열림.
           현재 선생님(selectedTeacherId) 자동 prefill — 사용자는 분반 이름 + tier 만 선택. */}
