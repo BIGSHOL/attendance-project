@@ -38,7 +38,14 @@ import {
 } from "@/lib/studentPaymentMatcher";
 import { filterStudentsByMonth, isNewInMonth, isLeavingInMonth, isDateValidForStudent } from "@/lib/studentFilter";
 import { extractDaysForTeacher } from "@/lib/enrollmentDays";
-import { buildFilteredStudents } from "@/lib/attendancePageData";
+import {
+  buildFilteredStudents,
+  buildMonthPayments,
+  buildKnownUnitPrices,
+  buildTermCountMap,
+  buildPaidAmountByStudent,
+  buildUnitPriceByStudent,
+} from "@/lib/attendancePageData";
 import { toSubjectLabel } from "@/lib/labelMap";
 import HomeroomPicker from "@/components/consultation/HomeroomPicker";
 import { SkeletonTable } from "@/components/ui/Skeleton";
@@ -488,34 +495,19 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
     year,
     month
   );
-  const monthPayments = useMemo<PaymentLite[]>(() => {
-    if (!isEnglishTeacher || teacherShares.length === 0) return rawMonthPayments;
-    // shares → PaymentLite 변환. 기존 findStudentPayments 매칭을 위해 이름/학교 채움.
-    const byId = new Map<string, { name: string; school?: string; grade?: string; studentCode?: string }>();
-    for (const s of allStudents) {
-      byId.set(s.id, { name: s.name, school: s.school, grade: s.grade, studentCode: s.studentCode });
-    }
-    const billingMonth = `${year}${String(month).padStart(2, "0")}`;
-    const converted: PaymentLite[] = teacherShares.map((sh) => {
-      const stu = byId.get(sh.student_id);
-      return {
-        id: sh.id,
-        student_code: stu?.studentCode || "",
-        student_name: stu?.name || "",
-        school: stu?.school,
-        grade: stu?.grade,
-        billing_month: billingMonth,
-        // payment_name 에 class_name 을 넣어 inferTierForPrice 에서 학생 DB class 로 매칭
-        payment_name: sh.class_name,
-        charge_amount: sh.allocated_paid, // 납입 기준으로 처리 (기존 로직과 호환)
-        discount_amount: Math.max(0, sh.allocated_charge - sh.allocated_paid),
-        paid_amount: sh.allocated_paid,
-        teacher_name: selectedTeacher?.name,
-        teacher_staff_id: sh.teacher_staff_id,
-      };
-    });
-    return converted;
-  }, [isEnglishTeacher, teacherShares, rawMonthPayments, allStudents, year, month, selectedTeacher?.name]);
+  const monthPayments = useMemo<PaymentLite[]>(
+    () =>
+      buildMonthPayments({
+        isEnglishTeacher,
+        teacherShares,
+        rawMonthPayments,
+        allStudents,
+        year,
+        month,
+        selectedTeacherName: selectedTeacher?.name,
+      }),
+    [isEnglishTeacher, teacherShares, rawMonthPayments, allStudents, year, month, selectedTeacher?.name]
+  );
 
   /**
    * 수납명에서 끝의 요일 토큰을 제거한 prefix (분반/tier 폴백 식별자).
@@ -529,15 +521,10 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
    */
   // deps 좁힘 (audit v5 #8) — salaryConfig 전체 reference 변경에 무감각.
   //   knownUnitPrices 는 items 만 의존하므로 salaryConfig.items 만 봄.
-  const knownUnitPrices = useMemo(() => {
-    const set = new Set<number>();
-    for (const item of salaryConfig.items || []) {
-      // baseTuition 과 unitPrice 둘 다 후보로 추가 (서로 다를 수 있음)
-      if (item.baseTuition && item.baseTuition > 0) set.add(item.baseTuition);
-      if (item.unitPrice && item.unitPrice > 0) set.add(item.unitPrice);
-    }
-    return Array.from(set).sort((a, b) => b - a);
-  }, [salaryConfig.items]);
+  const knownUnitPrices = useMemo(
+    () => buildKnownUnitPrices(salaryConfig.items),
+    [salaryConfig.items]
+  );
 
   /**
    * 수납 엔진 — charge 금액에서 단가를 역산.
@@ -932,131 +919,43 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
   ) => filterPaymentsForTeacherRow(payments, { ...opts, rowDays: row.days });
 
   // 행별 등록차수: (이 수강에 해당하는 수납 합계) / (이 수강의 학생 단가)
-  const termCountMap = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!selectedTeacher) return map;
-
-    // 영어 강사: allocated_units 가 있으면 그대로 사용, 없으면 paid/unit_price.
-    // virtual 학생이 allStudents 에 없어 findStudentPayments 매칭 실패하는 문제 회피.
-    if (isEnglishTeacher && teacherShares.length > 0) {
-      for (const sh of teacherShares) {
-        const key = sh.class_name
-          ? `${sh.student_id}|${sh.class_name}`
-          : sh.student_id;
-        let term = 0;
-        if (typeof sh.allocated_units === "number" && sh.allocated_units > 0) {
-          term = Math.round(sh.allocated_units);
-        } else if (sh.unit_price && sh.unit_price > 0 && sh.allocated_paid > 0) {
-          term = Math.round(sh.allocated_paid / sh.unit_price);
-        }
-        if (term > 0) map.set(key, (map.get(key) || 0) + term);
-      }
-      return map;
-    }
-
-    if (monthPayments.length === 0) return map;
-    const opts = {
-      teacherId: selectedTeacher.id,
-      teacherName: selectedTeacher.name,
-      teacherEnglishName: selectedTeacher.englishName,
-      isMathTeacher: !!selectedTeacher.subjects?.some(
-        (s) => s === "math" || s === "highmath"
-      ),
-    };
-
-    for (const row of studentRows) {
-      // tier 기반 정확 매칭된 수납 직접 사용 (studentRows 생성 시 byClass 로 이미 분류됨).
-      // filterPaymentsForRow 의 요일 subset 매칭은 tier 다른 행에 같은 요일 수납을 중복 귀속시키는 버그가 있어 우회.
-      const rowWithPayments = row as Student & { _payments?: PaymentLite[] };
-      let filtered: PaymentLite[] | undefined = rowWithPayments._payments;
-      if (!filtered) {
-        // fallback: 레거시 row (분반 없는 단순 학생) — 기존 경로 유지
-        const studentPayments = findStudentPayments(row, monthPayments);
-        filtered = filterPaymentsForRow(row, studentPayments, opts);
-      }
-      if (!filtered || filtered.length === 0) continue;
-
-      const totalCharge = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
-      if (totalCharge <= 0) continue;
-
-      const setting = matchSalarySetting(
-        row,
+  const termCountMap = useMemo(
+    () =>
+      buildTermCountMap({
+        studentRows,
+        monthPayments,
+        selectedTeacher,
         salaryConfig,
-        undefined,
-        tierOverrides[row.id]
-      );
-      const unitPrice = setting?.unitPrice || 0;
-      if (unitPrice <= 0) continue;
-
-      const term = Math.round(totalCharge / unitPrice);
-      if (term > 0) map.set(row.id, term);
-    }
-    return map;
-  }, [studentRows, monthPayments, selectedTeacher, salaryConfig, tierOverrides, isEnglishTeacher, teacherShares]);
+        tierOverrides,
+        isEnglishTeacher,
+        teacherShares,
+      }),
+    [studentRows, monthPayments, selectedTeacher, salaryConfig, tierOverrides, isEnglishTeacher, teacherShares]
+  );
 
   const loading = staffLoading || studentsLoading || attendanceLoading;
 
   // 행(수강)별 이번 달 수납 합계 — 수강 요일 세트와 일치하는 수납만 집계
-  const paidAmountByStudent = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!selectedTeacher) return map;
-
-    // 영어 강사: teacherShares 를 직접 row.id (`{studentId}|{className}`) 키로 매핑.
-    // findStudentPayments 는 name/studentCode 매칭이라 virtual 학생 (Firebase 미등록)
-    // 의 경우 allStudents 에 없어 student_name="" 로 변환되어 매칭 실패.
-    // shares 는 이미 (studentId, className) 튜플을 가지고 있어 직접 키로 쓰면 정확.
-    if (isEnglishTeacher && teacherShares.length > 0) {
-      for (const sh of teacherShares) {
-        const key = sh.class_name
-          ? `${sh.student_id}|${sh.class_name}`
-          : sh.student_id;
-        const prev = map.get(key) || 0;
-        map.set(key, prev + (sh.allocated_paid || 0));
-      }
-      return map;
-    }
-
-    if (monthPayments.length === 0) return map;
-    const opts = {
-      teacherId: selectedTeacher.id,
-      teacherName: selectedTeacher.name,
-      teacherEnglishName: selectedTeacher.englishName,
-      isMathTeacher: !!selectedTeacher.subjects?.some(
-        (s) => s === "math" || s === "highmath"
-      ),
-    };
-
-    for (const row of studentRows) {
-      // tier 기반 분류된 수납 직접 사용 (termCountMap 와 동일 로직)
-      const rowWithPayments = row as Student & { _payments?: PaymentLite[] };
-      let filtered: PaymentLite[] | undefined = rowWithPayments._payments;
-      if (!filtered) {
-        const studentPayments = findStudentPayments(row, monthPayments);
-        filtered = filterPaymentsForRow(row, studentPayments, opts);
-      }
-      if (!filtered || filtered.length === 0) continue;
-      const total = filtered.reduce((s, p) => s + (p.charge_amount || 0), 0);
-      if (total > 0) map.set(row.id, total);
-    }
-    return map;
-  }, [studentRows, monthPayments, selectedTeacher, isEnglishTeacher, teacherShares]);
+  const paidAmountByStudent = useMemo(
+    () =>
+      buildPaidAmountByStudent({
+        studentRows,
+        monthPayments,
+        selectedTeacher,
+        isEnglishTeacher,
+        teacherShares,
+      }),
+    [studentRows, monthPayments, selectedTeacher, isEnglishTeacher, teacherShares]
+  );
 
   // 행별 유닛단가 오버라이드 (영어 payment_shares.unit_price).
   // 같은 tier 이름이어도 학년별로 단가가 다른 시트 대응 — e.g.
   // "중등브릿지" 초등=8000, 중등=12000 / "중등 2T" 중1=12000, 중2·3=12500.
   // studentRows.id = `${studentId}|${className}` 키 체계에 맞춤.
-  const unitPriceByStudent = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!isEnglishTeacher || teacherShares.length === 0) return map;
-    for (const sh of teacherShares) {
-      if (!sh.unit_price || sh.unit_price <= 0) continue;
-      const key = sh.class_name
-        ? `${sh.student_id}|${sh.class_name}`
-        : sh.student_id;
-      map.set(key, sh.unit_price);
-    }
-    return map;
-  }, [isEnglishTeacher, teacherShares]);
+  const unitPriceByStudent = useMemo(
+    () => buildUnitPriceByStudent({ isEnglishTeacher, teacherShares }),
+    [isEnglishTeacher, teacherShares]
+  );
 
   // 통계 — 행 단위로 집계해 합산 (학생 수는 고유 학생 기준)
   const stats = useMemo(
