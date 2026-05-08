@@ -583,6 +583,8 @@ export default function AttendancePage() {
    * 단가 풀 — salaryConfig.items 의 비율제 baseTuition(+ fixed 유형의 unitPrice) 집합.
    * "수납 엔진"이 수납 금액을 이 풀의 단가로 역산 매칭하는 기준.
    */
+  // deps 좁힘 (audit v5 #8) — salaryConfig 전체 reference 변경에 무감각.
+  //   knownUnitPrices 는 items 만 의존하므로 salaryConfig.items 만 봄.
   const knownUnitPrices = useMemo(() => {
     const set = new Set<number>();
     for (const item of salaryConfig.items || []) {
@@ -591,7 +593,7 @@ export default function AttendancePage() {
       if (item.unitPrice && item.unitPrice > 0) set.add(item.unitPrice);
     }
     return Array.from(set).sort((a, b) => b - a);
-  }, [salaryConfig]);
+  }, [salaryConfig.items]);
 
   /**
    * 수납 엔진 — charge 금액에서 단가를 역산.
