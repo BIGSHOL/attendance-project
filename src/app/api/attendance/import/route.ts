@@ -139,10 +139,18 @@ export async function POST(request: NextRequest) {
 
   let cursor = 0;
   let upsertedTotal = 0;
-  const errorBox: { value: { idx: number; message: string } | null } = { value: null };
+  // 첫 에러를 가장 작은 batch idx 로 기록 (모든 worker 의 에러 중 batch 순서가
+  // 가장 빠른 것). Node.js single-thread 라 actual race 는 없지만, 첫 호출
+  // 순서가 아닌 batch idx 기준으로 보고해야 운영자가 어떤 데이터 batch 에서
+  // 실패했는지 명확하게 파악 가능.
+  type BatchError = { idx: number; message: string };
+  const errorBox: { value: BatchError | null; hasError: boolean } = {
+    value: null,
+    hasError: false,
+  };
 
   async function worker() {
-    while (cursor < batches.length && !errorBox.value) {
+    while (cursor < batches.length && !errorBox.hasError) {
       const myIdx = cursor++;
       const batch = batches[myIdx];
       const { data: upserted, error } = await supabase
@@ -153,7 +161,12 @@ export async function POST(request: NextRequest) {
         })
         .select("id");
       if (error) {
-        if (!errorBox.value) errorBox.value = { idx: myIdx, message: error.message };
+        // 첫 에러 또는 더 작은 idx 의 에러만 기록 (사용자에게 가장 정확한 보고).
+        const current = errorBox.value;
+        if (!current || current.idx > myIdx) {
+          errorBox.value = { idx: myIdx, message: error.message };
+        }
+        errorBox.hasError = true;
         console.error(`[import] upsert 실패 (batch ${myIdx}):`, error);
         return;
       }
