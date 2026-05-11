@@ -378,8 +378,12 @@ export async function syncTeacherSheet(
         }
       }
 
-      // 3. Import API로 저장 (탭이 커버하는 날짜 범위만 덮어쓰기)
-      const importRes = await fetch("/api/attendance/import", {
+      // 3. Import API + payment_shares 병렬 (audit V7 Phase 3).
+      //   둘 다 student_id 만 사용 (FK 없음). virtual_students 가 위에서 이미 upsert
+      //   되었으므로 의존성 만족. 두 API 동시 호출로 RTT 1× 절감.
+      //
+      //   Promise.allSettled — 한쪽 실패해도 다른 쪽은 진행. 결과는 개별 처리.
+      const importPromise: Promise<Response> = fetch("/api/attendance/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -393,16 +397,11 @@ export async function syncTeacherSheet(
           endDate: parsed.maxDate || undefined,
         }),
       });
-      if (!importRes.ok) {
-        const err = await importRes.json();
-        monthResult.error = err.error || "저장 실패";
-      }
 
-      // 3-b. payment_shares upsert — 영어 강사 시트의 학생 행별 귀속 수납.
+      // payment_shares — 영어 강사 시트의 학생 행별 귀속 수납.
       // 재동기화 시 이 강사·월 범위의 기존 shares(is_manual=false) 자동 삭제 후 재삽입.
-      if (shares.length > 0) {
-        try {
-          const shareRes = await fetch("/api/payment-shares", {
+      const sharesPromise: Promise<Response | null> = shares.length > 0
+        ? fetch("/api/payment-shares", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -412,19 +411,42 @@ export async function syncTeacherSheet(
                 month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
               },
             }),
-          });
-          if (!shareRes.ok) {
-            const err = await shareRes.json().catch(() => ({}));
-            console.warn("[sync] payment_shares 저장 실패:", err.error);
-          } else {
-            const body = await shareRes.json().catch(() => ({}));
-            console.log(
-              `[sync] ${tab.sheetName} payment_shares upsert: ${body.upserted || 0}건`
-            );
-          }
-        } catch (e) {
-          console.warn("[sync] payment_shares 저장 중 오류:", (e as Error).message);
+          })
+        : Promise.resolve(null);
+
+      const [importSettled, sharesSettled] = await Promise.allSettled([
+        importPromise,
+        sharesPromise,
+      ]);
+
+      // import 결과 처리
+      if (importSettled.status === "fulfilled") {
+        const importRes = importSettled.value;
+        if (!importRes.ok) {
+          const err = await importRes.json().catch(() => ({}));
+          monthResult.error = err.error || "저장 실패";
         }
+      } else {
+        monthResult.error = (importSettled.reason as Error)?.message || "import 실패";
+      }
+
+      // payment_shares 결과 처리 (실패해도 저장 자체는 진행 — 경고만)
+      if (sharesSettled.status === "fulfilled" && sharesSettled.value) {
+        const shareRes = sharesSettled.value;
+        if (!shareRes.ok) {
+          const err = await shareRes.json().catch(() => ({}));
+          console.warn("[sync] payment_shares 저장 실패:", err.error);
+        } else {
+          const body = await shareRes.json().catch(() => ({}));
+          console.log(
+            `[sync] ${tab.sheetName} payment_shares upsert: ${body.upserted || 0}건`
+          );
+        }
+      } else if (sharesSettled.status === "rejected") {
+        console.warn(
+          "[sync] payment_shares 저장 중 오류:",
+          (sharesSettled.reason as Error)?.message
+        );
       }
     } catch (e) {
       monthResult.error = (e as Error).message;
