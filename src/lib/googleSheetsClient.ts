@@ -126,12 +126,25 @@ async function getCachedAccessToken(): Promise<string> {
       const result = await client.getAccessToken();
       const token = result.token;
       if (!token) throw new Error("서비스 계정 토큰 발급 실패");
-      // expires_at 가 google-auth-library 응답에 있을 수도 있음 (epoch ms).
-      // 없으면 50분 보수적 fallback (실제 1시간 만료 - 10분 buffer).
-      const expiresAtRaw = (result.res?.data as { expires_in?: number } | undefined)?.expires_in;
-      const expiresAt = expiresAtRaw
-        ? Date.now() + expiresAtRaw * 1000
-        : Date.now() + 50 * 60_000;
+
+      // 만료 시각 결정 — 다단계 fallback:
+      //   1순위: client.credentials.expiry_date (epoch ms, JWT class 가 자동 설정)
+      //   2순위: result.res.data.expires_in (초 단위, OAuth token response 표준)
+      //   3순위: 50분 보수적 fallback (실제 1시간 만료 - 10분 buffer)
+      let expiresAt: number;
+      const credExpiry = client.credentials?.expiry_date;
+      if (typeof credExpiry === "number" && credExpiry > Date.now()) {
+        expiresAt = credExpiry;
+      } else {
+        const resData = result.res?.data as { expires_in?: number } | undefined;
+        const expiresInSec = resData?.expires_in;
+        if (typeof expiresInSec === "number" && expiresInSec > 0) {
+          expiresAt = Date.now() + expiresInSec * 1000;
+        } else {
+          expiresAt = Date.now() + 50 * 60_000;
+        }
+      }
+
       cachedToken = { token, expiresAt };
       return token;
     } finally {
