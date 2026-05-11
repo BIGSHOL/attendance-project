@@ -754,18 +754,21 @@ export default function SettlementPage() {
       const realStudent = studentById.get(sid);
       const studentMatched = !!realStudent;
 
-      // placeholder student (학생 매칭 실패 시) — UI 호환을 위한 minimal Student
-      const studentObj: Student =
-        realStudent ||
-        ({
-          id: sid,
-          name: sid.startsWith("virtual_")
-            ? `(미매칭) ${sid.split("_").slice(2).join(" ").slice(0, 30)}`
-            : `(미매칭) ${sid.slice(0, 30)}`,
-          school: "",
-          grade: "",
-          enrollments: [],
-        } as unknown as Student);
+      // placeholder student (학생 매칭 실패 시) — Student 의 required 필드만
+      // 채운 minimal 객체. status="unmatched" 로 명시 → 향후 UI 에서 placeholder
+      // 식별 가능. 다른 optional 필드 (attendance, memos 등) 는 undefined 이므로
+      // 시수 검증탭이 아닌 다른 컴포넌트에서 row.student 를 받을 때는 optional
+      // chaining (?.) 필수.
+      const studentObj: Student = realStudent || {
+        id: sid,
+        name: sid.startsWith("virtual_")
+          ? `(미매칭) ${sid.split("_").slice(2).join(" ").slice(0, 30)}`
+          : `(미매칭) ${sid.slice(0, 30)}`,
+        school: "",
+        grade: "",
+        status: "unmatched",
+        enrollments: [],
+      };
 
       // 학생의 enrollment 로 (teacher_id → subject) 추정
       // attendance teacher_id 가 enrollment 와 매칭되면 그 subject, 아니면 "미매칭"
