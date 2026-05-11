@@ -790,12 +790,34 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
         let classKey: string | null = null;
 
         if (nonEmptyDbClassNames.length > 0) {
-          // DB 분반이 있으면 그 안에서만 선택 (price 매칭 → charge 역산 → 단일 분반)
-          const inferred = inferTierForPrice(price, charge);
-          if (inferred && byClass.has(inferred)) {
-            classKey = inferred;
-          } else if (nonEmptyDbClassNames.length === 1) {
-            classKey = nonEmptyDbClassNames[0];
+          // DB 분반이 있으면 그 안에서만 선택.
+          //
+          // payment_name 의 "보강" / "특강" 키워드 우선 매칭 (audit V8 후속):
+          //   같은 단가의 main 과 특강 tier 가 동시에 있을 때, 단가 매칭만 으로는
+          //   inferTierForPrice 가 Set 순서대로 main 을 먼저 골라 보강 payment 가
+          //   main row 에 잘못 귀속됨. 박지율 케이스:
+          //     dbClassNames = {중등 3T (24000), 중등특강 (24000)}
+          //     보강 payment "주말보강" charge 72000 → 둘 다 매칭 → 첫 번째 중등 3T 선택
+          //   → 보강 row 가 paid=0 으로 salary 0 됨.
+          //   payment_name 에 "보강"/"특강" 있으면 특강 카테고리 tier 우선 선택.
+          const pname = p.payment_name || "";
+          const looksLikeSpecial = /보강|특강/.test(pname);
+          if (looksLikeSpecial) {
+            const specialTier = nonEmptyDbClassNames.find((cn) => {
+              const item = (salaryConfig.items || []).find((i) => i.name === cn);
+              return item?.group === "특강";
+            });
+            if (specialTier && byClass.has(specialTier)) {
+              classKey = specialTier;
+            }
+          }
+          if (!classKey) {
+            const inferred = inferTierForPrice(price, charge);
+            if (inferred && byClass.has(inferred)) {
+              classKey = inferred;
+            } else if (nonEmptyDbClassNames.length === 1) {
+              classKey = nonEmptyDbClassNames[0];
+            }
           }
           // price/charge 역산도 실패하고 분반도 여러 개면 이 수납은 drop (ghost 생성 방지)
         } else {
