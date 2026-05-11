@@ -255,7 +255,11 @@ export default function BulkSyncSettings({
                 <span>5 (최대)</span>
               </div>
               <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                높을수록 빠르지만 Google Sheets API rate limit 에 주의
+                높을수록 빠르지만 Google Sheets API rate limit 에 주의.
+                <br />
+                <span className="text-amber-600 dark:text-amber-400">
+                  ※ 다음 동기화부터 적용됩니다 (진행 중인 sync 영향 없음)
+                </span>
               </p>
             </div>
           )}
