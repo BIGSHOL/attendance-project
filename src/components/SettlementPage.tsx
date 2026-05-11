@@ -622,25 +622,49 @@ export default function SettlementPage() {
     };
   }, [filteredSettlements, teacherSheets]);
 
-  // 학생별 시수 검증: 과목별로 납부액 vs 실제 수강 시수 × 기준단가
+  // 학생별 시수 검증 (audit V8: attendance-first 재설계).
+  //
+  // 변경 전: students 의 enrollment 를 outer loop 로 돌고 매칭되는 attendance 만 합산
+  //   → enrollment 매칭 실패 시 시수 누락 (4월 기준 24% 누락 발생).
+  //   → 정산탭의 raw attendance 합과 불일치.
+  //
+  // 변경 후: attendance 의 (student_id, teacher_id) 를 outer 로 돌고 student/teacher
+  //   는 lookup 으로 표시. 매칭 실패 시 ID 그대로 표시 (누락 0).
+  //   → 시수 합 = 정산탭 시수 합 = 일치 보장.
+  //   → 추가로 attendance 없이 수납만 있는 학생 ("미등록") 도 별도 row 표시.
   const studentChecks = useMemo(() => {
     const monthStr = `${year}-${String(month).padStart(2, "0")}`;
 
-    // 선생님 id → teacher 객체 (staff_id/이름 매칭용)
+    // lookup 맵
     const teacherById = new Map<string, Teacher>();
     for (const t of teachers) teacherById.set(t.id, t);
+    const studentById = new Map<string, Student>();
+    for (const s of students) studentById.set(s.id, s);
 
-    // (studentId, teacherId) → hours
-    const hoursByStudentTeacher = new Map<string, number>();
+    // attendance: (student_id, teacher_id) → hours
+    const hoursByST = new Map<string, number>();
     for (const r of attendanceRecords) {
       if (r.hours <= 0) continue;
       if (!r.date.startsWith(monthStr)) continue;
       const key = `${r.student_id}|${r.teacher_id}`;
-      hoursByStudentTeacher.set(key, (hoursByStudentTeacher.get(key) || 0) + r.hours);
+      hoursByST.set(key, (hoursByST.get(key) || 0) + r.hours);
     }
 
-    const rows: Array<{
+    // student_id → set of teacher_ids (attendance 기반, attendance 가 진실)
+    const teachersByStudent = new Map<string, Set<string>>();
+    for (const key of hoursByST.keys()) {
+      const [sid, tid] = key.split("|");
+      let set = teachersByStudent.get(sid);
+      if (!set) {
+        set = new Set();
+        teachersByStudent.set(sid, set);
+      }
+      set.add(tid);
+    }
+
+    type Row = {
       student: Student;
+      studentMatched: boolean;
       subject: string;
       teacherNames: string;
       units: number;
@@ -654,52 +678,41 @@ export default function SettlementPage() {
         teacherName: string;
         units: number;
         paid: number;
+        teacherMatched: boolean;
       }>;
-    }> = [];
+    };
+    const rows: Row[] = [];
 
-    for (const s of students) {
-      const activeEnrollments = (s.enrollments || []).filter(isActiveInMonth);
-      if (activeEnrollments.length === 0) {
-        // 출석도 없고 enrollment도 없으면 skip. 단, 수납만 있는 경우는 "기타"로 한 번 표시
-        const payList = findStudentPayments(s, monthPayments);
-        if (payList.length === 0) continue;
-        const paid = payList.reduce((a, p) => a + (p.charge_amount || 0), 0);
-        rows.push({
-          student: s,
-          subject: "미등록",
-          teacherNames: "-",
-          units: 0,
-          paid,
-          unitPrice: 0,
-          expectedSessions: 0,
-          diffSessions: 0,
-          diffAmount: paid,
-          hasPayment: true,
-          teacherBreakdown: [],
-        });
-        continue;
-      }
+    // 1. attendance 가 있는 학생들 — student_id 별로 outer loop
+    for (const [sid, teacherIds] of teachersByStudent) {
+      const realStudent = studentById.get(sid);
+      const studentMatched = !!realStudent;
 
-      // 과목별로 enrollment 묶기
-      const bySubject = new Map<string, typeof activeEnrollments>();
-      for (const e of activeEnrollments) {
-        const sub = e.subject || "기타";
-        if (!bySubject.has(sub)) bySubject.set(sub, []);
-        bySubject.get(sub)!.push(e);
-      }
+      // placeholder student (학생 매칭 실패 시) — UI 호환을 위한 minimal Student
+      const studentObj: Student =
+        realStudent ||
+        ({
+          id: sid,
+          name: sid.startsWith("virtual_")
+            ? `(미매칭) ${sid.split("_").slice(2).join(" ").slice(0, 30)}`
+            : `(미매칭) ${sid.slice(0, 30)}`,
+          school: "",
+          grade: "",
+          enrollments: [],
+        } as unknown as Student);
 
-      const allPayments = findStudentPayments(s, monthPayments);
-
-      for (const [subject, enrolls] of bySubject) {
-        // 해당 과목의 선생님들
-        const teacherIds = new Set<string>();
-        const teacherNames = new Set<string>();
-        for (const e of enrolls) {
+      // 학생의 enrollment 로 (teacher_id → subject) 추정
+      // attendance teacher_id 가 enrollment 와 매칭되면 그 subject, 아니면 "미매칭"
+      const teacherToSubject = new Map<string, string>();
+      if (realStudent) {
+        const activeEnrollments = (realStudent.enrollments || []).filter(
+          isActiveInMonth
+        );
+        for (const e of activeEnrollments) {
           let tid: string | undefined;
           if (e.staffId && teacherById.has(e.staffId)) {
             tid = e.staffId;
           } else {
-            // 이름으로 매칭
             const found = teachers.find(
               (t) =>
                 t.name === e.teacher ||
@@ -709,80 +722,104 @@ export default function SettlementPage() {
             );
             if (found) tid = found.id;
           }
-          if (tid) {
-            teacherIds.add(tid);
-            const t = teacherById.get(tid);
-            if (t) teacherNames.add(t.name);
-          } else if (e.teacher) {
-            teacherNames.add(e.teacher);
-          }
+          if (tid) teacherToSubject.set(tid, e.subject || "기타");
         }
+      }
 
-        // 이 학생 × 이 과목 선생님들의 payment_shares (영어 강사)
-        //   영어는 payments 가 아니라 payment_shares 에 저장되므로,
-        //   여기서도 함께 봐야 청구액(시수 검증의 분자) 이 0 으로 누락되지 않음.
+      // subject 별 teacher 그룹핑 (attendance 의 teacher_ids 기준)
+      const teachersBySubject = new Map<string, Set<string>>();
+      for (const tid of teacherIds) {
+        const subject = teacherToSubject.get(tid) || "미매칭";
+        let set = teachersBySubject.get(subject);
+        if (!set) {
+          set = new Set();
+          teachersBySubject.set(subject, set);
+        }
+        set.add(tid);
+      }
+
+      const allPayments = realStudent
+        ? findStudentPayments(realStudent, monthPayments)
+        : [];
+
+      for (const [subject, subjectTeacherIds] of teachersBySubject) {
+        // 영어 payment_shares
         const studentTeacherShares = allShares.filter(
-          (sh) => sh.student_id === s.id && teacherIds.has(sh.teacher_staff_id)
+          (sh) =>
+            sh.student_id === sid && subjectTeacherIds.has(sh.teacher_staff_id)
         );
 
-        // 선생님별 시수/수납 breakdown
-        const teacherBreakdown: Array<{ teacherName: string; units: number; paid: number }> = [];
+        // teacher 별 시수/수납 breakdown
+        const teacherBreakdown: Array<{
+          teacherName: string;
+          units: number;
+          paid: number;
+          teacherMatched: boolean;
+        }> = [];
+        const teacherNames = new Set<string>();
         let units = 0;
-        for (const tid of teacherIds) {
-          const tUnits = hoursByStudentTeacher.get(`${s.id}|${tid}`) || 0;
-          // payments(charge_amount) + 같은 학생 영어 share(allocated_charge) 합산
+        for (const tid of subjectTeacherIds) {
+          const tUnits = hoursByST.get(`${sid}|${tid}`) || 0;
+          units += tUnits;
+          const t = teacherById.get(tid);
+          const teacherMatched = !!t;
+          // 매칭 실패 시 ID 그대로 표시 (운영자가 보고 처리 가능)
+          const teacherName = t?.name || `(미매칭) ${tid}`;
+          teacherNames.add(teacherName);
           const tPaymentCharge = allPayments
             .filter((p) => p.teacher_staff_id === tid)
             .reduce((a, p) => a + (p.charge_amount || 0), 0);
           const tShareCharge = studentTeacherShares
             .filter((sh) => sh.teacher_staff_id === tid)
             .reduce((a, sh) => a + (sh.allocated_charge || 0), 0);
-          units += tUnits;
           teacherBreakdown.push({
-            teacherName: teacherById.get(tid)?.name || tid,
+            teacherName,
             units: tUnits,
             paid: tPaymentCharge + tShareCharge,
+            teacherMatched,
           });
         }
 
-        // 해당 과목 선생님의 수납만 합산 (teacher_staff_id 기준)
+        // 과목 수납 (teacher_staff_id 기준 매칭)
         const subjectPayments = allPayments.filter(
-          (p) => p.teacher_staff_id && teacherIds.has(p.teacher_staff_id)
+          (p) =>
+            p.teacher_staff_id && subjectTeacherIds.has(p.teacher_staff_id)
         );
-        // teacher_staff_id 가 없으면 (레거시) 과목 분리 불가 → 폴백으로 모든 수납을 첫 과목에만 반영
         const paymentsCharge = subjectPayments.reduce(
           (a, p) => a + (p.charge_amount || 0),
           0
         );
-        // 영어: payment_shares.allocated_charge 를 추가 (수학·과학은 shares 비어 있어 영향 없음)
         const sharesCharge = studentTeacherShares.reduce(
           (a, sh) => a + (sh.allocated_charge || 0),
           0
         );
         const paid = paymentsCharge + sharesCharge;
 
-        // 과목의 선생님 중 첫 번째로 발견되는 tier 오버라이드 사용
+        // tier 오버라이드 (선생님 중 첫 번째)
         let tierOverrideId: string | undefined;
-        for (const tid of teacherIds) {
-          const ov = tierOverrides[`${tid}|${s.id}`];
-          if (ov) { tierOverrideId = ov; break; }
+        for (const tid of subjectTeacherIds) {
+          const ov = tierOverrides[`${tid}|${sid}`];
+          if (ov) {
+            tierOverrideId = ov;
+            break;
+          }
         }
-        const setting = matchSalarySetting(s, salaryConfig, subjectToSalarySubject(subject), tierOverrideId);
+        const setting = realStudent
+          ? matchSalarySetting(
+              realStudent,
+              salaryConfig,
+              subjectToSalarySubject(subject),
+              tierOverrideId
+            )
+          : undefined;
         const unitPrice = setting?.baseTuition || 0;
         const expectedSessions = unitPrice > 0 ? paid / unitPrice : 0;
         const diffSessions = expectedSessions - units;
         const diffAmount = paid - units * unitPrice;
 
-        // 시수도 0이고 수납도 0이면 skip (payments 든 shares 든 둘 다 비어야 함)
-        if (
-          units === 0 &&
-          subjectPayments.length === 0 &&
-          studentTeacherShares.length === 0
-        )
-          continue;
-
         rows.push({
-          student: s,
+          student: studentObj,
+          studentMatched,
           subject,
           teacherNames: Array.from(teacherNames).join(", ") || "-",
           units,
@@ -796,6 +833,28 @@ export default function SettlementPage() {
           teacherBreakdown,
         });
       }
+    }
+
+    // 2. attendance 없지만 수납만 있는 학생 — "미등록" 으로 표시 (기존 로직 유지)
+    for (const s of students) {
+      if (teachersByStudent.has(s.id)) continue;
+      const payList = findStudentPayments(s, monthPayments);
+      if (payList.length === 0) continue;
+      const paid = payList.reduce((a, p) => a + (p.charge_amount || 0), 0);
+      rows.push({
+        student: s,
+        studentMatched: true,
+        subject: "미등록",
+        teacherNames: "-",
+        units: 0,
+        paid,
+        unitPrice: 0,
+        expectedSessions: 0,
+        diffSessions: 0,
+        diffAmount: paid,
+        hasPayment: true,
+        teacherBreakdown: [],
+      });
     }
 
     // 차이가 있는 항목 우선 정렬 (절대값 큰 순)

@@ -1,12 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  collection,
-  collectionGroup,
-  getDocs,
-  query,
-  where,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getAdminDb } from "@/lib/firebase-admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/apiAuth";
 import type { Student, Enrollment } from "@/types";
@@ -24,10 +17,13 @@ export async function GET() {
   if (!auth.ok) return auth.response;
 
   try {
-    const q = query(
-      collection(db, "students"),
-      where("status", "in", ["active", "withdrawn"])
-    );
+    // Firebase Admin SDK 사용 — Firestore Rules 우회 (서비스 계정 인증).
+    // 클라이언트 SDK 는 collectionGroup("enrollments") 에 별도 rule 필요해
+    // 운영자 환경별로 권한 오류 발생. Admin SDK 는 rules 영향 없이 안정.
+    const adb = getAdminDb();
+    const studentsQuery = adb
+      .collection("students")
+      .where("status", "in", ["active", "withdrawn"]);
 
     // 학생 메타 + virtual_students + 모든 enrollments 를 한 번에 병렬 fetch (audit v5 #2 + #7).
     //
@@ -37,8 +33,8 @@ export async function GET() {
     //   collectionGroup 은 모든 path 의 "enrollments" subcollection 을 평탄화. 503 RTT → 1 RTT.
     //   부모 doc 참조는 enrollSnap.ref.parent.parent (= students/{id}) 로 학생 ID 추출.
     const [snap, enrollAllSnap, virtualResult] = await Promise.all([
-      getDocs(q),
-      getDocs(collectionGroup(db, "enrollments")),
+      studentsQuery.get(),
+      adb.collectionGroup("enrollments").get(),
       supabase.from("virtual_students").select("*"),
     ]);
     const virtualRows = virtualResult.data;
