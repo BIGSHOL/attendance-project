@@ -99,8 +99,15 @@ export async function syncTeacherSheet(
     }
   > = {};
 
-  // 2. 각 탭별로 파싱 + 매칭 + 저장
-  for (const tab of tabs) {
+  // 2. 각 탭별 처리를 별도 함수로 추출하여 Promise.all 병렬화 (audit V7 후속).
+  //   기존: for (const tab of tabs) sequential — 한 선생님의 N개 월별 탭이
+  //         순차 처리되어 N× 누적 (예: 3개월 탭 = 3배 시간).
+  //   개선: tabs.map(processTab) → Promise.all — 동시 처리. 각 탭은 다른
+  //         month 라 attendance/payment_shares UNIQUE 충돌 없음 (date/month 다름).
+  //         tierOverrides 는 outer scope object 인데 JS single-thread 라
+  //         동시 mutation race 없음.
+  //   효과: 다중 월 동기화 시 N× 빠름.
+  const processTab = async (tab: typeof tabs[number]): Promise<MonthSyncResult> => {
     const monthResult: MonthSyncResult = {
       year: tab.year,
       month: tab.month,
@@ -452,8 +459,13 @@ export async function syncTeacherSheet(
       monthResult.error = (e as Error).message;
     }
 
-    result.months.push(monthResult);
-  }
+    return monthResult;
+  };
+
+  // 탭 단위 병렬 처리. 시트 fetch 가 sync-fetch API 에서 이미 끝났고,
+  // 여기서는 파싱 + DB 쓰기 (virtual_students PUT + attendance.import POST +
+  // payment_shares PUT) 만 수행. 동시 N개 탭이 다른 month 라 DB 충돌 없음.
+  result.months = await Promise.all(tabs.map((tab) => processTab(tab)));
 
   // 3. tier 오버라이드 일괄 저장 (배열 형식 — 분반별 분리 지원)
   //   사용자가 학생 상세 페이지에서 직접 추가한 row 는 is_manual=true 라
