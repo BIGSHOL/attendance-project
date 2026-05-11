@@ -109,17 +109,26 @@ export default function TeacherDetail({ teacherId }: Props) {
   const { getPost, savePost } = useTeacherBlogPosts(teacherId, blogYear, blogMonth);
   const currentBlogPost = getPost(blogYear, blogMonth);
 
-  // 저장된 YYYY-MM-DD 를 현재 선택된 월 기준 "D" 로 변환 (다른 월 날짜는 제외)
-  // 화면 입력 단순화 — 사용자는 일(日) 숫자만 입력.
+  // 저장된 YYYY-MM-DD 를 표시용 토큰으로 역변환.
+  //   - 같은 연·월 → "D"
+  //   - 같은 연, 다른 월 → "M/D"   (지각 작성: 4월 블로그를 5월에 적은 경우)
+  //   - 다른 연도 → "YYYY-MM-DD"
   const blogMonthPrefix = `${blogYear}-${String(blogMonth).padStart(2, "0")}-`;
-  // selectedMonth 변경 시 blog 기록 불러오기 — DD 형식으로 역변환
+  const formatDateForDisplay = (iso: string): string => {
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+    if (y === blogYear && mo === blogMonth) return String(d);
+    if (y === blogYear) return `${mo}/${d}`;
+    return iso;
+  };
+  // selectedMonth 변경 시 blog 기록 불러오기
   useEffect(() => {
     if (currentBlogPost) {
-      const days = (currentBlogPost.dates || [])
-        .filter((d) => d.startsWith(blogMonthPrefix))
-        .map((d) => String(parseInt(d.slice(blogMonthPrefix.length), 10)))
-        .filter((d) => /^\d+$/.test(d));
-      setBlogDatesInput(days.join(", "));
+      const tokens = (currentBlogPost.dates || [])
+        .map(formatDateForDisplay)
+        .filter(Boolean);
+      setBlogDatesInput(tokens.join(", "));
       setBlogNoteInput(currentBlogPost.note || "");
     } else {
       setBlogDatesInput("");
@@ -128,20 +137,51 @@ export default function TeacherDetail({ teacherId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, currentBlogPost?.id]);
 
+  /**
+   * 토큰 → ISO(YYYY-MM-DD) 변환.
+   *   허용 포맷:
+   *     "15"           → 선택된 연·월 + 15일
+   *     "5/3", "5.3"   → 선택된 연 + 5월 3일 (지각 작성용)
+   *     "2026-05-03"   → 그대로
+   *     "2026/5/3"     → 정규화해서 그대로
+   *   invalid 한 토큰은 null 반환.
+   */
+  const parseBlogToken = (raw: string): string | null => {
+    const s = raw.trim();
+    if (!s) return null;
+    let y = blogYear, mo = blogMonth, d: number;
+    // YYYY-MM-DD 또는 YYYY/MM/DD
+    const full = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (full) {
+      y = parseInt(full[1], 10); mo = parseInt(full[2], 10); d = parseInt(full[3], 10);
+    } else {
+      // M/D 또는 M.D
+      const md = s.match(/^(\d{1,2})[/.](\d{1,2})$/);
+      if (md) {
+        mo = parseInt(md[1], 10); d = parseInt(md[2], 10);
+      } else {
+        // 일(日) 단독
+        const dayOnly = s.match(/^(\d{1,2})$/);
+        if (!dayOnly) return null;
+        d = parseInt(dayOnly[1], 10);
+      }
+    }
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+    if (mo < 1 || mo > 12) return null;
+    const lastDay = new Date(y, mo, 0).getDate();
+    if (d < 1 || d > lastDay) return null;
+    return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+
   const handleBlogSave = async () => {
-    // 선택된 월의 마지막 일(윤년 포함)
-    const monthDays = new Date(blogYear, blogMonth, 0).getDate();
-    const dates = blogDatesInput
-      .split(/[,\s]+/)
-      .map((d) => d.trim())
-      .filter(Boolean)
-      // "5", "05" 모두 허용. YYYY-MM-DD 형식으로 붙여넣어도 일(日)만 추출.
-      .map((d) => {
-        const m = d.match(/(\d{1,2})$/);
-        return m ? parseInt(m[1], 10) : NaN;
-      })
-      .filter((n) => Number.isFinite(n) && n >= 1 && n <= monthDays)
-      .map((n) => `${blogMonthPrefix}${String(n).padStart(2, "0")}`);
+    const dates = Array.from(
+      new Set(
+        blogDatesInput
+          .split(/[,\s]+/)
+          .map(parseBlogToken)
+          .filter((iso): iso is string => !!iso)
+      )
+    ).sort();
     await savePost(teacherId, blogYear, blogMonth, dates, blogNoteInput);
   };
   const [payments, setPayments] = useState<PaymentLite[]>([]);
@@ -557,13 +597,13 @@ export default function TeacherDetail({ teacherId }: Props) {
           <div className="space-y-2">
             <div>
               <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">
-                작성 일(日) — 쉼표 또는 공백으로 여러 개 입력 (연·월은 선택된 월로 자동 반영)
+                작성 일자 — 일(日)만 적으면 선택된 월로 자동 반영. 늦게 적은 경우 &quot;M/D&quot; 또는 &quot;YYYY-MM-DD&quot; 로 입력 (쉼표/공백 구분)
               </label>
               <input
                 type="text"
                 value={blogDatesInput}
                 onChange={(e) => setBlogDatesInput(e.target.value)}
-                placeholder="예: 5, 15"
+                placeholder="예: 5, 15, 5/3, 2026-05-10"
                 className="w-full rounded-sm border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
               />
             </div>
