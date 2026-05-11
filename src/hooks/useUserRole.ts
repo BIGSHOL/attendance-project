@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { cachedFetch, getCached, invalidateCache } from "@/lib/fetchCache";
 
 export type UserRole = "master" | "admin" | "teacher" | "pending";
 
@@ -42,22 +43,26 @@ export interface UserRoleData {
  * 서버 /api/me 엔드포인트를 호출해 dev bypass 와 Supabase 세션 두 경로를 통합 처리.
  * 미등록 사용자는 서버에서 pending 으로 자동 등록됨.
  */
-export function useUserRole() {
-  const [userRole, setUserRole] = useState<UserRoleData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState<string | null>(null);
+type MeResponse = { userRole: UserRoleData | null };
 
-  const fetch = useCallback(async () => {
-    setLoading(true);
+export function useUserRole() {
+  // /api/me 는 페이지마다 여러 컴포넌트에서 useUserRole 호출 → 같은 페이지에서
+  // 12회 이상 중복 fetch 가능. cachedFetch 로 inflight dedup + last-response 캐시.
+  // 캐시 hit 시 즉시 반환 (loading=false), miss 시 fetch.
+  const cached = getCached<MeResponse>("/api/me");
+  const initialRole = cached?.userRole ?? null;
+
+  const [userRole, setUserRole] = useState<UserRoleData | null>(initialRole);
+  const [loading, setLoading] = useState(!cached);
+  const [email, setEmail] = useState<string | null>(initialRole?.email ?? null);
+
+  const refetch = useCallback(async () => {
+    if (!getCached<MeResponse>("/api/me")) setLoading(true);
     try {
-      const res = await window.fetch("/api/me", { cache: "no-store" });
-      if (!res.ok) {
-        setUserRole(null);
-        setEmail(null);
-        return;
-      }
-      const data = await res.json();
-      const role = (data?.userRole ?? null) as UserRoleData | null;
+      // TTL 30초 — 사용자 역할은 자주 안 바뀌므로 페이지 안에서 N번 호출 시 1번만 네트워크.
+      // forceRefetch (invalidateCache) 로 로그인 상태 변경 시 명시적 갱신 가능.
+      const data = await cachedFetch<MeResponse>("/api/me", { ttlMs: 30_000 });
+      const role = data?.userRole ?? null;
       setUserRole(role);
       setEmail(role?.email ?? null);
     } catch {
@@ -68,9 +73,15 @@ export function useUserRole() {
     }
   }, []);
 
+  // 강제 새로고침 — 로그인 상태 변경 시 사용
+  const forceRefetch = useCallback(async () => {
+    invalidateCache("/api/me");
+    await refetch();
+  }, [refetch]);
+
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    refetch();
+  }, [refetch]);
 
   const isMaster = userRole?.role === "master";
   const isAdmin = userRole?.role === "admin" || isMaster;
@@ -87,6 +98,6 @@ export function useUserRole() {
     isTeacher,
     isPending,
     isApproved,
-    refetch: fetch,
+    refetch: forceRefetch,
   };
 }

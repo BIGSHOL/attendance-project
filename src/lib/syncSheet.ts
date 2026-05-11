@@ -99,8 +99,15 @@ export async function syncTeacherSheet(
     }
   > = {};
 
-  // 2. 각 탭별로 파싱 + 매칭 + 저장
-  for (const tab of tabs) {
+  // 2. 각 탭별 처리를 별도 함수로 추출하여 Promise.all 병렬화 (audit V7 후속).
+  //   기존: for (const tab of tabs) sequential — 한 선생님의 N개 월별 탭이
+  //         순차 처리되어 N× 누적 (예: 3개월 탭 = 3배 시간).
+  //   개선: tabs.map(processTab) → Promise.all — 동시 처리. 각 탭은 다른
+  //         month 라 attendance/payment_shares UNIQUE 충돌 없음 (date/month 다름).
+  //         tierOverrides 는 outer scope object 인데 JS single-thread 라
+  //         동시 mutation race 없음.
+  //   효과: 다중 월 동기화 시 N× 빠름.
+  const processTab = async (tab: typeof tabs[number]): Promise<MonthSyncResult> => {
     const monthResult: MonthSyncResult = {
       year: tab.year,
       month: tab.month,
@@ -191,16 +198,26 @@ export async function syncTeacherSheet(
         //  1) Firebase 에 없음 → virtual 학생으로 등록
         //  2) Firebase 에 있지만 이 선생님 담당이 아님 (시트에만 담당으로 기재)
         //     → virtual 학생으로 등록 (원본 Firebase 학생은 그대로 두고 별도 가상 학생 추가)
+        //
+        // ⚠ enrollment 매칭은 teacherId (Firebase staff doc id) 우선.
+        //   기존: e.teacher === teacherName (한글 이름) — staff 이름 표기 변경/오타에 취약.
+        //   기존: e.staffId === teacherName — staffId 는 doc id 라 한글 이름과는 거의 매칭 안 됨.
+        //   → 매칭 실패 케이스가 누적되어 학생이 매번 virtual 로 재등록되어 attendance 가
+        //     Firebase 학생이 아닌 virtual_id 로 저장되는 핵심 버그.
         const isThisTeacher = !!match?.enrollments?.some(
-          (e) => e.teacher === teacherName || e.staffId === teacherName
+          (e) =>
+            e.staffId === teacherId ||
+            e.teacher === teacherName ||
+            e.staffId === teacherName
         );
         if (!match || !isThisTeacher) {
-          // virtualId 에 teacherId 를 포함해 "학생 × 교사" 단위로 고유화.
-          // 같은 이름/학교/학년의 학생이 여러 교사에게 수강하는 경우
-          // (영어 부담임, 초등 복수 과목 담당 등), 예전 포맷
-          // `virtual_{name}_{school}_{grade}` 은 upsert 시 teacher_staff_id 가
-          // 마지막 sync 로 덮어써져 다른 교사의 UI 에서 학생이 사라지는 버그 발생.
-          const virtualId = `virtual_${teacherId}_${entry.studentName}_${entrySchool || "unknown"}_${entry.grade || "unknown"}`;
+          // virtualId 안정성 원칙 (audit V6):
+          //   - teacherId 포함 → 학생×교사 단위 고유화 (영어 부담임 등)
+          //   - school 포함 → 동명이인 구분
+          //   - grade **제외** → 학년 변경 시 ID 가 바뀌면 옛 attendance 가 orphan 되어
+          //     시수 검증/정산에서 누락됨. school+name+teacher 만으로 정체성 안정.
+          //     grade 는 column 으로만 보관해 UI 표시용으로 사용.
+          const virtualId = `virtual_${teacherId}_${entry.studentName}_${entrySchool || "unknown"}`;
           virtualToUpsert[virtualId] = {
             id: virtualId,
             name: entry.studentName,
@@ -368,8 +385,12 @@ export async function syncTeacherSheet(
         }
       }
 
-      // 3. Import API로 저장 (탭이 커버하는 날짜 범위만 덮어쓰기)
-      const importRes = await fetch("/api/attendance/import", {
+      // 3. Import API + payment_shares 병렬 (audit V7 Phase 3).
+      //   둘 다 student_id 만 사용 (FK 없음). virtual_students 가 위에서 이미 upsert
+      //   되었으므로 의존성 만족. 두 API 동시 호출로 RTT 1× 절감.
+      //
+      //   Promise.allSettled — 한쪽 실패해도 다른 쪽은 진행. 결과는 개별 처리.
+      const importPromise: Promise<Response> = fetch("/api/attendance/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -383,16 +404,11 @@ export async function syncTeacherSheet(
           endDate: parsed.maxDate || undefined,
         }),
       });
-      if (!importRes.ok) {
-        const err = await importRes.json();
-        monthResult.error = err.error || "저장 실패";
-      }
 
-      // 3-b. payment_shares upsert — 영어 강사 시트의 학생 행별 귀속 수납.
+      // payment_shares — 영어 강사 시트의 학생 행별 귀속 수납.
       // 재동기화 시 이 강사·월 범위의 기존 shares(is_manual=false) 자동 삭제 후 재삽입.
-      if (shares.length > 0) {
-        try {
-          const shareRes = await fetch("/api/payment-shares", {
+      const sharesPromise: Promise<Response | null> = shares.length > 0
+        ? fetch("/api/payment-shares", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -402,26 +418,54 @@ export async function syncTeacherSheet(
                 month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
               },
             }),
-          });
-          if (!shareRes.ok) {
-            const err = await shareRes.json().catch(() => ({}));
-            console.warn("[sync] payment_shares 저장 실패:", err.error);
-          } else {
-            const body = await shareRes.json().catch(() => ({}));
-            console.log(
-              `[sync] ${tab.sheetName} payment_shares upsert: ${body.upserted || 0}건`
-            );
-          }
-        } catch (e) {
-          console.warn("[sync] payment_shares 저장 중 오류:", (e as Error).message);
+          })
+        : Promise.resolve(null);
+
+      const [importSettled, sharesSettled] = await Promise.allSettled([
+        importPromise,
+        sharesPromise,
+      ]);
+
+      // import 결과 처리
+      if (importSettled.status === "fulfilled") {
+        const importRes = importSettled.value;
+        if (!importRes.ok) {
+          const err = await importRes.json().catch(() => ({}));
+          monthResult.error = err.error || "저장 실패";
         }
+      } else {
+        monthResult.error = (importSettled.reason as Error)?.message || "import 실패";
+      }
+
+      // payment_shares 결과 처리 (실패해도 저장 자체는 진행 — 경고만)
+      if (sharesSettled.status === "fulfilled" && sharesSettled.value) {
+        const shareRes = sharesSettled.value;
+        if (!shareRes.ok) {
+          const err = await shareRes.json().catch(() => ({}));
+          console.warn("[sync] payment_shares 저장 실패:", err.error);
+        } else {
+          const body = await shareRes.json().catch(() => ({}));
+          console.log(
+            `[sync] ${tab.sheetName} payment_shares upsert: ${body.upserted || 0}건`
+          );
+        }
+      } else if (sharesSettled.status === "rejected") {
+        console.warn(
+          "[sync] payment_shares 저장 중 오류:",
+          (sharesSettled.reason as Error)?.message
+        );
       }
     } catch (e) {
       monthResult.error = (e as Error).message;
     }
 
-    result.months.push(monthResult);
-  }
+    return monthResult;
+  };
+
+  // 탭 단위 병렬 처리. 시트 fetch 가 sync-fetch API 에서 이미 끝났고,
+  // 여기서는 파싱 + DB 쓰기 (virtual_students PUT + attendance.import POST +
+  // payment_shares PUT) 만 수행. 동시 N개 탭이 다른 month 라 DB 충돌 없음.
+  result.months = await Promise.all(tabs.map((tab) => processTab(tab)));
 
   // 3. tier 오버라이드 일괄 저장 (배열 형식 — 분반별 분리 지원)
   //   사용자가 학생 상세 페이지에서 직접 추가한 row 는 is_manual=true 라

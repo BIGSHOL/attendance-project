@@ -14,7 +14,22 @@ export function getCached<T>(url: string): T | undefined {
   return cache.get(url)?.data as T | undefined;
 }
 
-export async function cachedFetch<T>(url: string): Promise<T> {
+/**
+ * URL 기반 fetch — inflight dedup + 선택적 TTL cache.
+ *
+ * @param opts.ttlMs - cache 가 이 시간보다 fresh 하면 네트워크 호출 없이 cache 반환.
+ *                    기본 0 (= cache 안 봄, SWR 동작). 같은 페이지의 여러 컴포넌트가
+ *                    같은 URL fetch 시 중복 호출을 줄이려면 ttlMs 지정.
+ */
+export async function cachedFetch<T>(url: string, opts?: { ttlMs?: number }): Promise<T> {
+  const ttlMs = opts?.ttlMs ?? 0;
+  if (ttlMs > 0) {
+    const entry = cache.get(url) as CacheEntry<T> | undefined;
+    if (entry && Date.now() - entry.ts < ttlMs) {
+      return entry.data;
+    }
+  }
+
   const existing = inflight.get(url);
   if (existing) return existing as Promise<T>;
 

@@ -2,49 +2,54 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { AttendanceRow } from "./useAttendanceData";
+import { cachedFetch, getCached, invalidateCache } from "@/lib/fetchCache";
 
 /**
  * 특정 월 또는 세션 기간의 모든 선생님 출석 데이터 조회.
  * rangeOverride 가 주어지면 해당 기간으로 조회 (세션 기반 급여 정산용).
+ *
+ * cachedFetch 사용 — 같은 URL 의 동시/연속 호출은 inflight dedup + last-response 캐시.
+ *   예: SettlementPage 에서 attendanceRecords (sessionRange) + verificationAttendance
+ *       (null) 두 hook 호출 시 sessionRange 가 null/빈 케이스에 한 번만 실제 fetch.
  */
 export function useAllAttendance(
   year: number,
   month: number,
   rangeOverride?: { startDate: string; endDate: string } | null
 ) {
-  const [records, setRecords] = useState<AttendanceRow[]>([]);
-  const [loading, setLoading] = useState(true);
-
   const overrideStart = rangeOverride?.startDate;
   const overrideEnd = rangeOverride?.endDate;
 
-  const fetch = useCallback(async () => {
-    setLoading(true);
+  const url =
+    overrideStart && overrideEnd
+      ? `/api/attendance/all?startDate=${overrideStart}&endDate=${overrideEnd}`
+      : `/api/attendance/all?year=${year}&month=${month}`;
+
+  const cached = getCached<AttendanceRow[]>(url);
+  const [records, setRecords] = useState<AttendanceRow[]>(cached ?? []);
+  const [loading, setLoading] = useState(!cached);
+
+  const refetch = useCallback(async () => {
+    if (!getCached<AttendanceRow[]>(url)) setLoading(true);
     try {
-      const qs =
-        overrideStart && overrideEnd
-          ? `startDate=${overrideStart}&endDate=${overrideEnd}`
-          : `year=${year}&month=${month}`;
-      const res = await window.fetch(
-        `/api/attendance/all?${qs}`,
-        { cache: "no-store" }
-      );
-      if (res.ok) {
-        const data = (await res.json()) as AttendanceRow[];
-        setRecords(data || []);
-      } else {
-        setRecords([]);
-      }
+      const data = await cachedFetch<AttendanceRow[]>(url);
+      setRecords(data || []);
     } catch {
-      setRecords([]);
+      // 네트워크 에러 — 기존 상태 유지
     } finally {
       setLoading(false);
     }
-  }, [year, month, overrideStart, overrideEnd]);
+  }, [url]);
 
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    refetch();
+  }, [refetch]);
+
+  // 외부에서 강제 새로고침 (cache invalidate)
+  const forceRefetch = useCallback(async () => {
+    invalidateCache(url);
+    await refetch();
+  }, [url, refetch]);
 
   /**
    * 선생님별 학생 출석 합계 맵
@@ -64,5 +69,5 @@ export function useAllAttendance(
     return teacherMap;
   }, [records]);
 
-  return { records, loading, getAttendanceByTeacher, refetch: fetch };
+  return { records, loading, getAttendanceByTeacher, refetch: forceRefetch };
 }

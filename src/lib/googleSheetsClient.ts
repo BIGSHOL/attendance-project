@@ -98,6 +98,62 @@ function getServiceAccountClient(): JWT {
   return cachedClient;
 }
 
+/**
+ * Access token 캐싱 (audit V7 Phase 1).
+ *   기존: getSheetMetadata + getSheetValuesWithNotes 매 호출마다 client.getAccessToken() —
+ *         JWT 새로 서명 + Google OAuth endpoint 왕복. 선생님당 N+1 회 누적.
+ *   개선: 50분 TTL 메모리 캐시. 만료 1분 buffer.
+ *
+ *   JWT.getAccessToken() 의 응답에서 expires_at 을 그대로 사용하되, 없으면 50분 보수적 fallback.
+ *   발급 실패 시 캐시 invalidate 후 throw.
+ *
+ *   다중 동시 호출 시 in-flight Promise 공유 (race condition 방지) — 같은 sync 안의 여러 탭이
+ *   동시에 token 요청해도 1번만 실제 API 호출.
+ */
+let cachedToken: { token: string; expiresAt: number } | null = null;
+let inflightTokenPromise: Promise<string> | null = null;
+
+async function getCachedAccessToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedToken && cachedToken.expiresAt > now + 60_000) {
+    return cachedToken.token;
+  }
+  if (inflightTokenPromise) return inflightTokenPromise;
+
+  inflightTokenPromise = (async () => {
+    try {
+      const client = getServiceAccountClient();
+      const result = await client.getAccessToken();
+      const token = result.token;
+      if (!token) throw new Error("서비스 계정 토큰 발급 실패");
+
+      // 만료 시각 결정 — 다단계 fallback:
+      //   1순위: client.credentials.expiry_date (epoch ms, JWT class 가 자동 설정)
+      //   2순위: result.res.data.expires_in (초 단위, OAuth token response 표준)
+      //   3순위: 50분 보수적 fallback (실제 1시간 만료 - 10분 buffer)
+      let expiresAt: number;
+      const credExpiry = client.credentials?.expiry_date;
+      if (typeof credExpiry === "number" && credExpiry > Date.now()) {
+        expiresAt = credExpiry;
+      } else {
+        const resData = result.res?.data as { expires_in?: number } | undefined;
+        const expiresInSec = resData?.expires_in;
+        if (typeof expiresInSec === "number" && expiresInSec > 0) {
+          expiresAt = Date.now() + expiresInSec * 1000;
+        } else {
+          expiresAt = Date.now() + 50 * 60_000;
+        }
+      }
+
+      cachedToken = { token, expiresAt };
+      return token;
+    } finally {
+      inflightTokenPromise = null;
+    }
+  })();
+  return inflightTokenPromise;
+}
+
 export async function getServiceAccountEmail(): Promise<string> {
   try {
     const creds = loadCredentials();
@@ -111,9 +167,7 @@ export async function getServiceAccountEmail(): Promise<string> {
  * 스프레드시트 메타 조회 (시트 목록)
  */
 export async function getSheetMetadata(spreadsheetId: string) {
-  const client = getServiceAccountClient();
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("서비스 계정 토큰 발급 실패");
+  const token = await getCachedAccessToken();
 
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties,properties.title`,
@@ -138,9 +192,7 @@ export async function getSheetValuesWithNotes(
   spreadsheetId: string,
   range: string
 ): Promise<{ values: (string | number)[][]; notes: (string | undefined)[][] }> {
-  const client = getServiceAccountClient();
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("서비스 계정 토큰 발급 실패");
+  const token = await getCachedAccessToken();
 
   // fields 필터 제거 — 응답 크기 증가하더라도 누락 없이 모든 셀(note 포함) 반환
   const url =
@@ -191,9 +243,7 @@ export async function getSheetValues(
   spreadsheetId: string,
   range: string
 ): Promise<(string | number)[][]> {
-  const client = getServiceAccountClient();
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("서비스 계정 토큰 발급 실패");
+  const token = await getCachedAccessToken();
 
   const encodedRange = encodeURIComponent(range);
   const res = await fetch(
