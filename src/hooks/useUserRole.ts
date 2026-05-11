@@ -59,7 +59,9 @@ export function useUserRole() {
   const refetch = useCallback(async () => {
     if (!getCached<MeResponse>("/api/me")) setLoading(true);
     try {
-      const data = await cachedFetch<MeResponse>("/api/me");
+      // TTL 30초 — 사용자 역할은 자주 안 바뀌므로 페이지 안에서 N번 호출 시 1번만 네트워크.
+      // forceRefetch (invalidateCache) 로 로그인 상태 변경 시 명시적 갱신 가능.
+      const data = await cachedFetch<MeResponse>("/api/me", { ttlMs: 30_000 });
       const role = data?.userRole ?? null;
       setUserRole(role);
       setEmail(role?.email ?? null);
