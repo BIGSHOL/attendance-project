@@ -122,26 +122,52 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ count: 0 });
   }
 
-  // 배치 upsert — (teacher_id, student_id, date, class_name) UNIQUE 충돌 시 UPDATE
+  // 배치 upsert — (teacher_id, student_id, date, class_name) UNIQUE 충돌 시 UPDATE.
+  //
+  // audit V7 Phase 2: batch 병렬화 (concurrency=5).
+  //   기존: for await — 1000 rows = 10 batch sequential = ~5초
+  //   개선: 5 worker pool — 동시 처리, 큰 시트일수록 큼 (5×~10×)
+  //
+  //   첫 에러 발생 시 cursor 정지 (다른 worker 도 자연 종료) 후 통합 응답.
+  //   Supabase pool 안전 한도 (5 concurrent batch) 준수.
   const batchSize = 100;
-  let upsertedTotal = 0;
+  const concurrency = 5;
+  const batches: (typeof rows)[] = [];
   for (let i = 0; i < rows.length; i += batchSize) {
-    const batch = rows.slice(i, i + batchSize);
-    const { data: upserted, error } = await supabase
-      .from("attendance")
-      .upsert(batch, {
-        onConflict: "teacher_id,student_id,date,class_name",
-        ignoreDuplicates: false,
-      })
-      .select("id");
-    if (error) {
-      console.error(`[import] upsert 실패 (batch ${i}):`, error);
-      return NextResponse.json(
-        { error: `저장 실패: ${error.message}` },
-        { status: 500 }
-      );
+    batches.push(rows.slice(i, i + batchSize));
+  }
+
+  let cursor = 0;
+  let upsertedTotal = 0;
+  const errorBox: { value: { idx: number; message: string } | null } = { value: null };
+
+  async function worker() {
+    while (cursor < batches.length && !errorBox.value) {
+      const myIdx = cursor++;
+      const batch = batches[myIdx];
+      const { data: upserted, error } = await supabase
+        .from("attendance")
+        .upsert(batch, {
+          onConflict: "teacher_id,student_id,date,class_name",
+          ignoreDuplicates: false,
+        })
+        .select("id");
+      if (error) {
+        if (!errorBox.value) errorBox.value = { idx: myIdx, message: error.message };
+        console.error(`[import] upsert 실패 (batch ${myIdx}):`, error);
+        return;
+      }
+      upsertedTotal += upserted?.length || 0;
     }
-    upsertedTotal += upserted?.length || 0;
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  if (errorBox.value) {
+    return NextResponse.json(
+      { error: `저장 실패 (batch ${errorBox.value.idx}): ${errorBox.value.message}` },
+      { status: 500 }
+    );
   }
   console.log(`[import] upsert 완료: ${upsertedTotal}/${rows.length}`);
 
