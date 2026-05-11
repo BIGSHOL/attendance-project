@@ -192,7 +192,7 @@ export default function SettlementPage() {
 
       const runOne = async (idx: number) => {
         const { teacher, sheetUrl } = targets[idx];
-        // 진행 중 표시 추가
+        // 진행 중 표시 추가 — functional update 로 동시 worker 충돌 안전.
         setBulkSync((prev) =>
           prev
             ? {
@@ -203,39 +203,53 @@ export default function SettlementPage() {
         );
         let result: TeacherSyncResult;
         try {
-          result = await syncTeacherSheet(
-            teacher.id,
-            teacher.name,
-            sheetUrl,
-            students,
-            "2026-03",
-            exactMonth,
-            salaryConfig,
-            teacher.subjects?.[0]
-          );
-          if (result.success) markSynced(teacher.id);
-        } catch (e) {
-          result = {
-            teacherId: teacher.id,
-            teacherName: teacher.name,
-            success: false,
-            error: (e as Error).message,
-            months: [],
-          };
+          try {
+            result = await syncTeacherSheet(
+              teacher.id,
+              teacher.name,
+              sheetUrl,
+              students,
+              "2026-03",
+              exactMonth,
+              salaryConfig,
+              teacher.subjects?.[0]
+            );
+            if (result.success) markSynced(teacher.id);
+          } catch (e) {
+            result = {
+              teacherId: teacher.id,
+              teacherName: teacher.name,
+              success: false,
+              error: (e as Error).message,
+              months: [],
+            };
+          }
+          collected.push(result);
+          // 완료 카운트 증가 + 결과 누적 + inProgress 제거 (한 번에 update 보장).
+          // 두 번째 try/finally — collected.push 후에도 inProgress cleanup 누락 방지.
+          setBulkSync((prev) => {
+            if (!prev) return prev;
+            const nextInProgress = new Set(prev.inProgress);
+            nextInProgress.delete(teacher.name);
+            return {
+              ...prev,
+              inProgress: nextInProgress,
+              completed: prev.completed + 1,
+              results: [...prev.results, result],
+            };
+          });
+        } finally {
+          // 예기치 못한 throw 가 발생해도 inProgress 에서 이름 제거 보장.
+          // (외부 try/catch 가 syncTeacherSheet error 를 잡지만, collected.push 나
+          //  setBulkSync 단계에서 throw 시에도 UI state 정합성 유지.)
+          setBulkSync((prev) => {
+            if (!prev) return prev;
+            if (!prev.inProgress.has(teacher.name)) return prev;
+            const nextInProgress = new Set(prev.inProgress);
+            nextInProgress.delete(teacher.name);
+            return { ...prev, inProgress: nextInProgress };
+          });
         }
-        collected.push(result);
-        // 진행 중 표시 제거 + 완료 카운트 증가 + 결과 누적
-        setBulkSync((prev) => {
-          if (!prev) return prev;
-          const nextInProgress = new Set(prev.inProgress);
-          nextInProgress.delete(teacher.name);
-          return {
-            ...prev,
-            inProgress: nextInProgress,
-            completed: prev.completed + 1,
-            results: [...prev.results, result],
-          };
-        });
       };
 
       const worker = async () => {
@@ -651,20 +665,38 @@ export default function SettlementPage() {
     // 한글 이름 또는 "Sarah 강보경" 같은 문자열인 경우가 혼재.
     // attendance.teacher_id 가 staff.id 매칭 실패 시 staff.name / englishName /
     // (englishName + ' ' + name) 으로 fallback 매칭.
+    //
+    // ⚠ 동명이인 안전 처리 (audit V8 후속): 같은 이름의 staff 가 둘 이상이면
+    //   alias 가 충돌하므로 그 alias 는 무효화 (다른 staff 로 잘못 매칭되어
+    //   시수가 엉뚱한 선생님에 합산되는 것을 방지). staff.id 매칭만 허용.
     const teacherByAlias = new Map<string, Teacher>();
-    for (const t of teachers) {
-      teacherByAlias.set(t.id, t);
-      if (t.name) teacherByAlias.set(t.name, t);
-      if (t.englishName) teacherByAlias.set(t.englishName, t);
-      if (t.englishName && t.name) {
-        teacherByAlias.set(`${t.englishName} ${t.name}`, t);
+    const aliasConflicts = new Set<string>();
+    function addAlias(key: string, t: Teacher) {
+      if (!key) return;
+      if (aliasConflicts.has(key)) return;
+      const existing = teacherByAlias.get(key);
+      if (existing && existing.id !== t.id) {
+        // 충돌 — alias 무효화. 원본 attendance.teacher_id 로 표시되어
+        // 운영자가 동명이인을 인지하고 직접 처리할 수 있도록 함.
+        teacherByAlias.delete(key);
+        aliasConflicts.add(key);
+        return;
       }
+      teacherByAlias.set(key, t);
+    }
+    // staff.id 는 Firebase doc id 라 unique 보장 — 우선 등록.
+    for (const t of teachers) teacherByAlias.set(t.id, t);
+    // 이름 기반 alias 는 충돌 검사 거쳐서 등록.
+    for (const t of teachers) {
+      if (t.name) addAlias(t.name, t);
+      if (t.englishName) addAlias(t.englishName, t);
+      if (t.englishName && t.name) addAlias(`${t.englishName} ${t.name}`, t);
     }
     function lookupTeacher(teacherId: string): Teacher | undefined {
       return teacherByAlias.get(teacherId);
     }
     // attendance.teacher_id 를 표준 staff.id 로 normalize.
-    // 매칭 실패 시 원본 그대로 (운영자가 보고 처리).
+    // 매칭 실패 (또는 alias 충돌) 시 원본 그대로 (운영자가 보고 처리).
     function normalizeTeacherId(teacherId: string): string {
       const t = teacherByAlias.get(teacherId);
       return t?.id || teacherId;
