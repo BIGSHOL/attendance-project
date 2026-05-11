@@ -18,17 +18,21 @@
 -- 마이그레이션 후 사용자가 시트 재-sync 해야 payment_shares / tier_overrides 가
 -- 새 ID 로 다시 채워짐.
 --
--- ⚠ 같은 new_id 로 매핑되는 옛 row 가 여러 개 (학년 여러 차례 변경) 인 케이스를
--- 안전하게 처리: pre-dedup 단계에서 keeper 만 남기고 나머지 삭제.
---
--- 이미 적용된 ID 는 no-op (idempotent).
+-- ⚠ Supabase SQL Editor 의 multi-statement 호환성을 위해 일반 테이블 사용 (TEMP X).
+-- ⚠ 같은 new_id 로 매핑되는 옛 row 가 여러 개 (학년 여러 번 변경) 인 케이스 안전 처리.
+-- ⚠ 이미 적용된 ID 는 no-op (idempotent).
 
 BEGIN;
 
 -- =======================================================================
--- 1) 옛 ID → 새 ID 매핑 테이블
+-- 0) 옛 staging 테이블 정리 (이전 실행 잔여물)
 -- =======================================================================
-CREATE TEMP TABLE id_remap AS
+DROP TABLE IF EXISTS _migration_025_id_remap;
+
+-- =======================================================================
+-- 1) 옛 ID → 새 ID 매핑 staging 테이블 (일반 테이블 — pgbouncer / SQL Editor 호환)
+-- =======================================================================
+CREATE TABLE _migration_025_id_remap AS
   SELECT id AS old_id,
          'virtual_' || teacher_staff_id || '_' || name || '_' ||
            COALESCE(NULLIF(school, ''), 'unknown') AS new_id
@@ -37,42 +41,34 @@ CREATE TEMP TABLE id_remap AS
      AND id <> 'virtual_' || teacher_staff_id || '_' || name || '_' ||
                 COALESCE(NULLIF(school, ''), 'unknown');
 
-CREATE INDEX ON id_remap (old_id);
-CREATE INDEX ON id_remap (new_id);
+CREATE INDEX ON _migration_025_id_remap (old_id);
+CREATE INDEX ON _migration_025_id_remap (new_id);
 
 DO $$
 DECLARE cnt int;
 BEGIN
-  SELECT COUNT(*) INTO cnt FROM id_remap;
+  SELECT COUNT(*) INTO cnt FROM _migration_025_id_remap;
   RAISE NOTICE '[migration_025] virtual_students 마이그레이션 대상: % 건', cnt;
 END $$;
 
 -- =======================================================================
 -- 2) attendance: hours 합산 보존하며 student_id 정규화
 -- =======================================================================
--- UNIQUE(teacher_id, student_id, date, class_name).
--- 같은 (teacher, date, class_name) 의 여러 옛 student_id (학년 변경) 와
--- 기존 새 student_id row 가 모두 한 keeper 로 합산됨.
 
--- 2-a) 같은 new_id 로 매핑될 옛 row 들 끼리 keeper 1개만 남기고 hours 합산.
--- (학생이 학년 여러 번 바뀐 경우 옛 row 가 여러 개 발생)
+-- 2-a) 같은 new_id 로 매핑될 옛 row 들 끼리 keeper 1개만 남기고 hours 합산
 DELETE FROM attendance a
  USING (
    SELECT a_inner.id,
           ROW_NUMBER() OVER (
             PARTITION BY a_inner.teacher_id, r.new_id, a_inner.date, a_inner.class_name
             ORDER BY a_inner.updated_at DESC NULLS LAST, a_inner.id
-          ) AS rn,
-          SUM(a_inner.hours) OVER (
-            PARTITION BY a_inner.teacher_id, r.new_id, a_inner.date, a_inner.class_name
-          ) AS group_total
+          ) AS rn
      FROM attendance a_inner
-     JOIN id_remap r ON a_inner.student_id = r.old_id
+     JOIN _migration_025_id_remap r ON a_inner.student_id = r.old_id
  ) ranked
  WHERE a.id = ranked.id
    AND ranked.rn > 1;
 
--- keeper row 의 hours 를 그룹 합계로 갱신
 UPDATE attendance a
    SET hours = g.total_hours,
        updated_at = NOW()
@@ -80,12 +76,11 @@ UPDATE attendance a
     SELECT (ARRAY_AGG(a_inner.id ORDER BY a_inner.updated_at DESC NULLS LAST, a_inner.id))[1] AS keeper_id,
            SUM(a_inner.hours) AS total_hours
       FROM attendance a_inner
-      JOIN id_remap r ON a_inner.student_id = r.old_id
+      JOIN _migration_025_id_remap r ON a_inner.student_id = r.old_id
      GROUP BY a_inner.teacher_id, r.new_id, a_inner.date, a_inner.class_name
-    HAVING COUNT(*) >= 1
   ) g
  WHERE a.id = g.keeper_id
-   AND a.hours <> g.total_hours;  -- 단일 row 면 변경 없음
+   AND a.hours <> g.total_hours;
 
 -- 2-b) 옛 keeper 와 기존 새 row 충돌 → 새 row 에 hours 합산 후 옛 keeper 삭제
 WITH conflicts AS (
@@ -94,11 +89,11 @@ WITH conflicts AS (
          a_old.memo  AS old_memo,
          a_new.id    AS new_id
     FROM attendance a_old
-    JOIN id_remap r        ON a_old.student_id = r.old_id
-    JOIN attendance a_new  ON a_new.student_id = r.new_id
-                          AND a_new.teacher_id = a_old.teacher_id
-                          AND a_new.date       = a_old.date
-                          AND a_new.class_name = a_old.class_name
+    JOIN _migration_025_id_remap r ON a_old.student_id = r.old_id
+    JOIN attendance a_new          ON a_new.student_id = r.new_id
+                                  AND a_new.teacher_id = a_old.teacher_id
+                                  AND a_new.date       = a_old.date
+                                  AND a_new.class_name = a_old.class_name
 )
 UPDATE attendance a
    SET hours = a.hours + c.old_hours,
@@ -116,11 +111,11 @@ DELETE FROM attendance a
  USING (
    SELECT a_old.id
      FROM attendance a_old
-     JOIN id_remap r        ON a_old.student_id = r.old_id
-     JOIN attendance a_new  ON a_new.student_id = r.new_id
-                           AND a_new.teacher_id = a_old.teacher_id
-                           AND a_new.date       = a_old.date
-                           AND a_new.class_name = a_old.class_name
+     JOIN _migration_025_id_remap r ON a_old.student_id = r.old_id
+     JOIN attendance a_new          ON a_new.student_id = r.new_id
+                                   AND a_new.teacher_id = a_old.teacher_id
+                                   AND a_new.date       = a_old.date
+                                   AND a_new.class_name = a_old.class_name
  ) dup
  WHERE a.id = dup.id;
 
@@ -128,24 +123,21 @@ DELETE FROM attendance a
 UPDATE attendance a
    SET student_id = r.new_id,
        updated_at = NOW()
-  FROM id_remap r
+  FROM _migration_025_id_remap r
  WHERE a.student_id = r.old_id;
 
 -- =======================================================================
 -- 3) payment_shares: 옛 student_id row 모두 삭제 (sync 가 재생성)
 -- =======================================================================
 DELETE FROM payment_shares ps
- USING id_remap r
+ USING _migration_025_id_remap r
  WHERE ps.student_id = r.old_id;
 
 -- =======================================================================
 -- 4) student_tier_overrides: 옛 student_id row 모두 삭제 (sync 가 재생성)
 -- =======================================================================
--- UNIQUE(teacher_id, student_id, class_name) — 학생이 여러 학년 거친 경우
--- 새 row 가 이미 존재할 수 있어, 옛 row 와의 단순 매핑이 어려움.
--- 시트 sync 가 신뢰성 있게 재생성하므로 옛 row 들 일괄 삭제.
 DELETE FROM student_tier_overrides sto
- USING id_remap r
+ USING _migration_025_id_remap r
  WHERE sto.student_id = r.old_id;
 
 -- =======================================================================
@@ -174,7 +166,10 @@ UPDATE virtual_students
  WHERE id <> 'virtual_' || teacher_staff_id || '_' || name || '_' ||
               COALESCE(NULLIF(school, ''), 'unknown');
 
-DROP TABLE id_remap;
+-- =======================================================================
+-- 6) staging 테이블 정리
+-- =======================================================================
+DROP TABLE _migration_025_id_remap;
 
 COMMIT;
 
