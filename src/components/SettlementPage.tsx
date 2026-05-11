@@ -384,6 +384,12 @@ export default function SettlementPage() {
     month,
     sessionRange
   );
+
+  // audit V8: 시수 검증 탭 전용 attendance — 항상 해당 달 전체 (sessionRange 무시).
+  //   정산은 sessionRange 안에서 계산하지만, 시수 검증은 운영자가 모든 raw row 를
+  //   봐야 하므로 4/1~4/말 전체 데이터 필요. payMode 무관.
+  //   sessionRange 가 4/3~4/30 인 경우 4/1, 4/2 데이터가 빠지는 문제 fix.
+  const { records: verificationAttendance } = useAllAttendance(year, month, null);
   const { getByTeacher, loading: settlementLoading } = useMonthlySettlement(year, month);
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
@@ -641,12 +647,40 @@ export default function SettlementPage() {
     const studentById = new Map<string, Student>();
     for (const s of students) studentById.set(s.id, s);
 
-    // attendance: (student_id, teacher_id) → hours
+    // attendance.teacher_id fuzzy lookup — staff.id 가 Base64 doc id 인 경우와
+    // 한글 이름 또는 "Sarah 강보경" 같은 문자열인 경우가 혼재.
+    // attendance.teacher_id 가 staff.id 매칭 실패 시 staff.name / englishName /
+    // (englishName + ' ' + name) 으로 fallback 매칭.
+    const teacherByAlias = new Map<string, Teacher>();
+    for (const t of teachers) {
+      teacherByAlias.set(t.id, t);
+      if (t.name) teacherByAlias.set(t.name, t);
+      if (t.englishName) teacherByAlias.set(t.englishName, t);
+      if (t.englishName && t.name) {
+        teacherByAlias.set(`${t.englishName} ${t.name}`, t);
+      }
+    }
+    function lookupTeacher(teacherId: string): Teacher | undefined {
+      return teacherByAlias.get(teacherId);
+    }
+    // attendance.teacher_id 를 표준 staff.id 로 normalize.
+    // 매칭 실패 시 원본 그대로 (운영자가 보고 처리).
+    function normalizeTeacherId(teacherId: string): string {
+      const t = teacherByAlias.get(teacherId);
+      return t?.id || teacherId;
+    }
+
+    // attendance: (student_id, normalized_teacher_id) → hours.
+    //   verificationAttendance 사용 — 정산용 attendance (sessionRange 적용) 가 아닌
+    //   해당 월 전체. raw 시수 100% 표시 보장.
+    //   normalizeTeacherId 로 attendance.teacher_id 가 staff.name/englishName 인
+    //   경우도 staff.id 로 통합 → 동일 선생님의 시수가 한 row 로 합쳐짐.
     const hoursByST = new Map<string, number>();
-    for (const r of attendanceRecords) {
+    for (const r of verificationAttendance) {
       if (r.hours <= 0) continue;
       if (!r.date.startsWith(monthStr)) continue;
-      const key = `${r.student_id}|${r.teacher_id}`;
+      const normTid = normalizeTeacherId(r.teacher_id);
+      const key = `${r.student_id}|${normTid}`;
       hoursByST.set(key, (hoursByST.get(key) || 0) + r.hours);
     }
 
@@ -761,7 +795,7 @@ export default function SettlementPage() {
         for (const tid of subjectTeacherIds) {
           const tUnits = hoursByST.get(`${sid}|${tid}`) || 0;
           units += tUnits;
-          const t = teacherById.get(tid);
+          const t = lookupTeacher(tid);
           const teacherMatched = !!t;
           // 매칭 실패 시 ID 그대로 표시 (운영자가 보고 처리 가능)
           const teacherName = t?.name || `(미매칭) ${tid}`;
@@ -860,7 +894,39 @@ export default function SettlementPage() {
     // 차이가 있는 항목 우선 정렬 (절대값 큰 순)
     rows.sort((a, b) => Math.abs(b.diffSessions) - Math.abs(a.diffSessions));
     return rows;
-  }, [students, teachers, attendanceRecords, monthPayments, allShares, salaryConfig, tierOverrides, year, month]);
+  }, [students, teachers, verificationAttendance, monthPayments, allShares, salaryConfig, tierOverrides, year, month]);
+
+  // 시수 검증 탭의 필터링된 결과 + 합계 (audit V8).
+  //   필터 (과목, 검색, 차이 only) 적용 후의 합계 — 사용자가 보고 있는 시수 == 결제등록시수 일치 검증용.
+  const hoursFiltered = useMemo(() => {
+    const search = hoursSearch.trim().toLowerCase();
+    return studentChecks
+      .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
+      .filter((r) => !search || r.student.name.toLowerCase().includes(search))
+      .filter((r) => !hoursOnlyDiff || Math.abs(r.diffSessions) > 0.001);
+  }, [studentChecks, hoursSubjectFilter, hoursSearch, hoursOnlyDiff]);
+
+  const hoursTotals = useMemo(() => {
+    let paid = 0;
+    let expected = 0;
+    let units = 0;
+    let diffAmount = 0;
+    for (const r of hoursFiltered) {
+      if (r.hasPayment) {
+        paid += r.paid;
+        if (r.unitPrice > 0) expected += r.expectedSessions;
+        diffAmount += r.diffAmount;
+      }
+      units += r.units;
+    }
+    return {
+      paid,
+      expected,
+      units,
+      diffSessions: expected - units,
+      diffAmount,
+    };
+  }, [hoursFiltered]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
@@ -1410,11 +1476,7 @@ export default function SettlementPage() {
               </tr>
             </thead>
             <tbody>
-              {studentChecks
-                .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
-                .filter((r) => !hoursSearch.trim() || r.student.name.toLowerCase().includes(hoursSearch.trim().toLowerCase()))
-                .filter((r) => !hoursOnlyDiff || Math.abs(r.diffSessions) > 0.001)
-                .map((r, idx) => {
+              {hoursFiltered.map((r, idx) => {
                 const noPrice = r.unitPrice <= 0;
                 const noPay = !r.hasPayment;
                 const diffAbs = Math.abs(r.diffSessions);
@@ -1497,6 +1559,51 @@ export default function SettlementPage() {
                 );
               })}
             </tbody>
+            {/* 합계 footer (audit V8) — 사용자 의도:
+                "모든 시수를 합쳐서 실제 결제 등록시수와 일치하는지 판단".
+                필터 적용된 row 의 청구액/예상시수/실제시수/차이 합계 표시. */}
+            {hoursFiltered.length > 0 && (
+              <tfoot>
+                <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-bold dark:border-zinc-600 dark:bg-zinc-800/50">
+                  <td colSpan={5} className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
+                    합계 ({hoursFiltered.length}건)
+                  </td>
+                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
+                    {hoursTotals.paid.toLocaleString()}원
+                  </td>
+                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
+                    {hoursTotals.expected.toFixed(1)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
+                    {Number(hoursTotals.units.toFixed(1))}
+                  </td>
+                  <td
+                    className={`px-3 py-3 text-right ${
+                      Math.abs(hoursTotals.diffSessions) < 0.5
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : hoursTotals.diffSessions > 0
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-red-600 dark:text-red-400"
+                    }`}
+                  >
+                    {hoursTotals.diffSessions > 0 ? "+" : ""}
+                    {hoursTotals.diffSessions.toFixed(1)}
+                  </td>
+                  <td
+                    className={`px-3 py-3 text-right text-xs ${
+                      hoursTotals.diffAmount > 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : hoursTotals.diffAmount < 0
+                          ? "text-red-600 dark:text-red-400"
+                          : "text-zinc-500"
+                    }`}
+                  >
+                    {hoursTotals.diffAmount > 0 ? "+" : ""}
+                    {hoursTotals.diffAmount.toLocaleString()}원
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
           {studentChecks.length === 0 && (
             <div className="flex items-center justify-center h-24 text-zinc-400 text-sm">
