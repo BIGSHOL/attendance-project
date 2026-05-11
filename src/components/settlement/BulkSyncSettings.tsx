@@ -14,6 +14,9 @@ interface Props {
   /** 급여 집계 기준 — 월별 달력 월, 세션별 해당 월 세션 범위 */
   payMode?: PayMode;
   onPayModeChange?: (mode: PayMode) => void;
+  /** 동시 처리 선생님 수 (1~5) — audit V7 Phase 4 */
+  syncConcurrency?: number;
+  onSyncConcurrencyChange?: (n: number) => void;
 }
 
 // 과목별 뱃지 색상 — HomeroomPicker 와 동일 팔레트
@@ -78,6 +81,8 @@ export default function BulkSyncSettings({
   onBulkToggle,
   payMode,
   onPayModeChange,
+  syncConcurrency,
+  onSyncConcurrencyChange,
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -220,6 +225,38 @@ export default function BulkSyncSettings({
                   세션별
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* 동시 처리 선생님 수 — audit V7 Phase 4. 1=순차, 5=최대 속도 */}
+          {syncConcurrency !== undefined && onSyncConcurrencyChange && (
+            <div className="flex flex-shrink-0 flex-col gap-1.5 border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
+                  동시 처리 수
+                </span>
+                <span className="text-[11px] font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                  {syncConcurrency}명
+                </span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={syncConcurrency}
+                onChange={(e) => onSyncConcurrencyChange(Number(e.target.value))}
+                className="w-full accent-emerald-600"
+                aria-label="동시 처리 선생님 수"
+              />
+              <div className="flex items-center justify-between text-[9px] text-zinc-500 dark:text-zinc-400">
+                <span>1 (순차)</span>
+                <span>3 (권장)</span>
+                <span>5 (최대)</span>
+              </div>
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                높을수록 빠르지만 Google Sheets API rate limit 에 주의
+              </p>
             </div>
           )}
 

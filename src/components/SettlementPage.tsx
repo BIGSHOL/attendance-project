@@ -88,12 +88,12 @@ export default function SettlementPage() {
     }
   };
 
-  // ─── 전체 시트 순차 동기화 ──────────────────────────
+  // ─── 전체 시트 동기화 (audit V7 Phase 4: concurrent worker pool) ─────
   const [bulkSync, setBulkSync] = useState<{
     running: boolean;
-    current: number;
+    completed: number;             // 완료된 선생님 수
     total: number;
-    currentName: string;
+    inProgress: Set<string>;       // 현재 동시 처리 중인 선생님 이름들
     results: TeacherSyncResult[];
     done: boolean;
   } | null>(null);
@@ -101,6 +101,12 @@ export default function SettlementPage() {
   // 전체 동기화에서 제외할 선생님 id 집합 — localStorage 영속화
   const [excludedSyncIds, setExcludedSyncIds] = useLocalStorageSet(
     "settlement.excludedSyncIds"
+  );
+
+  // 동시 처리 선생님 수 (1~5) — localStorage 영속화. 기본 3 (안전).
+  const [syncConcurrency, setSyncConcurrency] = useLocalStorage<number>(
+    "settlement.syncConcurrency",
+    3
   );
   const toggleExcludedSync = useCallback(
     (teacherId: string) => {
@@ -124,9 +130,15 @@ export default function SettlementPage() {
   );
 
   /**
-   * 전체 동기화 실행기.
+   * 전체 동기화 실행기 (audit V7 Phase 4: concurrent worker pool).
    *   targetIds 없이 호출 = 전체 (excludedSyncIds 제외).
    *   targetIds 지정 = 그 부분집합만 (실패 재시도용).
+   *
+   *   syncConcurrency (1~5) 명의 worker 가 동시에 한 명씩 sync 처리.
+   *   각 worker 가 끝나는 즉시 다음 선생님을 잡아서 진행 (cursor 공유).
+   *   Promise.all 로 모든 worker 종료 시까지 대기.
+   *
+   *   에러 격리: 한 선생님 실패가 다른 worker 진행을 막지 않음 (try/catch per worker).
    */
   const runBulkSync = useCallback(
     async (targetIds?: Set<string>) => {
@@ -150,33 +162,48 @@ export default function SettlementPage() {
         );
         return;
       }
+      const effectiveConcurrency = Math.min(
+        Math.max(1, syncConcurrency),
+        5,
+        targets.length
+      );
       if (
         !targetIds &&
         !confirm(
-          `${year}년 ${month}월 탭을 ${targets.length}명 전체 순차 동기화합니다.\n` +
-            `선생님 한 명당 수 초~수십 초 걸릴 수 있습니다. 진행하시겠습니까?`
+          `${year}년 ${month}월 탭을 ${targets.length}명 동기화합니다.\n` +
+            `동시 처리 ${effectiveConcurrency}명. 진행하시겠습니까?`
         )
       )
         return;
 
       setBulkSync({
         running: true,
-        current: 0,
+        completed: 0,
         total: targets.length,
-        currentName: "",
+        inProgress: new Set(),
         results: [],
         done: false,
       });
 
       const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
+      // cursor 공유: 모든 worker 가 같은 큐에서 다음 작업 번호를 atomic 하게 가져감
+      let cursor = 0;
       const collected: TeacherSyncResult[] = [];
-      for (let i = 0; i < targets.length; i++) {
-        const { teacher, sheetUrl } = targets[i];
+
+      const runOne = async (idx: number) => {
+        const { teacher, sheetUrl } = targets[idx];
+        // 진행 중 표시 추가
         setBulkSync((prev) =>
-          prev ? { ...prev, current: i, currentName: teacher.name } : prev
+          prev
+            ? {
+                ...prev,
+                inProgress: new Set(prev.inProgress).add(teacher.name),
+              }
+            : prev
         );
+        let result: TeacherSyncResult;
         try {
-          const result = await syncTeacherSheet(
+          result = await syncTeacherSheet(
             teacher.id,
             teacher.name,
             sheetUrl,
@@ -186,24 +213,47 @@ export default function SettlementPage() {
             salaryConfig,
             teacher.subjects?.[0]
           );
-          collected.push(result);
           if (result.success) markSynced(teacher.id);
         } catch (e) {
-          collected.push({
+          result = {
             teacherId: teacher.id,
             teacherName: teacher.name,
             success: false,
             error: (e as Error).message,
             months: [],
-          });
+          };
         }
-      }
+        collected.push(result);
+        // 진행 중 표시 제거 + 완료 카운트 증가 + 결과 누적
+        setBulkSync((prev) => {
+          if (!prev) return prev;
+          const nextInProgress = new Set(prev.inProgress);
+          nextInProgress.delete(teacher.name);
+          return {
+            ...prev,
+            inProgress: nextInProgress,
+            completed: prev.completed + 1,
+            results: [...prev.results, result],
+          };
+        });
+      };
+
+      const worker = async () => {
+        while (cursor < targets.length) {
+          const myIdx = cursor++;
+          await runOne(myIdx);
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: effectiveConcurrency }, () => worker())
+      );
 
       setBulkSync({
         running: false,
-        current: targets.length,
+        completed: targets.length,
         total: targets.length,
-        currentName: "",
+        inProgress: new Set(),
         results: collected,
         done: true,
       });
@@ -218,6 +268,7 @@ export default function SettlementPage() {
       month,
       markSynced,
       excludedSyncIds,
+      syncConcurrency,
     ]
   );
 
@@ -914,7 +965,7 @@ export default function SettlementPage() {
                 title={`${year}년 ${month}월 탭을 등록된 모든 선생님 시트에 대해 순차 동기화`}
               >
                 {bulkSync?.running
-                  ? `동기화 중 ${bulkSync.current + 1}/${bulkSync.total}`
+                  ? `동기화 중 ${bulkSync.completed}/${bulkSync.total}`
                   : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 전체 동기화`}
               </button>
               <BulkSyncSettings
@@ -924,6 +975,8 @@ export default function SettlementPage() {
                 onBulkToggle={bulkToggleExcludedSync}
                 payMode={payMode}
                 onPayModeChange={setPayMode}
+                syncConcurrency={syncConcurrency}
+                onSyncConcurrencyChange={setSyncConcurrency}
               />
             </>
           )}
@@ -1416,38 +1469,32 @@ export default function SettlementPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
-              {/* 진행률 바 */}
+              {/* 진행률 바 — completed / total 기반. 동시 처리 중 이름 다중 표시. */}
               <div className="mb-3">
                 <div className="mb-1 flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-400">
                   <span>
                     {bulkSync.done
                       ? `${bulkSync.total}명 완료`
-                      : `${Math.min(bulkSync.current + 1, bulkSync.total)} / ${bulkSync.total}명`}
+                      : `${bulkSync.completed} / ${bulkSync.total}명`}
                   </span>
                   <span className="tabular-nums">
-                    {Math.round(
-                      ((bulkSync.done ? bulkSync.total : bulkSync.current) /
-                        bulkSync.total) *
-                        100
-                    )}
-                    %
+                    {Math.round((bulkSync.completed / bulkSync.total) * 100)}%
                   </span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-sm bg-zinc-200 dark:bg-zinc-800">
                   <div
                     className="h-full bg-emerald-500 transition-all"
                     style={{
-                      width: `${
-                        ((bulkSync.done ? bulkSync.total : bulkSync.current) /
-                          bulkSync.total) *
-                        100
-                      }%`,
+                      width: `${(bulkSync.completed / bulkSync.total) * 100}%`,
                     }}
                   />
                 </div>
-                {!bulkSync.done && bulkSync.currentName && (
+                {!bulkSync.done && bulkSync.inProgress.size > 0 && (
                   <div className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-                    진행 중 · <span className="font-bold">{bulkSync.currentName}</span>
+                    진행 중 ({bulkSync.inProgress.size}명) ·{" "}
+                    <span className="font-bold">
+                      {Array.from(bulkSync.inProgress).join(", ")}
+                    </span>
                   </div>
                 )}
               </div>
