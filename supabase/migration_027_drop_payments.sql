@@ -1,0 +1,22 @@
+-- migration_025_drop_payments.sql
+--
+-- payments 테이블 제거 — 2026-05-12 부터 Firebase billing (MakeEdu 매일 자동
+-- 동기화) 으로 완전 전환. 코드에서 더 이상 참조하지 않음.
+--
+-- 검증 (전환 시점):
+--   Supabase payments: 1,722 row (2026-03, 2026-04 만)
+--   Firebase billing:  5,787 row (2026-01 ~ 2026-05) — Supabase 의 superset
+--   → 정보 손실 0.
+--
+-- 만일 historical 조회가 필요해지면:
+--   1) MakeEdu 에서 과거 데이터 export (모든 청구 원본)
+--   2) audit_logs 에 payments 관련 row 가 historical record 로 남아있음
+--
+-- 관련 코드 제거 (같은 PR):
+--   src/components/ExcelUploader.tsx        (deleted)
+--   src/lib/parsePaymentExcel.ts            (deleted)
+--   src/app/api/payments/route.ts           (deleted)
+--   src/app/api/payments/[id]/route.ts      (deleted)
+--   src/app/api/payments/months/route.ts    (deleted)
+
+DROP TABLE IF EXISTS payments;

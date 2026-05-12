@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/apiAuth";
+import { normalizeSchool } from "@/lib/studentPaymentMatcher";
 import type { Student, Enrollment } from "@/types";
 
 /**
@@ -10,6 +11,9 @@ import type { Student, Enrollment } from "@/types";
  *
  * 추가로, Supabase `virtual_students` (시트에만 있고 Firebase 미등록) 도 합쳐 반환한다.
  * 동명이인 충돌 방지: Firebase 쪽에 이미 같은 이름이 있으면 virtual 은 제외.
+ *
+ * 학교 정규화: 모든 화면에서 같은 학생을 같은 학교로 보기 위해 응답 시점에 단축형
+ * (`초/중/고/여중/여고`) 으로 통일. Firebase 원본 "대구일중학교" 등 풀네임 혼재 대응.
  */
 export async function GET() {
   const supabase = await createClient();
@@ -62,12 +66,49 @@ export async function GET() {
       enrollmentsByStudent.set(studentId, arr);
     }
 
-    const withEnrollments = snap.docs.map((doc) => ({
-      id: doc.id,
-      ...(doc.data() as Omit<Student, "id">),
-      enrollments: enrollmentsByStudent.get(doc.id) || [],
-    }));
+    // school 정규화 적용
+    const withEnrollments = snap.docs.map((doc) => {
+      const data = doc.data() as Omit<Student, "id">;
+      return {
+        id: doc.id,
+        ...data,
+        school: normalizeSchool(data.school || ""),
+        enrollments: enrollmentsByStudent.get(doc.id) || [],
+      };
+    });
 
+    // virtual 학생의 학교명을 firebase 원본 학교명에 맞춤.
+    //   시트 sync 가 virtual 학생을 만들 때 학교명 표기가 firebase 와 다른 경우 (예:
+    //   firebase="대구제일고" / virtual="제일고" / virtual2="") 있어, 단순 정규화로는
+    //   같은 학교로 묶이지 않음. firebase 원본을 정답으로 간주하고 같은 이름의 firebase
+    //   학생이 있으면 그 학교명을 virtual 에도 채워준다.
+    //
+    // 동명이인이 있으면 학교명이 비어있지 않은 virtual 만 정규화 매칭. 빈 학교는
+    // 첫 번째 firebase 학생 학교명 사용 (best-effort).
+    const fbStudentsByName = new Map<string, Student[]>();
+    for (const s of withEnrollments) {
+      if (!s.name) continue;
+      const list = fbStudentsByName.get(s.name) || [];
+      list.push(s);
+      fbStudentsByName.set(s.name, list);
+    }
+    const resolveSchool = (vName: string, vSchool: string): string => {
+      const cands = fbStudentsByName.get(vName) || [];
+      if (cands.length === 0) return normalizeSchool(vSchool);
+      if (cands.length === 1) return cands[0].school || normalizeSchool(vSchool);
+      // 동명이인 — virtual school 정규화 후 prefix 매칭
+      const vn = normalizeSchool(vSchool);
+      if (!vn) return cands[0].school || "";
+      const match = cands.find(
+        (c) =>
+          (c.school || "") === vn ||
+          (c.school || "").includes(vn) ||
+          vn.includes(c.school || "")
+      );
+      return match?.school || cands[0].school || vn;
+    };
+
+    // 동명이인 dedup 키도 정규화된 학교로
     const firebaseTeachersByKey = new Map<string, Set<string>>();
     for (const s of withEnrollments) {
       const key = `${s.name}|${s.school || ""}`;
@@ -81,7 +122,8 @@ export async function GET() {
 
     const virtualStudents: Student[] = (virtualRows || [])
       .filter((v) => {
-        const key = `${v.name}|${v.school || ""}`;
+        const resolved = resolveSchool(v.name || "", v.school || "");
+        const key = `${v.name}|${resolved}`;
         const fbTeachers = firebaseTeachersByKey.get(key);
         if (fbTeachers && fbTeachers.has(v.teacher_staff_id)) return false;
         return true;
@@ -103,7 +145,7 @@ export async function GET() {
         return {
           id: v.id,
           name: v.name,
-          school: v.school || "",
+          school: resolveSchool(v.name || "", v.school || ""),
           grade: v.grade || "",
           group: v.class_name || "",
           enrollments: [enrollment],

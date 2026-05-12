@@ -319,10 +319,7 @@ export async function syncTeacherSheet(
               ? Math.min(paid, salaryBase)
               : (salaryBase ?? paid ?? 0);
 
-          // Fallback — 계약직(정은지/이영현 등) 시트 대응.
-          // paid/salaryBase 모두 비어있거나 0 이면 tier 단가 × 수업차수 로 재구성.
-          // 우선순위: (a) 행의 unitPrice × units  (b) tier.baseTuition × classUnits
-          const fallbackUnits = units ?? classUnits;
+          // 유닛단가 fallback — 행 unitPrice 가 없거나 0 이면 tier.baseTuition
           let effectiveUnitPrice = unitPrice;
           if (!effectiveUnitPrice || effectiveUnitPrice <= 0) {
             const tierItem = salaryConfig?.items.find(
@@ -333,6 +330,15 @@ export async function syncTeacherSheet(
               effectiveUnitPrice = tierItem.baseTuition;
             }
           }
+
+          // 수업 차수 — 시트 N열(units) → P열(classUnits) 순으로 매핑.
+          //   출석 시수 합으로 환산하지는 않음 — 시트의 unit_price 가 회당이 아닌
+          //   월 수강료로 입력된 케이스(영어 일부 강사) 가 있어 attendance × unit_price
+          //   환산은 2백만원 단위의 비정상 청구액을 만들 위험이 있음.
+          const fallbackUnits = units ?? classUnits;
+
+          // paid fallback — 계약직(정은지/이영현 등) 대응. paid/salaryBase 모두 0 이면
+          // tier 단가 × 수업차수 로 재구성.
           if (
             effectivePaid === 0 &&
             effectiveUnitPrice &&
@@ -342,12 +348,29 @@ export async function syncTeacherSheet(
           ) {
             effectivePaid = effectiveUnitPrice * fallbackUnits;
           }
+
+          // charge fallback — 시트 J열이 비어있을 때(undefined) 만 단가 × 수업차수 로 환산.
+          //   명시적 0(외부 장학생 등)은 그대로 0 유지 — 무분별한 환산 방지.
+          let effectiveCharge: number;
+          if (entry.paymentInfo.charge !== undefined) {
+            effectiveCharge = entry.paymentInfo.charge;
+          } else if (
+            effectiveUnitPrice &&
+            effectiveUnitPrice > 0 &&
+            fallbackUnits &&
+            fallbackUnits > 0
+          ) {
+            effectiveCharge = effectiveUnitPrice * fallbackUnits;
+          } else {
+            effectiveCharge = 0;
+          }
+
           shares.push({
             student_id: match.id,
             month: `${tab.year}-${String(tab.month).padStart(2, "0")}`,
             teacher_staff_id: teacherId,
             class_name: className,
-            allocated_charge: Math.floor(entry.paymentInfo.charge ?? 0),
+            allocated_charge: Math.floor(effectiveCharge),
             allocated_paid: Math.floor(effectivePaid),
             allocated_units: fallbackUnits,
             unit_price: effectiveUnitPrice,

@@ -309,6 +309,30 @@ export function subjectToSalarySubject(subject: string | undefined): SalarySubje
 }
 
 /**
+ * enrollment.className 의 학년 prefix → 급여 그룹.
+ *
+ * 학생의 학년(grade) 과 enrollment 의 분반 학년이 다를 수 있음:
+ *   - 초6 학생인데 "중등M 초6 MS2B" 분반(선행) → group="중등"
+ *   - 초6 학생인데 "초등M 개별 JJ2I" 분반 → group="초등"
+ *
+ * 같은 학생이라도 enrollment 마다 단가가 다른 분반에 속할 수 있으므로,
+ * 강사별 시수 검증의 단가 매칭은 학생 grade 가 아니라 enrollment.className 의
+ * prefix 를 우선해야 한다.
+ */
+export function classNameToGroup(
+  className: string | undefined | null
+): SalaryGroup | undefined {
+  const cn = (className || "").trim();
+  if (!cn) return undefined;
+  if (/^수능|수능/.test(cn)) return "수능";
+  if (/^특강|특강$/.test(cn)) return "특강";
+  if (/^초등|^[Ee]IE|^[Ee][iI]E/.test(cn)) return "초등";
+  if (/^중등|^중고/.test(cn)) return "중등";
+  if (/^고등/.test(cn)) return "고등";
+  return undefined;
+}
+
+/**
  * 학생에게 적용할 급여 설정 매칭
  * 1. tierOverrideId (시트 F열 동기화) 최우선
  * 2. salarySettingOverrides 오버라이드

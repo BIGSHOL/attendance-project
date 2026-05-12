@@ -3,6 +3,7 @@ import { doc, getDoc, collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/apiAuth";
+import { normalizeSchool } from "@/lib/studentPaymentMatcher";
 import type { Student, Enrollment } from "@/types";
 
 /**
@@ -42,9 +43,11 @@ export async function GET(
       };
     });
 
+    const data = snap.data() as Omit<Student, "id">;
     const student: Student = {
       id,
-      ...(snap.data() as Omit<Student, "id">),
+      ...data,
+      school: normalizeSchool(data.school || ""),
       enrollments,
     };
 

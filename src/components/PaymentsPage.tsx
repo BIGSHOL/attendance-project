@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
-import ExcelUploader from "./ExcelUploader";
 import ColumnFilter from "./ColumnFilter";
 import Pagination from "./Pagination";
-import { useStaff } from "@/hooks/useStaff";
 import { useStudents } from "@/hooks/useStudents";
+import { useStaff } from "@/hooks/useStaff";
+import { useUserRole } from "@/hooks/useUserRole";
+import { usePaymentSplits, buildSplitMap } from "@/hooks/usePaymentSplits";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { type PaymentRow } from "@/lib/parsePaymentExcel";
 import { SkeletonTable } from "@/components/ui/Skeleton";
+import { extractSubjectFromBillingName } from "@/lib/extractSubjectFromBillingName";
+import { subjectToSalarySubject } from "@/lib/salary";
+import PaymentSplitModal from "@/components/payments/PaymentSplitModal";
+import type { Student } from "@/types";
 
 interface Payment {
   id: string;
@@ -43,20 +47,42 @@ type SortDir = "asc" | "desc";
 const PAGE_SIZE = 30;
 
 function formatMonth(m: string) {
-  return `${m.slice(0, 4)}년 ${parseInt(m.slice(4))}월`;
+  // Firebase billing.month 는 `YYYY-MM` 단일 포맷. 과거 Supabase 시절의 4종 포맷
+  // 호환은 historical 데이터 표시용으로 유지.
+  if (!m) return "";
+  const digits = m.replace(/[^0-9]/g, "");
+  if (digits.length < 6) return m;
+  return `${digits.slice(0, 4)}년 ${parseInt(digits.slice(4, 6))}월`;
 }
 
 export default function PaymentsPage() {
-  const { staff } = useStaff();
   const { students } = useStudents();
+  const { teachers: staff } = useStaff();
+  const { isAdmin } = useUserRole();
 
-  // student_code → Firebase student id 매핑
+  // student_code → Firebase student id 매핑 (학생 상세 페이지 링크용)
   const studentIdByCode = useMemo(() => {
     const map = new Map<string, string>();
     students.forEach((s) => {
       if (s.studentCode) map.set(s.studentCode, s.id);
     });
     return map;
+  }, [students]);
+
+  // 학생 lookup — billing 의 학교/담임강사 빈 칸 보강용.
+  //   Firebase billing 은 MakeEdu 가 학생 학교를 채우지 않을 때가 있고,
+  //   billingName 이 분반 코드만 들어가는 경우(MS2B, JJ2I 등) 강사 추출 실패.
+  //   useStudents 가 이미 가져온 데이터에서 fallback.
+  const studentLookup = useMemo(() => {
+    const byCode = new Map<string, Student>();
+    const byName = new Map<string, Student[]>();
+    students.forEach((s) => {
+      if (s.studentCode) byCode.set(s.studentCode, s);
+      const list = byName.get(s.name) || [];
+      list.push(s);
+      byName.set(s.name, list);
+    });
+    return { byCode, byName };
   }, [students]);
   const [selectedMonth, setSelectedMonth] = useLocalStorage<string | null>(
     "payments.selectedMonth",
@@ -65,12 +91,6 @@ export default function PaymentsPage() {
   const [monthSummaries, setMonthSummaries] = useState<MonthSummary[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [pendingRows, setPendingRows] = useState<PaymentRow[] | null>(null);
-  const [pendingMonth, setPendingMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
   const [search, setSearch] = useLocalStorage<string>("payments.search", "");
   const [columnFiltersArr, setColumnFiltersArr] = useLocalStorage<Record<string, string[]>>(
     "payments.columnFilters",
@@ -82,10 +102,15 @@ export default function PaymentsPage() {
     return result;
   }, [columnFiltersArr]);
   const [page, setPage] = useState(1);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState<Partial<Payment>>({});
   const [sortKey, setSortKey] = useLocalStorage<SortKey>("payments.sortKey", "student_name");
   const [sortDir, setSortDir] = useLocalStorage<SortDir>("payments.sortDir", "asc");
+
+  // 수납 분리 데이터 — 선택된 월
+  const { splits: paymentSplits, refetch: refetchSplits } = usePaymentSplits(selectedMonth);
+  const splitMap = useMemo(() => buildSplitMap(paymentSplits), [paymentSplits]);
+
+  // 분리 모달
+  const [splitTarget, setSplitTarget] = useState<Payment | null>(null);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -97,26 +122,19 @@ export default function PaymentsPage() {
     setPage(1);
   };
 
-  const buildStaffMap = useCallback(() => {
-    const map: Record<string, string> = {};
-    for (const s of staff) {
-      map[s.name] = s.id;
-      const match = s.name.match(/^(.+?)\(/);
-      if (match) map[match[1]] = s.id;
-    }
-    return map;
-  }, [staff]);
-
-  // 월별 요약 목록 가져오기
+  // 월별 요약 / 월별 row — 모두 Firebase billing (MakeEdu 매일 자동 동기화).
+  //   출석부 프로그램이므로 수업료(수업/원복 카테고리) 만 표시. 교재/차량비는
+  //   정산 대상 아님 — MakeEdu 의 별도 시스템에서 관리됨. /api/billing 기본값이
+  //   수업+원복 이므로 추가 파라미터 불필요.
   const fetchMonthSummaries = useCallback(async () => {
-    const res = await fetch("/api/payments/months?summary=true");
+    const res = await fetch("/api/billing?summary=true");
     const data = await res.json();
     if (Array.isArray(data)) setMonthSummaries(data);
   }, []);
 
   const fetchPayments = useCallback(async (month: string) => {
     setLoading(true);
-    const res = await fetch(`/api/payments?month=${month}`);
+    const res = await fetch(`/api/billing?month=${month}`);
     const data = await res.json();
     if (Array.isArray(data)) setPayments(data);
     setLoading(false);
@@ -132,51 +150,6 @@ export default function PaymentsPage() {
     }
   }, [selectedMonth, fetchPayments]);
 
-  const handleParsed = (rows: PaymentRow[]) => {
-    if (rows.length === 0) return;
-    // 엑셀의 청구월을 기본값으로 제안하되, 수동 변경 가능
-    const suggested = rows[0].billing_month;
-    if (suggested) setPendingMonth(suggested);
-    setPendingRows(rows);
-  };
-
-  const handleConfirmUpload = async () => {
-    if (!pendingRows) return;
-
-    const existing = monthSummaries.find((s) => s.month === pendingMonth);
-    if (existing) {
-      const choice = confirm(
-        `${formatMonth(pendingMonth)} 수납 데이터가 이미 ${existing.count}건 있습니다.\n\n[확인] 기존 데이터를 덮어쓰기\n[취소] 업로드 취소`
-      );
-      if (!choice) return;
-    }
-
-    // 모든 행의 billing_month를 선택한 월로 통일
-    const rows = pendingRows.map((r) => ({ ...r, billing_month: pendingMonth }));
-
-    setSaving(true);
-    const staffMap = buildStaffMap();
-    const res = await fetch("/api/payments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows, staffMap }),
-    });
-    const result = await res.json();
-    setSaving(false);
-    setPendingRows(null);
-
-    if (res.ok) {
-      await fetchMonthSummaries();
-      setSelectedMonth(pendingMonth);
-    } else {
-      alert(result.error || "저장 실패");
-    }
-  };
-
-  const cancelUpload = () => {
-    setPendingRows(null);
-  };
-
   const openMonth = (month: string) => {
     setSelectedMonth(month);
     setPage(1);
@@ -188,17 +161,82 @@ export default function PaymentsPage() {
     fetchMonthSummaries();
   };
 
+  // 학교/담임강사 보강.
+  //   Firebase billing 원본은 school 이 항상 비어있고 담임강사 필드도 없음 — MakeEdu
+  //   에서 분반 코드만 저장하기 때문. ijw-calander UI 도 사실은 students 컬렉션에서
+  //   join 해서 표시하는 구조. 우리도 동일하게 학생 데이터로 보강한다.
+  //
+  //   우선순위:
+  //   1) 원본 우선 — billing.school / billing.teacher_name (영어 강사 토큰 매칭된 경우)
+  //   2) 학생 enrollment fallback —
+  //      ① enrollment.className 이 billingName 의 prefix → 분반 코드 정확 매칭
+  //         (예: className="중등M 초6 MS2B" ↔ billingName="중등M 초6 MS2B 월목")
+  //      ② billingName 의 과목 추정 → 같은 과목 enrollment
+  //      ③ 단일 enrollment → 그것
+  //   3) 학교 — student.school (이미 normalizeSchool 적용된 단축형)
+  const enrichedPayments = useMemo(() => {
+    return payments.map((p) => {
+      if (p.school && p.teacher_name) return p;
+      let student: Student | undefined = p.student_code
+        ? studentLookup.byCode.get(p.student_code)
+        : undefined;
+      if (!student) {
+        const cands = studentLookup.byName.get(p.student_name) || [];
+        if (cands.length === 1) {
+          student = cands[0];
+        } else if (cands.length > 1) {
+          // 동명이인 — billing.school / grade 로 좁힘
+          if (p.school) student = cands.find((c) => c.school === p.school);
+          if (!student && p.grade) student = cands.find((c) => c.grade === p.grade);
+          if (!student) student = cands[0];
+        }
+      }
+      if (!student) return p;
+
+      const school = p.school || student.school || "";
+      let teacher_name = p.teacher_name;
+      let teacher_staff_id = p.teacher_staff_id;
+
+      if (!teacher_name && student.enrollments && student.enrollments.length > 0) {
+        // ① enrollment.className 이 billingName 의 prefix — 분반 코드 정확 매칭
+        let target = student.enrollments.find((e) => {
+          const cn = (e.className || "").trim();
+          return cn.length >= 4 && (p.payment_name || "").startsWith(cn);
+        });
+
+        // ② 과목 추정 매칭
+        if (!target) {
+          const guessed = extractSubjectFromBillingName(p.payment_name);
+          if (guessed) {
+            target = student.enrollments.find(
+              (e) => subjectToSalarySubject(e.subject) === guessed
+            );
+          }
+        }
+
+        // ③ 단일 enrollment
+        if (!target && student.enrollments.length === 1) target = student.enrollments[0];
+
+        if (target) {
+          teacher_name = target.teacher || target.staffId || "";
+          teacher_staff_id = target.staffId || null;
+        }
+      }
+      return { ...p, school, teacher_name, teacher_staff_id };
+    });
+  }, [payments, studentLookup]);
+
   // 열별 고유값 추출
   const columnValues = useMemo(() => {
     const cols: Record<string, string[]> = {};
     const keys: SortKey[] = ["student_name", "school", "grade", "payment_name", "teacher_name"];
     for (const key of keys) {
       const set = new Set<string>();
-      payments.forEach((p) => { const v = String(p[key] || ""); if (v) set.add(v); });
+      enrichedPayments.forEach((p) => { const v = String(p[key] || ""); if (v) set.add(v); });
       cols[key] = Array.from(set);
     }
     return cols;
-  }, [payments]);
+  }, [enrichedPayments]);
 
   const setColumnFilter = (key: string, selected: Set<string>) => {
     setColumnFiltersArr({ ...columnFiltersArr, [key]: Array.from(selected) });
@@ -206,7 +244,7 @@ export default function PaymentsPage() {
   };
 
   const filtered = useMemo(() => {
-    let list = payments;
+    let list = enrichedPayments;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(
@@ -236,7 +274,7 @@ export default function PaymentsPage() {
     });
 
     return sorted;
-  }, [payments, search, columnFilters, sortKey, sortDir]);
+  }, [enrichedPayments, search, columnFilters, sortKey, sortDir]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paged = useMemo(
@@ -257,85 +295,27 @@ export default function PaymentsPage() {
     );
   }, [filtered]);
 
-  const startEdit = (p: Payment) => {
-    setEditingId(p.id);
-    setEditValues({
-      school: p.school,
-      payment_name: p.payment_name,
-      charge_amount: p.charge_amount,
-      discount_amount: p.discount_amount,
-      paid_amount: p.paid_amount,
-      teacher_name: p.teacher_name,
-      memo: p.memo,
-    });
-  };
-
-  const saveEdit = async () => {
-    if (!editingId || !selectedMonth) return;
-    await fetch(`/api/payments/${editingId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editValues),
-    });
-    setEditingId(null);
-    fetchPayments(selectedMonth);
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditValues({});
-  };
-
-  const deletePayment = async (id: string) => {
-    if (!confirm("삭제하시겠습니까?")) return;
-    await fetch(`/api/payments/${id}`, { method: "DELETE" });
-    if (selectedMonth) fetchPayments(selectedMonth);
-  };
-
-  // ─── 메인 화면: 월 목록 + 업로더 ───
+  // ─── 메인 화면: 월 목록 (Firebase billing) ───
   if (!selectedMonth) {
     return (
       <div className="mx-auto max-w-4xl">
-        <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 mb-6">
-          수납 관리
-        </h2>
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
+            수납 관리
+          </h2>
+        </div>
 
-        <ExcelUploader onParsed={handleParsed} />
-
-        {pendingRows && (
-          <div className="mt-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                {pendingRows.length}건 파싱 완료 — 납부월 선택:
-              </span>
-              <input
-                type="month"
-                value={`${pendingMonth.slice(0, 4)}-${pendingMonth.slice(4)}`}
-                onChange={(e) => {
-                  const v = e.target.value.replace("-", "");
-                  setPendingMonth(v);
-                }}
-                className="rounded border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-              />
-              <button
-                onClick={handleConfirmUpload}
-                className="rounded-sm bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                저장
-              </button>
-              <button
-                onClick={cancelUpload}
-                className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              >
-                취소
-              </button>
-            </div>
+        <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950">
+          <div className="text-sm font-medium text-emerald-800 dark:text-emerald-300">
+            🔄 MakeEdu 자동 동기화 — 수업료만 표시
           </div>
-        )}
-
-        {saving && (
-          <div className="mt-3 text-sm text-blue-600 dark:text-blue-400">저장 중...</div>
-        )}
+          <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">
+            매일 새벽 3시(KST) MakeEdu 외부 학원관리시스템에서 Firebase 의{" "}
+            <code className="font-mono">billing</code> collection 으로 자동 업데이트됩니다.
+            출석부 프로그램이므로 수업료(수업/원복) 만 가져옵니다 — 교재·차량비는 MakeEdu 별도 관리.
+            정산·시수 검증도 같은 데이터를 공유합니다.
+          </p>
+        </div>
 
         {monthSummaries.length > 0 && (
           <div className="mt-8">
@@ -363,7 +343,7 @@ export default function PaymentsPage() {
     );
   }
 
-  // ─── 상세 화면: 해당 월 수납 테이블 ───
+  // ─── 상세 화면: 해당 월 수납 테이블 (read-only) ───
   return (
     <div className="mx-auto max-w-7xl">
       <div className="flex items-center justify-between mb-4">
@@ -377,58 +357,11 @@ export default function PaymentsPage() {
           <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
             {formatMonth(selectedMonth)} 수납
           </h2>
+          <span className="text-xs text-emerald-600 dark:text-emerald-400">
+            MakeEdu 자동 동기화 — 수업료만, read-only
+          </span>
         </div>
-        <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-sm border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
-          <span>📂</span> 엑셀 재업로드
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              const { parsePaymentExcel } = await import("@/lib/parsePaymentExcel");
-              const buffer = await file.arrayBuffer();
-              const rows = parsePaymentExcel(buffer);
-              setPendingMonth(selectedMonth);
-              setPendingRows(rows);
-              e.target.value = "";
-            }}
-          />
-        </label>
       </div>
-
-      {pendingRows && (
-        <div className="mb-4 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              {pendingRows.length}건 파싱 완료 — 납부월 선택:
-            </span>
-            <input
-              type="month"
-              value={`${pendingMonth.slice(0, 4)}-${pendingMonth.slice(4)}`}
-              onChange={(e) => setPendingMonth(e.target.value.replace("-", ""))}
-              className="rounded border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-            />
-            <button
-              onClick={handleConfirmUpload}
-              className="rounded-sm bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              저장
-            </button>
-            <button
-              onClick={cancelUpload}
-              className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-            >
-              취소
-            </button>
-          </div>
-        </div>
-      )}
-
-      {saving && (
-        <div className="mb-3 text-sm text-blue-600 dark:text-blue-400">저장 중...</div>
-      )}
 
       {/* 요약 */}
       <div className="grid grid-cols-3 gap-4">
@@ -567,14 +500,19 @@ export default function PaymentsPage() {
                   >담임강사</ColumnFilter>
                 </th>
                 <th className="px-3 py-2 text-left font-medium text-zinc-500">메모</th>
-                <th className="px-3 py-2 text-center font-medium text-zinc-500">편집</th>
+                <th className="px-3 py-2 text-center font-medium text-zinc-500 w-[64px]">분리</th>
               </tr>
             </thead>
             <tbody>
-              {paged.map((p, idx) => (
+              {paged.map((p, idx) => {
+                const splitKey = `${p.billing_month}|${p.student_name}|${p.school || ""}|${p.payment_name}`;
+                const split = splitMap.get(splitKey);
+                return (
+                <Fragment key={p.id}>
                 <tr
-                  key={p.id}
-                  className="border-b border-zinc-300 last:border-0 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/30"
+                  className={`border-b border-zinc-300 last:border-0 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/30 ${
+                    split ? "bg-blue-50/30 dark:bg-blue-950/10" : ""
+                  }`}
                 >
                   <td className="px-3 py-2 text-zinc-400">
                     {(page - 1) * PAGE_SIZE + idx + 1}
@@ -591,153 +529,127 @@ export default function PaymentsPage() {
                       p.student_name
                     )}
                   </td>
-                  {editingId === p.id ? (
-                    <td className="px-3 py-2">
-                      <input
-                        value={editValues.school || ""}
-                        onChange={(e) =>
-                          setEditValues({ ...editValues, school: e.target.value })
-                        }
-                        className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                      />
-                    </td>
-                  ) : (
-                    <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
-                      {p.school || "-"}
-                    </td>
-                  )}
+                  <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
+                    {p.school || "-"}
+                  </td>
                   <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
                     {p.grade}
                   </td>
-
-                  {editingId === p.id ? (
-                    <>
-                      <td className="px-3 py-2">
-                        <input
-                          value={editValues.payment_name || ""}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, payment_name: e.target.value })
-                          }
-                          className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          value={editValues.charge_amount ?? 0}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, charge_amount: Number(e.target.value) })
-                          }
-                          className="w-24 rounded border border-zinc-300 px-2 py-1 text-sm text-right dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          value={editValues.discount_amount ?? 0}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, discount_amount: Number(e.target.value) })
-                          }
-                          className="w-20 rounded border border-zinc-300 px-2 py-1 text-sm text-right dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          value={editValues.paid_amount ?? 0}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, paid_amount: Number(e.target.value) })
-                          }
-                          className="w-24 rounded border border-zinc-300 px-2 py-1 text-sm text-right dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          value={editValues.teacher_name || ""}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, teacher_name: e.target.value })
-                          }
-                          className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          value={editValues.memo || ""}
-                          onChange={(e) =>
-                            setEditValues({ ...editValues, memo: e.target.value })
-                          }
-                          className="w-full rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-center whitespace-nowrap">
-                        <button
-                          onClick={saveEdit}
-                          className="text-xs text-blue-600 hover:text-blue-800 mr-2"
-                        >
-                          저장
-                        </button>
-                        <button
-                          onClick={cancelEdit}
-                          className="text-xs text-zinc-400 hover:text-zinc-600"
-                        >
-                          취소
-                        </button>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate" title={p.payment_name}>
-                        {p.payment_name}
-                      </td>
-                      <td className="px-3 py-2 text-right text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                        {p.charge_amount.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2 text-right text-orange-600 whitespace-nowrap">
-                        {p.discount_amount > 0
-                          ? `-${p.discount_amount.toLocaleString()}`
-                          : "-"}
-                      </td>
-                      <td className="px-3 py-2 text-right text-emerald-600 whitespace-nowrap">
-                        {p.paid_amount.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
-                        {p.teacher_staff_id ? (
-                          <Link
-                            href={`/teachers/${p.teacher_staff_id}`}
-                            className="hover:text-blue-600 hover:underline"
-                          >
-                            {p.teacher_name || "-"}
-                          </Link>
-                        ) : (
-                          p.teacher_name || "-"
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-zinc-400 max-w-[120px] truncate" title={p.memo || ""}>
-                        {p.memo || "-"}
-                      </td>
-                      <td className="px-3 py-2 text-center whitespace-nowrap">
-                        <button
-                          onClick={() => startEdit(p)}
-                          className="text-xs text-blue-600 hover:text-blue-800 mr-2"
-                        >
-                          수정
-                        </button>
-                        <button
-                          onClick={() => deletePayment(p.id)}
-                          className="text-xs text-red-500 hover:text-red-700"
-                        >
-                          삭제
-                        </button>
-                      </td>
-                    </>
-                  )}
+                  <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate" title={p.payment_name}>
+                    {p.payment_name}
+                  </td>
+                  <td className="px-3 py-2 text-right text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
+                    {p.charge_amount.toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right text-orange-600 whitespace-nowrap">
+                    {p.discount_amount > 0
+                      ? `-${p.discount_amount.toLocaleString()}`
+                      : "-"}
+                  </td>
+                  <td className="px-3 py-2 text-right text-emerald-600 whitespace-nowrap">
+                    {p.paid_amount.toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
+                    {split ? (
+                      <span className="text-xs text-blue-600 dark:text-blue-400">
+                        분리됨 ({split.splits.length}명)
+                      </span>
+                    ) : p.teacher_staff_id ? (
+                      <Link
+                        href={`/teachers/${p.teacher_staff_id}`}
+                        className="hover:text-blue-600 hover:underline"
+                      >
+                        {p.teacher_name || "-"}
+                      </Link>
+                    ) : (
+                      p.teacher_name || "-"
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-400 max-w-[120px] truncate" title={p.memo || ""}>
+                    {p.memo || "-"}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() => setSplitTarget(p)}
+                        className={`rounded-sm border px-2 py-0.5 text-[11px] ${
+                          split
+                            ? "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400"
+                            : "border-zinc-300 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                        }`}
+                      >
+                        {split ? "수정" : "분리"}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-zinc-400">-</span>
+                    )}
+                  </td>
                 </tr>
-              ))}
+                {split &&
+                  split.splits.map((s, sIdx) => (
+                    <tr
+                      key={`${p.id}-split-${sIdx}`}
+                      className="border-b border-zinc-100 bg-zinc-50/40 text-[11px] text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/40"
+                    >
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1 pl-5 text-zinc-500">
+                        └ {s.teacher_name}
+                        {s.role ? <span className="ml-1 text-zinc-400">({s.role})</span> : null}
+                      </td>
+                      <td className="px-3 py-1 text-right">{s.amount.toLocaleString()}</td>
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1 text-right text-emerald-600/70">
+                        {s.amount.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-1 text-zinc-500">{s.teacher_name}</td>
+                      <td className="px-3 py-1" />
+                      <td className="px-3 py-1" />
+                    </tr>
+                  ))}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
       <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+
+      <PaymentSplitModal
+        open={!!splitTarget}
+        onClose={() => setSplitTarget(null)}
+        billing={
+          splitTarget
+            ? {
+                billing_month: splitTarget.billing_month,
+                student_name: splitTarget.student_name,
+                student_school: splitTarget.school || "",
+                billing_name: splitTarget.payment_name,
+                charge_amount: splitTarget.charge_amount,
+              }
+            : null
+        }
+        staff={staff}
+        existing={
+          splitTarget
+            ? splitMap.get(
+                `${splitTarget.billing_month}|${splitTarget.student_name}|${splitTarget.school || ""}|${splitTarget.payment_name}`
+              ) || null
+            : null
+        }
+        defaultTeacher={
+          splitTarget && splitTarget.teacher_staff_id
+            ? { id: splitTarget.teacher_staff_id, name: splitTarget.teacher_name }
+            : null
+        }
+        onSaved={() => {
+          refetchSplits();
+        }}
+      />
     </div>
   );
 }

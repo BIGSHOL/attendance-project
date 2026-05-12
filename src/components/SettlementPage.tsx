@@ -11,6 +11,7 @@ import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { usePaymentsForMonth } from "@/hooks/usePaymentsForMonth";
+import { usePaymentSplits, buildSplitMap } from "@/hooks/usePaymentSplits";
 import { useLocalStorage, useLocalStorageSet } from "@/hooks/useLocalStorage";
 import { useAllTierOverrides } from "@/hooks/useAllTierOverrides";
 import { useSessionPeriods } from "@/hooks/useSessionPeriods";
@@ -24,9 +25,6 @@ import { computeTeacherMonthPayroll } from "@/lib/teacherPayroll";
 import { filterStudentsByMonth } from "@/lib/studentFilter";
 import { createWorkbook, addSheet, writeFile } from "@/lib/excelExport";
 import BulkSyncSettings from "./settlement/BulkSyncSettings";
-import SortableTh from "./settlement/SortableTh";
-import StatCard from "./settlement/StatCard";
-import { computeSettlements } from "@/lib/settlementCompute";
 import type { Teacher, Student } from "@/types";
 import type { SalaryType } from "@/hooks/useUserRole";
 import {
@@ -36,7 +34,9 @@ import {
   isAttendanceCountable,
   subjectToSalarySubject,
   getEffectiveRatio,
+  classNameToGroup,
 } from "@/lib/salary";
+import { extractSubjectFromBillingName } from "@/lib/extractSubjectFromBillingName";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 
@@ -88,12 +88,12 @@ export default function SettlementPage() {
     }
   };
 
-  // ─── 전체 시트 동기화 (audit V7 Phase 4: concurrent worker pool) ─────
+  // ─── 전체 시트 순차 동기화 ──────────────────────────
   const [bulkSync, setBulkSync] = useState<{
     running: boolean;
-    completed: number;             // 완료된 선생님 수
+    current: number;
     total: number;
-    inProgress: Set<string>;       // 현재 동시 처리 중인 선생님 이름들
+    currentName: string;
     results: TeacherSyncResult[];
     done: boolean;
   } | null>(null);
@@ -101,12 +101,6 @@ export default function SettlementPage() {
   // 전체 동기화에서 제외할 선생님 id 집합 — localStorage 영속화
   const [excludedSyncIds, setExcludedSyncIds] = useLocalStorageSet(
     "settlement.excludedSyncIds"
-  );
-
-  // 동시 처리 선생님 수 (1~5) — localStorage 영속화. 기본 3 (안전).
-  const [syncConcurrency, setSyncConcurrency] = useLocalStorage<number>(
-    "settlement.syncConcurrency",
-    3
   );
   const toggleExcludedSync = useCallback(
     (teacherId: string) => {
@@ -130,15 +124,9 @@ export default function SettlementPage() {
   );
 
   /**
-   * 전체 동기화 실행기 (audit V7 Phase 4: concurrent worker pool).
+   * 전체 동기화 실행기.
    *   targetIds 없이 호출 = 전체 (excludedSyncIds 제외).
    *   targetIds 지정 = 그 부분집합만 (실패 재시도용).
-   *
-   *   syncConcurrency (1~5) 명의 worker 가 동시에 한 명씩 sync 처리.
-   *   각 worker 가 끝나는 즉시 다음 선생님을 잡아서 진행 (cursor 공유).
-   *   Promise.all 로 모든 worker 종료 시까지 대기.
-   *
-   *   에러 격리: 한 선생님 실패가 다른 worker 진행을 막지 않음 (try/catch per worker).
    */
   const runBulkSync = useCallback(
     async (targetIds?: Set<string>) => {
@@ -162,112 +150,60 @@ export default function SettlementPage() {
         );
         return;
       }
-      const effectiveConcurrency = Math.min(
-        Math.max(1, syncConcurrency),
-        5,
-        targets.length
-      );
       if (
         !targetIds &&
         !confirm(
-          `${year}년 ${month}월 탭을 ${targets.length}명 동기화합니다.\n` +
-            `동시 처리 ${effectiveConcurrency}명. 진행하시겠습니까?`
+          `${year}년 ${month}월 탭을 ${targets.length}명 전체 순차 동기화합니다.\n` +
+            `선생님 한 명당 수 초~수십 초 걸릴 수 있습니다. 진행하시겠습니까?`
         )
       )
         return;
 
       setBulkSync({
         running: true,
-        completed: 0,
+        current: 0,
         total: targets.length,
-        inProgress: new Set(),
+        currentName: "",
         results: [],
         done: false,
       });
 
       const exactMonth = `${year}-${String(month).padStart(2, "0")}`;
-      // cursor 공유: 모든 worker 가 같은 큐에서 다음 작업 번호를 atomic 하게 가져감
-      let cursor = 0;
       const collected: TeacherSyncResult[] = [];
-
-      const runOne = async (idx: number) => {
-        const { teacher, sheetUrl } = targets[idx];
-        // 진행 중 표시 추가 — functional update 로 동시 worker 충돌 안전.
+      for (let i = 0; i < targets.length; i++) {
+        const { teacher, sheetUrl } = targets[i];
         setBulkSync((prev) =>
-          prev
-            ? {
-                ...prev,
-                inProgress: new Set(prev.inProgress).add(teacher.name),
-              }
-            : prev
+          prev ? { ...prev, current: i, currentName: teacher.name } : prev
         );
-        let result: TeacherSyncResult;
         try {
-          try {
-            result = await syncTeacherSheet(
-              teacher.id,
-              teacher.name,
-              sheetUrl,
-              students,
-              "2026-03",
-              exactMonth,
-              salaryConfig,
-              teacher.subjects?.[0]
-            );
-            if (result.success) markSynced(teacher.id);
-          } catch (e) {
-            result = {
-              teacherId: teacher.id,
-              teacherName: teacher.name,
-              success: false,
-              error: (e as Error).message,
-              months: [],
-            };
-          }
+          const result = await syncTeacherSheet(
+            teacher.id,
+            teacher.name,
+            sheetUrl,
+            students,
+            "2026-03",
+            exactMonth,
+            salaryConfig,
+            teacher.subjects?.[0]
+          );
           collected.push(result);
-          // 완료 카운트 증가 + 결과 누적 + inProgress 제거 (한 번에 update 보장).
-          // 두 번째 try/finally — collected.push 후에도 inProgress cleanup 누락 방지.
-          setBulkSync((prev) => {
-            if (!prev) return prev;
-            const nextInProgress = new Set(prev.inProgress);
-            nextInProgress.delete(teacher.name);
-            return {
-              ...prev,
-              inProgress: nextInProgress,
-              completed: prev.completed + 1,
-              results: [...prev.results, result],
-            };
-          });
-        } finally {
-          // 예기치 못한 throw 가 발생해도 inProgress 에서 이름 제거 보장.
-          // (외부 try/catch 가 syncTeacherSheet error 를 잡지만, collected.push 나
-          //  setBulkSync 단계에서 throw 시에도 UI state 정합성 유지.)
-          setBulkSync((prev) => {
-            if (!prev) return prev;
-            if (!prev.inProgress.has(teacher.name)) return prev;
-            const nextInProgress = new Set(prev.inProgress);
-            nextInProgress.delete(teacher.name);
-            return { ...prev, inProgress: nextInProgress };
+          if (result.success) markSynced(teacher.id);
+        } catch (e) {
+          collected.push({
+            teacherId: teacher.id,
+            teacherName: teacher.name,
+            success: false,
+            error: (e as Error).message,
+            months: [],
           });
         }
-      };
-
-      const worker = async () => {
-        while (cursor < targets.length) {
-          const myIdx = cursor++;
-          await runOne(myIdx);
-        }
-      };
-
-      await Promise.all(
-        Array.from({ length: effectiveConcurrency }, () => worker())
-      );
+      }
 
       setBulkSync({
         running: false,
-        completed: targets.length,
+        current: targets.length,
         total: targets.length,
-        inProgress: new Set(),
+        currentName: "",
         results: collected,
         done: true,
       });
@@ -282,7 +218,6 @@ export default function SettlementPage() {
       month,
       markSynced,
       excludedSyncIds,
-      syncConcurrency,
     ]
   );
 
@@ -398,12 +333,6 @@ export default function SettlementPage() {
     month,
     sessionRange
   );
-
-  // audit V8: 시수 검증 탭 전용 attendance — 항상 해당 달 전체 (sessionRange 무시).
-  //   정산은 sessionRange 안에서 계산하지만, 시수 검증은 운영자가 모든 raw row 를
-  //   봐야 하므로 4/1~4/말 전체 데이터 필요. payMode 무관.
-  //   sessionRange 가 4/3~4/30 인 경우 4/1, 4/2 데이터가 빠지는 문제 fix.
-  const { records: verificationAttendance } = useAllAttendance(year, month, null);
   const { getByTeacher, loading: settlementLoading } = useMonthlySettlement(year, month);
   const { hiddenTeacherIds } = useHiddenTeachers();
   const { users: userRoles } = useAllUserRoles();
@@ -411,6 +340,11 @@ export default function SettlementPage() {
   const { isBlogRequired, getSalary, getAdminAllowance } = useTeacherSettings();
   const { payments: monthPayments, loading: paymentsLoading } = usePaymentsForMonth(year, month);
   const { overrides: tierOverrides } = useAllTierOverrides();
+
+  // 수납 분리 데이터 — billing 의 단일 청구를 강사별로 쪼갠 수기 분배
+  const ymStr = `${year}-${String(month).padStart(2, "0")}`;
+  const { splits: paymentSplits } = usePaymentSplits(ymStr);
+  const splitMap = useMemo(() => buildSplitMap(paymentSplits), [paymentSplits]);
 
   // 월 전체 payment_shares — 영어 선생님의 강사별 귀속 수납. 출석부 탭과 동일 공식 적용.
   // API(/api/payment-shares) 는 Supabase 전체 row 를 그대로 반환하므로 PaymentShare 전 필드 보유.
@@ -526,32 +460,366 @@ export default function SettlementPage() {
     }
   };
 
-  // 선생님별 정산 계산 (+ 과목별 breakdown). split-only — 본체 lib/settlementCompute.ts 로 이동.
-  const settlements = useMemo(
-    () =>
-      computeSettlements({
-        visibleTeachers,
-        students,
-        attendanceRecords,
-        salaryConfig,
+  // 선생님별 정산 계산 (+ 과목별 breakdown)
+  const settlements = useMemo(() => {
+    return visibleTeachers.map((teacher) => {
+      const settlement = getByTeacher(teacher.id);
+      const effectiveConfig = settlement.isFinalized && settlement.salaryConfig
+        ? settlement.salaryConfig
+        : salaryConfig;
+
+      // payment_shares 경로 — 영어/수학/과학 무관. sync 된 모든 선생님이 shares 저장됨.
+      // 키는 `{student_id}|{class_name}` 으로 분반까지 분리 — 같은 학생이 여러 tier
+      // 수강하는 경우 각 share 마다 독립 계산되어 출석부 탭과 완벽 일치.
+      const teacherShares = allShares.filter((sh) => sh.teacher_staff_id === teacher.id);
+      const useSharePath = teacherShares.length > 0;
+      const isEnglishTeacher = !!teacher.subjects?.includes("english");
+      const paidByRow = new Map<string, number>();
+      const unitPriceByRow = new Map<string, number>();
+      if (useSharePath) {
+        for (const sh of teacherShares) {
+          const key = sh.class_name
+            ? `${sh.student_id}|${sh.class_name}`
+            : sh.student_id;
+          paidByRow.set(key, (paidByRow.get(key) || 0) + (sh.allocated_paid || 0));
+          if (sh.unit_price && !unitPriceByRow.has(key)) {
+            unitPriceByRow.set(key, sh.unit_price);
+          }
+        }
+      }
+
+      // 담당 학생 목록.
+      // sync 된 선생님 (shares 있음): teacherShares.student_id 기준 — 출석부 탭과 동일.
+      //   학생 대상이 Firebase + virtual 중복되지 않도록 shares 가 권위.
+      // 미동기화 선생님: enrollments 매칭 + isActiveInMonth fallback.
+      const studentById = new Map(students.map((s) => [s.id, s]));
+      const teacherStudents = useSharePath
+        ? (() => {
+            const uniqueIds = new Set(teacherShares.map((sh) => sh.student_id));
+            const list: Student[] = [];
+            for (const id of uniqueIds) {
+              const stu = studentById.get(id);
+              if (stu) list.push(stu);
+            }
+            return list;
+          })()
+        : students.filter((s) =>
+            s.enrollments?.some((e) => isTeacherMatch(e, teacher) && isActiveInMonth(e))
+          );
+      // 학생 id → subjects (이 선생님이 해당 학생에게 가르치는 과목들)
+      const studentSubjects = new Map<string, Set<string>>();
+      for (const s of teacherStudents) {
+        const subs = new Set<string>();
+        for (const e of s.enrollments || []) {
+          if (isTeacherMatch(e, teacher) && isActiveInMonth(e)) {
+            subs.add(e.subject || "기타");
+          }
+        }
+        studentSubjects.set(s.id, subs);
+      }
+
+      const salaryInfo = resolveSalary(teacher.id);
+      const salaryType = salaryInfo.type;
+      const commissionDays = salaryInfo.days;
+      const blogRequired = isBlogRequired(teacher.id);
+      const blogPenalty = blogRequired && !hasPostForTeacher(teacher.id);
+
+      // 이 선생님의 과목에 맞는 세션 범위 — 출석부 탭 세션모드와 동일.
+      // 복수 과목이면 자신의 과목 세션 합집합. 세션 없으면 달력 월 prefix fallback.
+      const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+      const teacherSubjectSet = new Set(teacher.subjects || []);
+      const teacherSessions: typeof mathSessions = [];
+      if (teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")) {
+        const ms = mathSessions.find((s) => s.month === month);
+        if (ms) teacherSessions.push(ms);
+      }
+      if (teacherSubjectSet.has("english")) {
+        const es = englishSessions.find((s) => s.month === month);
+        if (es) teacherSessions.push(es);
+      }
+      const isDateInTeacherPeriod = (dateKey: string): boolean => {
+        if (teacherSessions.length === 0) return dateKey.startsWith(monthStr);
+        return teacherSessions.some((s) => isDateInSession(dateKey, s));
+      };
+
+      // 학생별 시수 (전체/countable).
+      // 영어 교사: 학생×분반(class_name) 단위로도 별도 집계 — 출석부 탭과 동일.
+      const studentUnitMap = new Map<string, number>();
+      const studentTotalMap = new Map<string, number>();
+      const rowUnitMap = new Map<string, number>(); // `{sid}|{class_name}`
+      const rowTotalMap = new Map<string, number>();
+      let totalAttendance = 0;
+      let countableAttendance = 0;
+
+      for (const r of attendanceRecords) {
+        if (r.teacher_id !== teacher.id) continue;
+        if (r.hours <= 0) continue;
+        // 이 선생님 과목 세션 범위 밖은 제외 (출석부 탭 세션모드와 동일)
+        if (!isDateInTeacherPeriod(r.date)) continue;
+        const cn = r.class_name || "";
+        const rowKey = cn ? `${r.student_id}|${cn}` : r.student_id;
+        totalAttendance += r.hours;
+        studentTotalMap.set(r.student_id, (studentTotalMap.get(r.student_id) || 0) + r.hours);
+        rowTotalMap.set(rowKey, (rowTotalMap.get(rowKey) || 0) + r.hours);
+        if (isAttendanceCountable(r.date, salaryType, commissionDays)) {
+          countableAttendance += r.hours;
+          studentUnitMap.set(r.student_id, (studentUnitMap.get(r.student_id) || 0) + r.hours);
+          rowUnitMap.set(rowKey, (rowUnitMap.get(rowKey) || 0) + r.hours);
+        }
+      }
+
+      // 과목별 집계
+      const subjectAgg = new Map<string, {
+        subject: string;
+        studentCount: number;
+        totalAttendance: number;
+        countableAttendance: number;
+        baseSalary: number;
+      }>();
+      const ensureSub = (sub: string) => {
+        if (!subjectAgg.has(sub)) {
+          subjectAgg.set(sub, {
+            subject: sub,
+            studentCount: 0,
+            totalAttendance: 0,
+            countableAttendance: 0,
+            baseSalary: 0,
+          });
+        }
+        return subjectAgg.get(sub)!;
+      };
+
+      let baseSalary = 0;
+
+      // 선생님 subject → subjectHint 도출 (출석부 탭 selectedSubject 와 동일 의미)
+      const teacherSubjectHint: "math" | "english" | "other" | undefined =
+        teacherSubjectSet.has("english")
+          ? "english"
+          : teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")
+            ? "math"
+            : teacherSubjectSet.size > 0
+              ? "other"
+              : undefined;
+
+      // 공통 계산 헬퍼 — 한 "행(row)" = 학생×분반 단위의 급여.
+      // 영어는 share 단위로, 수학/기타는 학생 단위로 loop.
+      const computeRow = (params: {
+        student: Student;
+        className: string;  // "" 이면 분반 미지정
+        classUnits: number;
+        totalUnits: number;
+        paidAmount: number | null;
+        unitPriceOverride: number | undefined;
+      }) => {
+        const { student, className, classUnits, totalUnits, paidAmount, unitPriceOverride } = params;
+        if (classUnits <= 0) return { studentBase: 0, classUnits: 0, totalUnits: 0 };
+        // tier override 키: 출석부 탭과 동일 — `{teacher_id}|{student_id}|{class_name}`
+        // useAllTierOverrides 가 이 키로 저장. 레거시는 `{teacher_id}|{student_id}`.
+        const overrideId =
+          tierOverrides[`${teacher.id}|${student.id}|${className}`] ??
+          tierOverrides[`${teacher.id}|${student.id}`];
+        // subjectHint — 선생님 subjects 기반 (출석부 탭의 selectedSubject 와 동일)
+        const settingItem = matchSalarySetting(student, effectiveConfig, teacherSubjectHint, overrideId);
+        const baseRatio = settingItem
+          ? getEffectiveRatio(settingItem, effectiveConfig, teacher.name)
+          : undefined;
+        const effectiveSetting =
+          settingItem && baseRatio !== undefined
+            ? { ...settingItem, ratio: baseRatio }
+            : settingItem;
+        const studentBase = calculateStudentSalary(
+          effectiveSetting,
+          effectiveConfig.academyFee,
+          classUnits,
+          paidAmount,
+          blogPenalty,
+          unitPriceOverride
+        );
+        return { studentBase, classUnits, totalUnits };
+      };
+
+      if (useSharePath) {
+        // share 단위 loop — 출석부 탭 studentRows 와 1:1 대응.
+        // 영어/수학/과학 무관 — shares 에 이 선생님의 분반별 할당 수납 정보가 있으면 사용.
+        const subjectForShares = isEnglishTeacher
+          ? "english"
+          : teacherSubjectSet.has("math") || teacherSubjectSet.has("highmath")
+            ? "math"
+            : "other";
+        for (const sh of teacherShares) {
+          const student = studentById.get(sh.student_id);
+          if (!student) continue;
+          const className = sh.class_name || "";
+          const rowKey = className ? `${sh.student_id}|${className}` : sh.student_id;
+          const classUnits = rowUnitMap.get(rowKey) || 0;
+          const totalUnits = rowTotalMap.get(rowKey) || 0;
+          const paidAmount = sh.allocated_paid ?? null;
+          const unitPriceOverride = sh.unit_price ?? undefined;
+          const { studentBase } = computeRow({
+            student,
+            className,
+            classUnits,
+            totalUnits,
+            paidAmount,
+            unitPriceOverride,
+          });
+          baseSalary += studentBase;
+          const row = ensureSub(subjectForShares);
+          row.studentCount += 1;
+          row.totalAttendance += totalUnits;
+          row.countableAttendance += classUnits;
+          row.baseSalary += studentBase;
+        }
+      } else {
+        // 수학/기타 — 기존 student 단위 loop
+        const isMathTeacher = !!teacher.subjects?.some(
+          (s) => s === "math" || s === "highmath"
+        );
+        for (const student of teacherStudents) {
+          const subs = Array.from(studentSubjects.get(student.id) || []);
+          if (subs.length === 0) continue;
+          const classUnits = studentUnitMap.get(student.id) || 0;
+          const totalUnits = studentTotalMap.get(student.id) || 0;
+          const share = 1 / subs.length;
+          // 출석부 탭과 동일하게 filterPaymentsForTeacherRow 적용 —
+          // 해당 선생님 + 수학 선생님이면 요일 패턴 포함 수납만.
+          // (이 필터 없을 경우 다른 선생님 수납/행정 수납이 섞여 paidAmount 부풀려짐)
+          const studentPayments = findStudentPayments(student, monthPayments);
+          const filtered = filterPaymentsForTeacherRow(studentPayments, {
+            teacherId: teacher.id,
+            teacherName: teacher.name,
+            teacherEnglishName: teacher.englishName,
+            isMathTeacher,
+          });
+          const paidAmount =
+            filtered.length > 0
+              ? filtered.reduce((a, p) => a + (p.charge_amount || 0), 0)
+              : null;
+          const { studentBase } = computeRow({
+            student,
+            className: "",
+            classUnits,
+            totalUnits,
+            paidAmount,
+            unitPriceOverride: undefined,
+          });
+          baseSalary += studentBase;
+          for (const sub of subs) {
+            const row = ensureSub(sub);
+            row.studentCount += share;
+            row.totalAttendance += totalUnits * share;
+            row.countableAttendance += classUnits * share;
+            row.baseSalary += studentBase * share;
+          }
+        }
+      }
+
+      const subjects = Array.from(subjectAgg.values())
+        .map((x) => ({
+          ...x,
+          studentCount: Math.round(x.studentCount * 10) / 10,
+          totalAttendance: Math.round(x.totalAttendance * 10) / 10,
+          countableAttendance: Math.round(x.countableAttendance * 10) / 10,
+          baseSalary: Math.round(x.baseSalary),
+        }))
+        .sort((a, b) => b.baseSalary - a.baseSalary);
+
+      // ⭐ 출석부 탭과 완벽히 동일한 값 — 공유 순수 함수 computeTeacherMonthPayroll 호출.
+      //   기존 SettlementPage 자체 로직(위 baseSalary 계산)은 subject breakdown 용으로만 유지.
+      //   최종 합계(baseSalary/finalSalary)는 출석부 탭과 동일한 파이프라인으로 덮어씀.
+      const payrollFilteredStudents = filterStudentsByMonth(teacherStudents, year, month);
+      const teacherDataMap = new Map<string, {
+        attendance: Record<string, number>;
+        memos: Record<string, string>;
+        homework: Record<string, boolean>;
+        cellColors: Record<string, string>;
+      }>();
+      for (const r of attendanceRecords) {
+        if (r.teacher_id !== teacher.id) continue;
+        const key = r.class_name ? `${r.student_id}|${r.class_name}` : r.student_id;
+        let d = teacherDataMap.get(key);
+        if (!d) {
+          d = { attendance: {}, memos: {}, homework: {}, cellColors: {} };
+          teacherDataMap.set(key, d);
+        }
+        if (r.hours > 0) d.attendance[r.date] = r.hours;
+        if (r.memo) d.memos[r.date] = r.memo;
+        if (r.homework) d.homework[r.date] = true;
+        if (r.cell_color) d.cellColors[r.date] = r.cell_color;
+      }
+      // 이 선생님에 해당하는 tier override 만 payroll 포맷 (student_id | student_id|className) 으로 변환
+      const teacherTierOverrides: Record<string, string> = {};
+      const prefix = `${teacher.id}|`;
+      for (const [k, v] of Object.entries(tierOverrides)) {
+        if (!k.startsWith(prefix)) continue;
+        const rest = k.slice(prefix.length);
+        // rest = "studentId" 또는 "studentId|className"
+        teacherTierOverrides[rest] = v;
+      }
+      // 행정수당
+      const aa = getAdminAllowance(teacher.id);
+      let adminSalary = 0;
+      if (aa) {
+        const item = (effectiveConfig.items || []).find((i) => i.id === aa.tierId);
+        if (item) {
+          const ratio = getEffectiveRatio(item, effectiveConfig, teacher.name);
+          adminSalary = Math.floor(
+            aa.baseAmount * (ratio / 100) * (1 - effectiveConfig.academyFee / 100)
+          );
+        }
+      }
+      const monthStrFmt = `${year}-${String(month).padStart(2, "0")}`;
+      const isDateInPeriodMonthly = (dk: string) => dk.startsWith(monthStrFmt);
+      // 세션별 모드: 선생님 주과목의 해당 월 세션을 찾아 그 범위로 집계.
+      //   - 영어 선생님 → englishSessions, 수학/고등수학/과학 등 → mathSessions
+      //   - 해당 월 세션이 없으면 안전하게 월별 fallback
+      let isDateInPeriod: (dk: string) => boolean = isDateInPeriodMonthly;
+      if (payMode === "session") {
+        const useEnglishSessions = isEnglishTeacher;
+        const pool = useEnglishSessions ? englishSessions : mathSessions;
+        const sess = pool.find((sp) => sp.month === month);
+        if (sess) {
+          isDateInPeriod = (dk: string) => isDateInSession(dk, sess);
+        }
+      }
+      const payroll = computeTeacherMonthPayroll({
+        teacher,
+        filteredStudents: payrollFilteredStudents,
+        allStudents: students,
+        rawMonthPayments: monthPayments,
         monthPayments,
-        tierOverrides,
+        teacherShares,
+        salaryConfig: effectiveConfig,
+        studentDataMap: teacherDataMap,
+        tierOverrides: teacherTierOverrides,
+        settlement,
+        adminSalary,
+        blogPenalty,
         year,
         month,
-        allShares,
-        mathSessions,
-        englishSessions,
-        payMode,
-        getByTeacher,
-        resolveSalary,
-        hasPostForTeacher,
-        isBlogRequired,
-        getAdminAllowance,
-        isTeacherMatch,
-        isActiveInMonth,
-      }),
-    [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions, getAdminAllowance, payMode]
-  );
+        isDateInPeriod,
+        salaryType,
+        commissionDays,
+        subject: teacherSubjectHint,
+        isEnglishTeacher,
+      });
+
+      return {
+        teacher,
+        studentCount: payroll.studentCount,
+        totalAttendance: payroll.totalAttendance,
+        countableAttendance: payroll.countableAttendance,
+        baseSalary: payroll.totalSalary,
+        finalSalary: payroll.finalSalary,
+        settlement,
+        salaryType,
+        commissionDays,
+        blogRequired,
+        blogPenalty,
+        subjects,
+      };
+    });
+  }, [visibleTeachers, students, attendanceRecords, getByTeacher, salaryConfig, resolveSalary, hasPostForTeacher, isBlogRequired, monthPayments, tierOverrides, year, month, allShares, mathSessions, englishSessions, getAdminAllowance, payMode]);
 
   // 과목 필터 적용된 정산 목록 — UI 표시 · 합계 집계에 사용
   const filteredSettlements = useMemo(() => {
@@ -642,95 +910,48 @@ export default function SettlementPage() {
     };
   }, [filteredSettlements, teacherSheets]);
 
-  // 학생별 시수 검증 (audit V8: attendance-first 재설계).
-  //
-  // 변경 전: students 의 enrollment 를 outer loop 로 돌고 매칭되는 attendance 만 합산
-  //   → enrollment 매칭 실패 시 시수 누락 (4월 기준 24% 누락 발생).
-  //   → 정산탭의 raw attendance 합과 불일치.
-  //
-  // 변경 후: attendance 의 (student_id, teacher_id) 를 outer 로 돌고 student/teacher
-  //   는 lookup 으로 표시. 매칭 실패 시 ID 그대로 표시 (누락 0).
-  //   → 시수 합 = 정산탭 시수 합 = 일치 보장.
-  //   → 추가로 attendance 없이 수납만 있는 학생 ("미등록") 도 별도 row 표시.
+  // 학생별 시수 검증: 과목별로 납부액 vs 실제 수강 시수 × 기준단가
   const studentChecks = useMemo(() => {
     const monthStr = `${year}-${String(month).padStart(2, "0")}`;
 
-    // lookup 맵
+    // 선생님 id → teacher 객체 (staff_id/이름 매칭용)
     const teacherById = new Map<string, Teacher>();
     for (const t of teachers) teacherById.set(t.id, t);
-    const studentById = new Map<string, Student>();
-    for (const s of students) studentById.set(s.id, s);
 
-    // attendance.teacher_id fuzzy lookup — staff.id 가 Base64 doc id 인 경우와
-    // 한글 이름 또는 "Sarah 강보경" 같은 문자열인 경우가 혼재.
-    // attendance.teacher_id 가 staff.id 매칭 실패 시 staff.name / englishName /
-    // (englishName + ' ' + name) 으로 fallback 매칭.
-    //
-    // ⚠ 동명이인 안전 처리 (audit V8 후속): 같은 이름의 staff 가 둘 이상이면
-    //   alias 가 충돌하므로 그 alias 는 무효화 (다른 staff 로 잘못 매칭되어
-    //   시수가 엉뚱한 선생님에 합산되는 것을 방지). staff.id 매칭만 허용.
-    const teacherByAlias = new Map<string, Teacher>();
-    const aliasConflicts = new Set<string>();
-    function addAlias(key: string, t: Teacher) {
-      if (!key) return;
-      if (aliasConflicts.has(key)) return;
-      const existing = teacherByAlias.get(key);
-      if (existing && existing.id !== t.id) {
-        // 충돌 — alias 무효화. 원본 attendance.teacher_id 로 표시되어
-        // 운영자가 동명이인을 인지하고 직접 처리할 수 있도록 함.
-        teacherByAlias.delete(key);
-        aliasConflicts.add(key);
-        return;
-      }
-      teacherByAlias.set(key, t);
-    }
-    // staff.id 는 Firebase doc id 라 unique 보장 — 우선 등록.
-    for (const t of teachers) teacherByAlias.set(t.id, t);
-    // 이름 기반 alias 는 충돌 검사 거쳐서 등록.
-    for (const t of teachers) {
-      if (t.name) addAlias(t.name, t);
-      if (t.englishName) addAlias(t.englishName, t);
-      if (t.englishName && t.name) addAlias(`${t.englishName} ${t.name}`, t);
-    }
-    function lookupTeacher(teacherId: string): Teacher | undefined {
-      return teacherByAlias.get(teacherId);
-    }
-    // attendance.teacher_id 를 표준 staff.id 로 normalize.
-    // 매칭 실패 (또는 alias 충돌) 시 원본 그대로 (운영자가 보고 처리).
-    function normalizeTeacherId(teacherId: string): string {
-      const t = teacherByAlias.get(teacherId);
-      return t?.id || teacherId;
+    // 학생 그룹화 — `(이름, 학교)` 키. /api/students 가 virtual 학생의 학교명을
+    //   firebase 원본에 맞춰 반환하므로 단순 매칭으로 한 사람의 firebase + virtual_*
+    //   학생들이 같은 그룹에 묶인다. (학교가 비어 있는 학생은 별도 그룹이 됨)
+    const studentToGroup = new Map<string, string>();
+    const studentGroups = new Map<string, Student[]>();
+    for (const s of students) {
+      const key = `${s.name}|${s.school || ""}`;
+      studentToGroup.set(s.id, key);
+      if (!studentGroups.has(key)) studentGroups.set(key, []);
+      studentGroups.get(key)!.push(s);
     }
 
-    // attendance: (student_id, normalized_teacher_id) → hours.
-    //   verificationAttendance 사용 — 정산용 attendance (sessionRange 적용) 가 아닌
-    //   해당 월 전체. raw 시수 100% 표시 보장.
-    //   normalizeTeacherId 로 attendance.teacher_id 가 staff.name/englishName 인
-    //   경우도 staff.id 로 통합 → 동일 선생님의 시수가 한 row 로 합쳐짐.
-    const hoursByST = new Map<string, number>();
-    for (const r of verificationAttendance) {
+    // (그룹키, teacherId) → hours — attendance 시수 합산
+    // (그룹키) → 출석한 teacher_id set — enrollment 매칭 누락된 강사 보정용
+    //   (enrollment 데이터 입력 오류로 active 가 아닌데 실제 출석이 있는 케이스 다수)
+    const hoursByGroupTeacher = new Map<string, number>();
+    const attendingTeachersByGroup = new Map<string, Set<string>>();
+    for (const r of attendanceRecords) {
       if (r.hours <= 0) continue;
       if (!r.date.startsWith(monthStr)) continue;
-      const normTid = normalizeTeacherId(r.teacher_id);
-      const key = `${r.student_id}|${normTid}`;
-      hoursByST.set(key, (hoursByST.get(key) || 0) + r.hours);
-    }
-
-    // student_id → set of teacher_ids (attendance 기반, attendance 가 진실)
-    const teachersByStudent = new Map<string, Set<string>>();
-    for (const key of hoursByST.keys()) {
-      const [sid, tid] = key.split("|");
-      let set = teachersByStudent.get(sid);
+      const groupKey = studentToGroup.get(r.student_id);
+      if (!groupKey) continue;
+      const key = `${groupKey}|${r.teacher_id}`;
+      hoursByGroupTeacher.set(key, (hoursByGroupTeacher.get(key) || 0) + r.hours);
+      let set = attendingTeachersByGroup.get(groupKey);
       if (!set) {
         set = new Set();
-        teachersByStudent.set(sid, set);
+        attendingTeachersByGroup.set(groupKey, set);
       }
-      set.add(tid);
+      set.add(r.teacher_id);
     }
 
-    type Row = {
+    const rows: Array<{
       student: Student;
-      studentMatched: boolean;
       subject: string;
       teacherNames: string;
       units: number;
@@ -740,48 +961,80 @@ export default function SettlementPage() {
       diffSessions: number;
       diffAmount: number;
       hasPayment: boolean;
+      mixedUnitPrice: boolean; // 강사별 단가가 서로 다를 때 부모 row 단가 표시 억제
       teacherBreakdown: Array<{
         teacherName: string;
+        billingLabel: string;
+        billingName: string;
+        tid: string;
         units: number;
         paid: number;
-        teacherMatched: boolean;
+        unitPrice: number;
+        expectedSessions: number;
       }>;
-    };
-    const rows: Row[] = [];
+    }> = [];
 
-    // 1. attendance 가 있는 학생들 — student_id 별로 outer loop
-    for (const [sid, teacherIds] of teachersByStudent) {
-      const realStudent = studentById.get(sid);
-      const studentMatched = !!realStudent;
+    for (const [groupKey, group] of studentGroups) {
+      // 대표 학생 — firebase 원본(virtual_ 가 아닌) 우선
+      const s = group.find((x) => !x.id.startsWith("virtual_")) || group[0];
+      // 통합 enrollments (그룹 전체) + 중복 제거 (subject + teacher + staffId)
+      const seen = new Set<string>();
+      const activeEnrollments: NonNullable<Student["enrollments"]> = [];
+      for (const x of group) {
+        for (const e of x.enrollments || []) {
+          if (!isActiveInMonth(e)) continue;
+          const k = `${e.subject || ""}|${e.teacher || ""}|${e.staffId || ""}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          activeEnrollments.push(e);
+        }
+      }
+      // 그룹의 모든 student_id (share 매칭용)
+      const groupIds = new Set(group.map((x) => x.id));
 
-      // placeholder student (학생 매칭 실패 시) — Student 의 required 필드만
-      // 채운 minimal 객체. status="unmatched" 로 명시 → 향후 UI 에서 placeholder
-      // 식별 가능. 다른 optional 필드 (attendance, memos 등) 는 undefined 이므로
-      // 시수 검증탭이 아닌 다른 컴포넌트에서 row.student 를 받을 때는 optional
-      // chaining (?.) 필수.
-      const studentObj: Student = realStudent || {
-        id: sid,
-        name: sid.startsWith("virtual_")
-          ? `(미매칭) ${sid.split("_").slice(2).join(" ").slice(0, 30)}`
-          : `(미매칭) ${sid.slice(0, 30)}`,
-        school: "",
-        grade: "",
-        status: "unmatched",
-        enrollments: [],
-      };
+      if (activeEnrollments.length === 0) {
+        // 출석도 없고 enrollment도 없으면 skip. 단, 수납만 있는 경우는 "기타"로 한 번 표시
+        const payList = findStudentPayments(s, monthPayments);
+        if (payList.length === 0) continue;
+        const paid = payList.reduce((a, p) => a + (p.charge_amount || 0), 0);
+        rows.push({
+          student: s,
+          subject: "미등록",
+          teacherNames: "-",
+          units: 0,
+          paid,
+          unitPrice: 0,
+          expectedSessions: 0,
+          diffSessions: 0,
+          diffAmount: paid,
+          hasPayment: true,
+          mixedUnitPrice: false,
+          teacherBreakdown: [],
+        });
+        continue;
+      }
 
-      // 학생의 enrollment 로 (teacher_id → subject) 추정
-      // attendance teacher_id 가 enrollment 와 매칭되면 그 subject, 아니면 "미매칭"
-      const teacherToSubject = new Map<string, string>();
-      if (realStudent) {
-        const activeEnrollments = (realStudent.enrollments || []).filter(
-          isActiveInMonth
-        );
-        for (const e of activeEnrollments) {
+      // 과목별로 enrollment 묶기
+      const bySubject = new Map<string, typeof activeEnrollments>();
+      for (const e of activeEnrollments) {
+        const sub = e.subject || "기타";
+        if (!bySubject.has(sub)) bySubject.set(sub, []);
+        bySubject.get(sub)!.push(e);
+      }
+
+      // billing/payment 매칭은 그룹 단위로 한 번 (이름+학교 매칭이라 그룹 모두 동일)
+      const allPayments = findStudentPayments(s, monthPayments);
+
+      for (const [subject, enrolls] of bySubject) {
+        // 해당 과목의 선생님들
+        const teacherIds = new Set<string>();
+        const teacherNames = new Set<string>();
+        for (const e of enrolls) {
           let tid: string | undefined;
           if (e.staffId && teacherById.has(e.staffId)) {
             tid = e.staffId;
           } else {
+            // 이름으로 매칭
             const found = teachers.find(
               (t) =>
                 t.name === e.teacher ||
@@ -791,104 +1044,364 @@ export default function SettlementPage() {
             );
             if (found) tid = found.id;
           }
-          if (tid) teacherToSubject.set(tid, e.subject || "기타");
+          if (tid) {
+            teacherIds.add(tid);
+            const t = teacherById.get(tid);
+            if (t) teacherNames.add(t.name);
+          } else if (e.teacher) {
+            teacherNames.add(e.teacher);
+          }
         }
-      }
 
-      // subject 별 teacher 그룹핑 (attendance 의 teacher_ids 기준)
-      const teachersBySubject = new Map<string, Set<string>>();
-      for (const tid of teacherIds) {
-        const subject = teacherToSubject.get(tid) || "미매칭";
-        let set = teachersBySubject.get(subject);
-        if (!set) {
-          set = new Set();
-          teachersBySubject.set(subject, set);
+        // 출석부 기반 강사 보정 — enrollment 가 비활성 처리되어 있지만 실제 4월 출석이
+        //   있는 강사를 자동으로 teacherIds 에 추가. enrollment 의 startDate/endDate
+        //   입력 오류(예: 권나현이 5월부터로 잘못 입력) 케이스에서 실제 시수가
+        //   "0" 으로 보이는 문제 보정. 운영자에게 "청구는 X, 실 출석은 Y" 가 한눈에 보임.
+        //   단, 강사의 subjects 가 현재 과목과 일치할 때만 (영어 강사가 수학 row 에
+        //   들어가지 않도록).
+        const currentSalarySubject = subjectToSalarySubject(subject);
+        const groupAttendingTeachers = attendingTeachersByGroup.get(groupKey);
+        if (groupAttendingTeachers && currentSalarySubject) {
+          for (const tid of groupAttendingTeachers) {
+            if (teacherIds.has(tid)) continue;
+            const t = teacherById.get(tid);
+            if (!t || !t.subjects) continue;
+            const teacherCovers = t.subjects.some(
+              (ts) => subjectToSalarySubject(ts) === currentSalarySubject
+            );
+            if (teacherCovers) {
+              teacherIds.add(tid);
+              teacherNames.add(t.name);
+            }
+          }
         }
-        set.add(tid);
-      }
 
-      const allPayments = realStudent
-        ? findStudentPayments(realStudent, monthPayments)
-        : [];
-
-      for (const [subject, subjectTeacherIds] of teachersBySubject) {
-        // 영어 payment_shares
+        // 이 학생 × 이 과목 선생님들의 payment_shares (시트 sync 결과)
+        //   그룹의 모든 student_id 에 걸친 share 합산 (virtual_* 학생들도 포함)
         const studentTeacherShares = allShares.filter(
-          (sh) =>
-            sh.student_id === sid && subjectTeacherIds.has(sh.teacher_staff_id)
+          (sh) => groupIds.has(sh.student_id) && teacherIds.has(sh.teacher_staff_id)
         );
 
-        // teacher 별 시수/수납 breakdown
+        const salarySubject = subjectToSalarySubject(subject);
+        const isSingleSubjectStudent = bySubject.size === 1;
+
+        // ─── (강사 × 수납명) breakdown 생성 ───
+        //   행 키 = (teacher_staff_id, payment_name [, role])
+        //   같은 강사가 다른 수납명에서 청구 받으면 별도 row.
+        //   분리(payment_splits)가 있는 청구는 분배대로, 없으면 강사 매칭으로 한 row.
+        //
+        //   매칭 우선순위 (수납명 단위):
+        //     1) payment_splits (분배 명시) — 진실의 원천
+        //     2) p.teacher_staff_id 직접 매칭 (영어강사 영어이름 토큰)
+        //     3) enrollment.className 이 billingName 의 prefix
+        //     4) 매칭 실패 → leftover (부모 row 합계에만)
+        //
+        //   단가: payment_name 의 학년 prefix (초등M/중등M/고등M) → salaryConfig.
+        //   출석시수: attendance.class_name 의 학년 prefix 와 row 의 학년 prefix 매칭으로
+        //     같은 강사 시수를 row 들에 분배.
+        let tierOverrideId: string | undefined;
+        for (const tid of teacherIds) {
+          const ov = tierOverrides[`${tid}|${s.id}`];
+          if (ov) { tierOverrideId = ov; break; }
+        }
+
+        // tid → enrollments 묶음 (className prefix 매칭에 사용)
+        const enrollmentsByTid = new Map<string, NonNullable<Student["enrollments"]>>();
+        for (const e of enrolls) {
+          let tid: string | undefined;
+          if (e.staffId && teacherById.has(e.staffId)) tid = e.staffId;
+          else {
+            const found = teachers.find(
+              (t) =>
+                t.name === e.teacher ||
+                t.englishName === e.teacher ||
+                t.name === e.staffId ||
+                t.englishName === e.staffId
+            );
+            if (found) tid = found.id;
+          }
+          if (!tid) continue;
+          const list = enrollmentsByTid.get(tid) || [];
+          list.push(e);
+          enrollmentsByTid.set(tid, list);
+        }
+
+        // payment_name 학년 prefix → 단가 매칭
+        const settingForBilling = (paymentName: string) => {
+          const group = classNameToGroup(paymentName);
+          if (group) {
+            const matched = salaryConfig.items.find(
+              (i) => i.subject === salarySubject && i.group === group
+            );
+            if (matched) return matched;
+          }
+          return matchSalarySetting(s, salaryConfig, salarySubject, tierOverrideId);
+        };
+
+        // breakdown 누적 — row 키 = `${tid}|${payment_name}|${role}`
+        interface AccItem {
+          tid: string;
+          teacherName: string;
+          billingName: string;
+          role?: string;
+          paid: number;
+        }
+        const breakdownAcc = new Map<string, AccItem>();
+        const insertOrder: string[] = [];
+        const usedPaymentIds = new Set<string>();
+        const addToAcc = (
+          tid: string,
+          teacherName: string,
+          billingName: string,
+          role: string | undefined,
+          amount: number
+        ) => {
+          const rk = `${tid}|${billingName}|${role || ""}`;
+          const ex = breakdownAcc.get(rk);
+          if (ex) {
+            ex.paid += amount;
+          } else {
+            breakdownAcc.set(rk, { tid, teacherName, billingName, role, paid: amount });
+            insertOrder.push(rk);
+          }
+        };
+
+        // 1) payment_splits (수납 분리) — 가장 우선
+        //   매칭 키의 school 은 student.school (PaymentsPage 가 enriched 값으로 저장)
+        for (const p of allPayments) {
+          const splitKey = `${p.billing_month}|${p.student_name}|${s.school || ""}|${p.payment_name}`;
+          const sp = splitMap.get(splitKey);
+          if (!sp) continue;
+          for (const item of sp.splits) {
+            addToAcc(
+              item.teacher_staff_id,
+              item.teacher_name,
+              p.payment_name,
+              item.role,
+              item.amount
+            );
+            // teacherIds 자동 추가 (enrollment 없어도 분배 받는 부담임 등)
+            if (!teacherIds.has(item.teacher_staff_id)) {
+              teacherIds.add(item.teacher_staff_id);
+              const t = teacherById.get(item.teacher_staff_id);
+              teacherNames.add(t?.name || item.teacher_name);
+            }
+          }
+          usedPaymentIds.add(p.id);
+        }
+
+        // 2) p.teacher_staff_id 직접 매칭
+        for (const p of allPayments) {
+          if (usedPaymentIds.has(p.id)) continue;
+          if (!p.teacher_staff_id || !teacherIds.has(p.teacher_staff_id)) continue;
+          const t = teacherById.get(p.teacher_staff_id);
+          addToAcc(
+            p.teacher_staff_id,
+            t?.name || p.teacher_staff_id,
+            p.payment_name,
+            undefined,
+            p.charge_amount || 0
+          );
+          usedPaymentIds.add(p.id);
+        }
+
+        // 3) enrollment.className prefix 매칭
+        for (const p of allPayments) {
+          if (usedPaymentIds.has(p.id)) continue;
+          let matchedTid: string | undefined;
+          for (const tid of teacherIds) {
+            const tEnrolls = enrollmentsByTid.get(tid) || [];
+            for (const e of tEnrolls) {
+              const cn = (e.className || "").trim();
+              if (cn.length < 4) continue;
+              if ((p.payment_name || "").startsWith(cn)) {
+                matchedTid = tid;
+                break;
+              }
+            }
+            if (matchedTid) break;
+          }
+          if (!matchedTid) continue;
+          const t = teacherById.get(matchedTid);
+          addToAcc(
+            matchedTid,
+            t?.name || matchedTid,
+            p.payment_name,
+            undefined,
+            p.charge_amount || 0
+          );
+          usedPaymentIds.add(p.id);
+        }
+
+        // 4) share fallback — billing 자체가 없는 영어 일부 강사
+        //    (수납명 단위 정보가 없으니 강사명을 수납명으로 사용)
+        for (const sh of studentTeacherShares) {
+          if (sh.allocated_charge <= 0) continue;
+          // 이미 같은 강사가 어떤 row 든 갖고 있으면 추가 안 함 (중복 방지)
+          const hasAny = Array.from(breakdownAcc.values()).some(
+            (it) => it.tid === sh.teacher_staff_id
+          );
+          if (hasAny) continue;
+          const t = teacherById.get(sh.teacher_staff_id);
+          addToAcc(
+            sh.teacher_staff_id,
+            t?.name || sh.teacher_staff_id,
+            sh.class_name || "(시트 sync)",
+            undefined,
+            sh.allocated_charge
+          );
+        }
+
+        // 출석시수 분배: (tid, attendance.class_name 학년 prefix) → hours
+        //   각 row 의 billingName 학년 prefix 와 매칭되는 출석 시수를 그 row 에 할당.
+        //   같은 강사의 같은 prefix 에 row 가 여러 개면 첫 row 에 할당.
+        const hoursByTidPrefix = new Map<string, Map<string, number>>();
+        const hoursByTidTotal = new Map<string, number>();
+        for (const r of attendanceRecords) {
+          if (r.hours <= 0) continue;
+          if (!r.date.startsWith(monthStr)) continue;
+          const gk = studentToGroup.get(r.student_id);
+          if (gk !== groupKey) continue;
+          const tid = r.teacher_id;
+          const attCn = r.class_name || "";
+          const prefix = (attCn.match(/^(초등|중등|고등|수능|특강)/) || [])[0] || "";
+          let m = hoursByTidPrefix.get(tid);
+          if (!m) {
+            m = new Map();
+            hoursByTidPrefix.set(tid, m);
+          }
+          m.set(prefix, (m.get(prefix) || 0) + r.hours);
+          hoursByTidTotal.set(tid, (hoursByTidTotal.get(tid) || 0) + r.hours);
+        }
+
+        // breakdownAcc → teacherBreakdown 평탄화 + 단가/시수 매핑
         const teacherBreakdown: Array<{
           teacherName: string;
+          billingLabel: string;
+          billingName: string;
+          tid: string;
           units: number;
           paid: number;
-          teacherMatched: boolean;
+          unitPrice: number;
+          expectedSessions: number;
         }> = [];
-        const teacherNames = new Set<string>();
-        let units = 0;
-        for (const tid of subjectTeacherIds) {
-          const tUnits = hoursByST.get(`${sid}|${tid}`) || 0;
-          units += tUnits;
-          const t = lookupTeacher(tid);
-          const teacherMatched = !!t;
-          // 매칭 실패 시 ID 그대로 표시 (운영자가 보고 처리 가능)
-          const teacherName = t?.name || `(미매칭) ${tid}`;
-          teacherNames.add(teacherName);
-          const tPaymentCharge = allPayments
-            .filter((p) => p.teacher_staff_id === tid)
-            .reduce((a, p) => a + (p.charge_amount || 0), 0);
-          const tShareCharge = studentTeacherShares
-            .filter((sh) => sh.teacher_staff_id === tid)
-            .reduce((a, sh) => a + (sh.allocated_charge || 0), 0);
+        for (const rk of insertOrder) {
+          const it = breakdownAcc.get(rk)!;
+          const setting = settingForBilling(it.billingName);
+          const unitPrice = setting?.baseTuition || 0;
+          const expectedSessions = unitPrice > 0 ? it.paid / unitPrice : 0;
+          const label = it.role
+            ? `${it.billingName}, ${it.role}`
+            : it.billingName;
           teacherBreakdown.push({
-            teacherName,
-            units: tUnits,
-            paid: tPaymentCharge + tShareCharge,
-            teacherMatched,
+            teacherName: it.teacherName,
+            billingLabel: label,
+            billingName: it.billingName,
+            tid: it.tid,
+            units: 0,
+            paid: it.paid,
+            unitPrice,
+            expectedSessions,
           });
         }
 
-        // 과목 수납 (teacher_staff_id 기준 매칭)
-        const subjectPayments = allPayments.filter(
-          (p) =>
-            p.teacher_staff_id && subjectTeacherIds.has(p.teacher_staff_id)
-        );
-        const paymentsCharge = subjectPayments.reduce(
+        // 강사별 출석시수 분배 — 학년 prefix 매칭으로
+        const consumedPrefixByTid = new Map<string, Set<string>>();
+        const assignedHoursByTid = new Map<string, number>();
+        for (const row of teacherBreakdown) {
+          const tidMap = hoursByTidPrefix.get(row.tid);
+          if (!tidMap) continue;
+          const billPrefix = classNameToGroup(row.billingName) || "";
+          if (!billPrefix) continue;
+          let consumed = consumedPrefixByTid.get(row.tid);
+          if (!consumed) {
+            consumed = new Set();
+            consumedPrefixByTid.set(row.tid, consumed);
+          }
+          if (consumed.has(billPrefix)) continue;
+          const h = tidMap.get(billPrefix) || 0;
+          if (h > 0) {
+            row.units = h;
+            consumed.add(billPrefix);
+            assignedHoursByTid.set(row.tid, (assignedHoursByTid.get(row.tid) || 0) + h);
+          }
+        }
+        // 매칭 안 된 시수는 같은 강사의 첫 row 에 fallback
+        for (const [tid, total] of hoursByTidTotal) {
+          const leftover = total - (assignedHoursByTid.get(tid) || 0);
+          if (leftover <= 0) continue;
+          const firstRow = teacherBreakdown.find((r) => r.tid === tid);
+          if (firstRow) firstRow.units += leftover;
+        }
+
+        // 정렬 — 청구액 내림차순 (높은 금액이 위)
+        teacherBreakdown.sort((a, b) => b.paid - a.paid);
+
+        // 총 출석시수
+        const units = teacherBreakdown.reduce((a, r) => a + r.units, 0);
+
+        // 학생 × 과목 단위 청구액 — 강사별 매칭에서 미사용된 청구 (단일 과목 학생 fallback,
+        //   과목 추정 매칭). billing 자체에는 잡혔지만 강사로 분배되지 못한 분.
+        const leftoverSubjectPayments = allPayments.filter((p) => {
+          if (usedPaymentIds.has(p.id)) return false;
+          if (isSingleSubjectStudent) return true;
+          const guessed = extractSubjectFromBillingName(p.payment_name);
+          return !!guessed && guessed === salarySubject;
+        });
+        const leftoverCharge = leftoverSubjectPayments.reduce(
           (a, p) => a + (p.charge_amount || 0),
           0
         );
-        const sharesCharge = studentTeacherShares.reduce(
-          (a, sh) => a + (sh.allocated_charge || 0),
-          0
-        );
-        const paid = paymentsCharge + sharesCharge;
 
-        // tier 오버라이드 (선생님 중 첫 번째)
-        let tierOverrideId: string | undefined;
-        for (const tid of subjectTeacherIds) {
-          const ov = tierOverrides[`${tid}|${sid}`];
-          if (ov) {
-            tierOverrideId = ov;
-            break;
-          }
-        }
-        const setting = realStudent
-          ? matchSalarySetting(
-              realStudent,
-              salaryConfig,
-              subjectToSalarySubject(subject),
-              tierOverrideId
+        // 부모 row 청구액 = 강사별 합 + leftover (전체 학생-과목 청구의 진실)
+        const teacherBreakdownSum = teacherBreakdown.reduce((a, tb) => a + tb.paid, 0);
+        const subjectPaymentsCount =
+          teacherBreakdown.reduce(
+            (a, tb) => a + (tb.paid > 0 ? 1 : 0),
+            0
+          ) + leftoverSubjectPayments.length;
+        const paid = teacherBreakdownSum + leftoverCharge;
+
+        // 부모 row 단가 — 모든 강사가 같은 단가일 때만 표시. 다르면 0 (mixedUnitPrice)
+        const positiveUnitPrices = teacherBreakdown
+          .map((tb) => tb.unitPrice)
+          .filter((u) => u > 0);
+        const mixedUnitPrice =
+          positiveUnitPrices.length > 1 &&
+          new Set(positiveUnitPrices).size > 1;
+        const unitPrice = mixedUnitPrice
+          ? 0
+          : positiveUnitPrices[0] ||
+            matchSalarySetting(s, salaryConfig, salarySubject, tierOverrideId)
+              ?.baseTuition ||
+            0;
+
+        // 예상시수 — mixed 면 강사별 예상시수 합, 단일 단가면 paid / unitPrice
+        const expectedSessions = mixedUnitPrice
+          ? teacherBreakdown.reduce((a, tb) => a + tb.expectedSessions, 0) +
+            (unitPrice > 0 ? leftoverCharge / unitPrice : 0)
+          : unitPrice > 0
+            ? paid / unitPrice
+            : 0;
+        // 차이 = 실제 - 예상.  음수면 청구 대비 수업이 덜 진행된 상태.
+        const diffSessions = units - expectedSessions;
+        const diffAmount = mixedUnitPrice
+          ? teacherBreakdown.reduce(
+              (a, tb) => a + (tb.units * tb.unitPrice - tb.paid),
+              0
             )
-          : undefined;
-        const unitPrice = setting?.baseTuition || 0;
-        const expectedSessions = unitPrice > 0 ? paid / unitPrice : 0;
-        const diffSessions = expectedSessions - units;
-        const diffAmount = paid - units * unitPrice;
+          : units * unitPrice - paid;
+
+        // 시수도 0이고 수납도 0이면 skip (payments 든 shares 든 둘 다 비어야 함)
+        if (
+          units === 0 &&
+          subjectPaymentsCount === 0 &&
+          studentTeacherShares.length === 0
+        )
+          continue;
 
         rows.push({
-          student: studentObj,
-          studentMatched,
+          student: s,
           subject,
           teacherNames: Array.from(teacherNames).join(", ") || "-",
           units,
@@ -898,70 +1411,17 @@ export default function SettlementPage() {
           diffSessions,
           diffAmount,
           hasPayment:
-            subjectPayments.length > 0 || studentTeacherShares.length > 0,
+            subjectPaymentsCount > 0 || studentTeacherShares.length > 0,
+          mixedUnitPrice,
           teacherBreakdown,
         });
       }
     }
 
-    // 2. attendance 없지만 수납만 있는 학생 — "미등록" 으로 표시 (기존 로직 유지)
-    for (const s of students) {
-      if (teachersByStudent.has(s.id)) continue;
-      const payList = findStudentPayments(s, monthPayments);
-      if (payList.length === 0) continue;
-      const paid = payList.reduce((a, p) => a + (p.charge_amount || 0), 0);
-      rows.push({
-        student: s,
-        studentMatched: true,
-        subject: "미등록",
-        teacherNames: "-",
-        units: 0,
-        paid,
-        unitPrice: 0,
-        expectedSessions: 0,
-        diffSessions: 0,
-        diffAmount: paid,
-        hasPayment: true,
-        teacherBreakdown: [],
-      });
-    }
-
     // 차이가 있는 항목 우선 정렬 (절대값 큰 순)
     rows.sort((a, b) => Math.abs(b.diffSessions) - Math.abs(a.diffSessions));
     return rows;
-  }, [students, teachers, verificationAttendance, monthPayments, allShares, salaryConfig, tierOverrides, year, month]);
-
-  // 시수 검증 탭의 필터링된 결과 + 합계 (audit V8).
-  //   필터 (과목, 검색, 차이 only) 적용 후의 합계 — 사용자가 보고 있는 시수 == 결제등록시수 일치 검증용.
-  const hoursFiltered = useMemo(() => {
-    const search = hoursSearch.trim().toLowerCase();
-    return studentChecks
-      .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
-      .filter((r) => !search || r.student.name.toLowerCase().includes(search))
-      .filter((r) => !hoursOnlyDiff || Math.abs(r.diffSessions) > 0.001);
-  }, [studentChecks, hoursSubjectFilter, hoursSearch, hoursOnlyDiff]);
-
-  const hoursTotals = useMemo(() => {
-    let paid = 0;
-    let expected = 0;
-    let units = 0;
-    let diffAmount = 0;
-    for (const r of hoursFiltered) {
-      if (r.hasPayment) {
-        paid += r.paid;
-        if (r.unitPrice > 0) expected += r.expectedSessions;
-        diffAmount += r.diffAmount;
-      }
-      units += r.units;
-    }
-    return {
-      paid,
-      expected,
-      units,
-      diffSessions: expected - units,
-      diffAmount,
-    };
-  }, [hoursFiltered]);
+  }, [students, teachers, attendanceRecords, monthPayments, allShares, salaryConfig, tierOverrides, year, month, splitMap]);
 
   const loading = staffLoading || studentsLoading || attendanceLoading || settlementLoading || paymentsLoading;
 
@@ -1038,7 +1498,7 @@ export default function SettlementPage() {
     ];
     const checksRows: (string | number | null)[][] = [
       [`시수 검증 (${ym})`],
-      [`청구액 ÷ 기준단가 vs 실제 출석시수 — + 는 청구 대비 수업이 남음, − 는 더 들음`],
+      [`청구액 ÷ 기준단가 vs 실제 출석시수 — + 는 청구 대비 더 진행, − 는 덜 진행`],
       [],
       checksHeader,
       ...studentChecks.map((r, i) => [
@@ -1125,7 +1585,7 @@ export default function SettlementPage() {
                 title={`${year}년 ${month}월 탭을 등록된 모든 선생님 시트에 대해 순차 동기화`}
               >
                 {bulkSync?.running
-                  ? `동기화 중 ${bulkSync.completed}/${bulkSync.total}`
+                  ? `동기화 중 ${bulkSync.current + 1}/${bulkSync.total}`
                   : `📄 ${String(year).slice(2)}.${String(month).padStart(2, "0")} 전체 동기화`}
               </button>
               <BulkSyncSettings
@@ -1135,8 +1595,6 @@ export default function SettlementPage() {
                 onBulkToggle={bulkToggleExcludedSync}
                 payMode={payMode}
                 onPayModeChange={setPayMode}
-                syncConcurrency={syncConcurrency}
-                onSyncConcurrencyChange={setSyncConcurrency}
               />
             </>
           )}
@@ -1431,7 +1889,7 @@ export default function SettlementPage() {
           </span>
         </h3>
         <p className="text-xs text-zinc-500 mb-2">
-          + 는 청구 대비 수업이 남은 상태, − 는 청구 대비 수업을 더 들은 상태입니다.
+          + 는 청구 대비 수업을 더 진행한 상태, − 는 청구 대비 수업이 덜 진행된 상태입니다.
         </p>
         {(() => {
           const allSubjects = Array.from(new Set(studentChecks.map((r) => r.subject)));
@@ -1511,8 +1969,13 @@ export default function SettlementPage() {
               </tr>
             </thead>
             <tbody>
-              {hoursFiltered.map((r, idx) => {
-                const noPrice = r.unitPrice <= 0;
+              {studentChecks
+                .filter((r) => hoursSubjectFilter.length === 0 || hoursSubjectFilter.includes(r.subject))
+                .filter((r) => !hoursSearch.trim() || r.student.name.toLowerCase().includes(hoursSearch.trim().toLowerCase()))
+                .filter((r) => !hoursOnlyDiff || Math.abs(r.diffSessions) > 0.001)
+                .map((r, idx) => {
+                // mixedUnitPrice 는 unitPrice=0 이어도 강사별 합으로 expectedSessions/diff 계산됨 → 검증 유효
+                const noPrice = r.unitPrice <= 0 && !r.mixedUnitPrice;
                 const noPay = !r.hasPayment;
                 const diffAbs = Math.abs(r.diffSessions);
                 const isWarn = !noPrice && !noPay && diffAbs >= 1;
@@ -1540,14 +2003,21 @@ export default function SettlementPage() {
                     </td>
                     <td className="px-3 py-2 text-xs text-zinc-500">{toSubjectLabel(r.subject)}</td>
                     <td className="px-3 py-2 text-xs text-zinc-500">{r.teacherNames || "-"}</td>
-                    <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
-                      {r.unitPrice > 0 ? `${r.unitPrice.toLocaleString()}원` : "-"}
+                    <td
+                      className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400"
+                      title={r.mixedUnitPrice ? "강사별로 단가가 다릅니다 — 하단 강사별 행에서 확인" : undefined}
+                    >
+                      {r.mixedUnitPrice
+                        ? <span className="text-xs text-zinc-400">혼합</span>
+                        : r.unitPrice > 0
+                          ? `${r.unitPrice.toLocaleString()}원`
+                          : "-"}
                     </td>
                     <td className="px-3 py-2 text-right text-zinc-700 dark:text-zinc-300">
                       {r.hasPayment ? `${r.paid.toLocaleString()}원` : <span className="text-zinc-400">청구 없음</span>}
                     </td>
                     <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
-                      {noPrice || noPay ? "-" : r.expectedSessions.toFixed(1)}
+                      {(!r.hasPayment) || (r.unitPrice <= 0 && !r.mixedUnitPrice) ? "-" : r.expectedSessions.toFixed(1)}
                     </td>
                     <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
                       {r.units}
@@ -1569,76 +2039,63 @@ export default function SettlementPage() {
                     </td>
                   </tr>
                   {r.teacherBreakdown.length > 1 &&
-                    r.teacherBreakdown.map((tb, tIdx) => (
-                      <tr
-                        key={tIdx}
-                        className="border-b border-zinc-100 bg-zinc-50/40 text-[11px] text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/40"
-                      >
-                        <td className="px-3 py-1" />
-                        <td className="px-3 py-1" />
-                        <td className="px-3 py-1" />
-                        <td className="px-3 py-1 pl-5 text-zinc-500">└ {tb.teacherName}</td>
-                        <td className="px-3 py-1" />
-                        <td className="px-3 py-1 text-right">
-                          {tb.paid > 0 ? `${tb.paid.toLocaleString()}원` : "-"}
-                        </td>
-                        <td className="px-3 py-1 text-right">
-                          {r.unitPrice > 0 && tb.paid > 0 ? (tb.paid / r.unitPrice).toFixed(1) : "-"}
-                        </td>
-                        <td className="px-3 py-1 text-right">{tb.units}</td>
-                        <td className="px-3 py-1" />
-                        <td className="px-3 py-1" />
-                      </tr>
-                    ))}
+                    r.teacherBreakdown.map((tb, tIdx) => {
+                      // 실제 - 예상.  음수면 덜 진행됨.
+                      const tbDiff = tb.units - tb.expectedSessions;
+                      const tbDiffAmount = tb.units * tb.unitPrice - tb.paid;
+                      const tbDiffColor =
+                        tb.unitPrice <= 0 || tb.paid <= 0
+                          ? "text-zinc-400"
+                          : tbDiff > 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : tbDiff < 0
+                              ? "text-red-600 dark:text-red-400"
+                              : "text-zinc-500";
+                      return (
+                        <tr
+                          key={tIdx}
+                          className="border-b border-zinc-100 bg-zinc-50/40 text-[11px] text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/40"
+                        >
+                          <td className="px-3 py-1" />
+                          <td className="px-3 py-1" />
+                          <td className="px-3 py-1" />
+                          <td className="px-3 py-1 pl-5 text-zinc-500">
+                            └ {tb.teacherName}
+                            <span className="ml-1 text-[10px] text-zinc-400">
+                              ({tb.billingLabel})
+                            </span>
+                          </td>
+                          <td className="px-3 py-1 text-right">
+                            {tb.unitPrice > 0 ? `${tb.unitPrice.toLocaleString()}원` : "-"}
+                          </td>
+                          <td className="px-3 py-1 text-right">
+                            {tb.paid > 0 ? `${tb.paid.toLocaleString()}원` : "-"}
+                          </td>
+                          <td className="px-3 py-1 text-right">
+                            {tb.unitPrice > 0 && tb.paid > 0 ? tb.expectedSessions.toFixed(1) : "-"}
+                          </td>
+                          <td className="px-3 py-1 text-right">{tb.units}</td>
+                          <td className={`px-3 py-1 text-right font-medium ${tbDiffColor}`}>
+                            {tb.unitPrice > 0 && tb.paid > 0
+                              ? tbDiff > 0
+                                ? `+${tbDiff.toFixed(1)}`
+                                : tbDiff.toFixed(1)
+                              : "-"}
+                          </td>
+                          <td className={`px-3 py-1 text-right ${tbDiffColor}`}>
+                            {tb.unitPrice > 0 && tb.paid > 0
+                              ? tbDiffAmount > 0
+                                ? `+${tbDiffAmount.toLocaleString()}원`
+                                : `${tbDiffAmount.toLocaleString()}원`
+                              : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </Fragment>
                 );
               })}
             </tbody>
-            {/* 합계 footer (audit V8) — 사용자 의도:
-                "모든 시수를 합쳐서 실제 결제 등록시수와 일치하는지 판단".
-                필터 적용된 row 의 청구액/예상시수/실제시수/차이 합계 표시. */}
-            {hoursFiltered.length > 0 && (
-              <tfoot>
-                <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-bold dark:border-zinc-600 dark:bg-zinc-800/50">
-                  <td colSpan={5} className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
-                    합계 ({hoursFiltered.length}건)
-                  </td>
-                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
-                    {hoursTotals.paid.toLocaleString()}원
-                  </td>
-                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
-                    {hoursTotals.expected.toFixed(1)}
-                  </td>
-                  <td className="px-3 py-3 text-right text-zinc-700 dark:text-zinc-300">
-                    {Number(hoursTotals.units.toFixed(1))}
-                  </td>
-                  <td
-                    className={`px-3 py-3 text-right ${
-                      Math.abs(hoursTotals.diffSessions) < 0.5
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : hoursTotals.diffSessions > 0
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-red-600 dark:text-red-400"
-                    }`}
-                  >
-                    {hoursTotals.diffSessions > 0 ? "+" : ""}
-                    {hoursTotals.diffSessions.toFixed(1)}
-                  </td>
-                  <td
-                    className={`px-3 py-3 text-right text-xs ${
-                      hoursTotals.diffAmount > 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : hoursTotals.diffAmount < 0
-                          ? "text-red-600 dark:text-red-400"
-                          : "text-zinc-500"
-                    }`}
-                  >
-                    {hoursTotals.diffAmount > 0 ? "+" : ""}
-                    {hoursTotals.diffAmount.toLocaleString()}원
-                  </td>
-                </tr>
-              </tfoot>
-            )}
           </table>
           {studentChecks.length === 0 && (
             <div className="flex items-center justify-center h-24 text-zinc-400 text-sm">
@@ -1670,32 +2127,38 @@ export default function SettlementPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
-              {/* 진행률 바 — completed / total 기반. 동시 처리 중 이름 다중 표시. */}
+              {/* 진행률 바 */}
               <div className="mb-3">
                 <div className="mb-1 flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-400">
                   <span>
                     {bulkSync.done
                       ? `${bulkSync.total}명 완료`
-                      : `${bulkSync.completed} / ${bulkSync.total}명`}
+                      : `${Math.min(bulkSync.current + 1, bulkSync.total)} / ${bulkSync.total}명`}
                   </span>
                   <span className="tabular-nums">
-                    {Math.round((bulkSync.completed / bulkSync.total) * 100)}%
+                    {Math.round(
+                      ((bulkSync.done ? bulkSync.total : bulkSync.current) /
+                        bulkSync.total) *
+                        100
+                    )}
+                    %
                   </span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-sm bg-zinc-200 dark:bg-zinc-800">
                   <div
                     className="h-full bg-emerald-500 transition-all"
                     style={{
-                      width: `${(bulkSync.completed / bulkSync.total) * 100}%`,
+                      width: `${
+                        ((bulkSync.done ? bulkSync.total : bulkSync.current) /
+                          bulkSync.total) *
+                        100
+                      }%`,
                     }}
                   />
                 </div>
-                {!bulkSync.done && bulkSync.inProgress.size > 0 && (
+                {!bulkSync.done && bulkSync.currentName && (
                   <div className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-                    진행 중 ({bulkSync.inProgress.size}명) ·{" "}
-                    <span className="font-bold">
-                      {Array.from(bulkSync.inProgress).join(", ")}
-                    </span>
+                    진행 중 · <span className="font-bold">{bulkSync.currentName}</span>
                   </div>
                 )}
               </div>
@@ -1775,17 +2238,17 @@ export default function SettlementPage() {
                 (r) => !r.success || !!r.error || r.months.some((m) => m.error)
               ).length;
               return (
-                <div className="flex flex-shrink-0 flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800 dark:bg-zinc-950">
-                  <div className="min-w-0 flex-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
                     {failedCount > 0
                       ? `❌ 실패 ${failedCount}명 — "실패만 다시" 로 재시도 가능`
                       : "✓ 모든 선생님 동기화 완료"}
                   </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={handleDownloadSyncResults}
-                      className="whitespace-nowrap rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       title="결과를 .txt 파일로 다운로드 (감사/디버그)"
                     >
                       📥 결과 다운로드
@@ -1794,7 +2257,7 @@ export default function SettlementPage() {
                       <button
                         type="button"
                         onClick={handleRetryFailed}
-                        className="whitespace-nowrap rounded-sm bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
+                        className="rounded-sm bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
                         title="실패한 선생님만 다시 동기화"
                       >
                         ↺ 실패만 다시 ({failedCount})
@@ -1803,7 +2266,7 @@ export default function SettlementPage() {
                     <button
                       type="button"
                       onClick={() => setBulkSync(null)}
-                      className="whitespace-nowrap rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="rounded-sm border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
                       닫기
                     </button>
@@ -1818,3 +2281,56 @@ export default function SettlementPage() {
   );
 }
 
+function SortableTh<K extends string>({
+  label,
+  sortKey,
+  current,
+  dir,
+  onClick,
+  align = "left",
+}: {
+  label: string;
+  sortKey: K;
+  current: K | "";
+  dir: "asc" | "desc";
+  onClick: (k: K) => void;
+  align?: "left" | "right" | "center";
+}) {
+  const active = current === sortKey;
+  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
+  const alignCls =
+    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
+  const justifyCls =
+    align === "right"
+      ? "justify-end"
+      : align === "center"
+        ? "justify-center"
+        : "justify-start";
+  return (
+    <th className={`px-3 py-3 font-medium text-zinc-500 ${alignCls}`}>
+      <button
+        type="button"
+        onClick={() => onClick(sortKey)}
+        className={`inline-flex w-full items-center gap-1 ${justifyCls} hover:text-zinc-900 dark:hover:text-zinc-100 ${
+          active ? "text-zinc-900 dark:text-zinc-100" : ""
+        }`}
+      >
+        <span>{label}</span>
+        {arrow && (
+          <span className="text-[10px] text-blue-500 dark:text-blue-400">{arrow}</span>
+        )}
+      </button>
+    </th>
+  );
+}
+
+function StatCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className={`border border-zinc-200 px-4 py-3 dark:border-zinc-800 ${highlight ? "bg-blue-50 dark:bg-blue-950" : "bg-white dark:bg-zinc-900"}`}>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">{label}</p>
+      <p className={`mt-1 text-lg font-bold ${highlight ? "text-blue-600 dark:text-blue-400" : "text-zinc-900 dark:text-zinc-100"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
