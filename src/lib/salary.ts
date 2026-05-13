@@ -326,9 +326,10 @@ export function classNameToGroup(
   if (!cn) return undefined;
   if (/^수능|수능/.test(cn)) return "수능";
   if (/^특강|특강$/.test(cn)) return "특강";
-  if (/^초등|^[Ee]IE|^[Ee][iI]E/.test(cn)) return "초등";
-  if (/^중등|^중고/.test(cn)) return "중등";
-  if (/^고등/.test(cn)) return "고등";
+  // 대괄호/공백 prefix 허용 (예: "[EiE] 파닉스 A")
+  if (/^[[\s]*초등|^[[\s]*[Ee][iI]E/.test(cn)) return "초등";
+  if (/^[[\s]*중등|^[[\s]*중고/.test(cn)) return "중등";
+  if (/^[[\s]*고등/.test(cn)) return "고등";
   return undefined;
 }
 

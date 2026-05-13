@@ -37,6 +37,7 @@ import {
   classNameToGroup,
 } from "@/lib/salary";
 import { extractSubjectFromBillingName } from "@/lib/extractSubjectFromBillingName";
+import { pickBillingUnitPrice, roundToHalf } from "@/lib/billingUnitPrice";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { Skeleton, SkeletonKpi, SkeletonTable } from "@/components/ui/Skeleton";
 
@@ -918,6 +919,42 @@ export default function SettlementPage() {
     const teacherById = new Map<string, Teacher>();
     for (const t of teachers) teacherById.set(t.id, t);
 
+    // attendance.teacher_id fuzzy lookup — staff.id 가 Base64 doc id 인 경우와
+    // 한글 이름 또는 "Sarah 강보경" 같은 문자열인 경우가 혼재.
+    // attendance.teacher_id 가 staff.id 매칭 실패 시 staff.name / englishName /
+    // (englishName + ' ' + name) 으로 fallback 매칭.
+    //
+    // ⚠ 동명이인 안전 처리 (audit V8 후속): 같은 이름의 staff 가 둘 이상이면
+    //   alias 가 충돌하므로 그 alias 는 무효화 (다른 staff 로 잘못 매칭되어
+    //   시수가 엉뚱한 선생님에 합산되는 것을 방지). staff.id 매칭만 허용.
+    const teacherByAlias = new Map<string, Teacher>();
+    const aliasConflicts = new Set<string>();
+    function addAlias(key: string, t: Teacher) {
+      if (!key) return;
+      if (aliasConflicts.has(key)) return;
+      const existing = teacherByAlias.get(key);
+      if (existing && existing.id !== t.id) {
+        teacherByAlias.delete(key);
+        aliasConflicts.add(key);
+        return;
+      }
+      teacherByAlias.set(key, t);
+    }
+    // staff.id 는 Firebase doc id 라 unique 보장 — 우선 등록.
+    for (const t of teachers) teacherByAlias.set(t.id, t);
+    // 이름 기반 alias 는 충돌 검사 거쳐서 등록.
+    for (const t of teachers) {
+      if (t.name) addAlias(t.name, t);
+      if (t.englishName) addAlias(t.englishName, t);
+      if (t.englishName && t.name) addAlias(`${t.englishName} ${t.name}`, t);
+    }
+    // attendance.teacher_id 를 표준 staff.id 로 normalize.
+    // 매칭 실패 (또는 alias 충돌) 시 원본 그대로 (운영자가 보고 처리).
+    function normalizeTeacherId(teacherId: string): string {
+      const t = teacherByAlias.get(teacherId);
+      return t?.id || teacherId;
+    }
+
     // 학생 그룹화 — `(이름, 학교)` 키. /api/students 가 virtual 학생의 학교명을
     //   firebase 원본에 맞춰 반환하므로 단순 매칭으로 한 사람의 firebase + virtual_*
     //   학생들이 같은 그룹에 묶인다. (학교가 비어 있는 학생은 별도 그룹이 됨)
@@ -933,6 +970,7 @@ export default function SettlementPage() {
     // (그룹키, teacherId) → hours — attendance 시수 합산
     // (그룹키) → 출석한 teacher_id set — enrollment 매칭 누락된 강사 보정용
     //   (enrollment 데이터 입력 오류로 active 가 아닌데 실제 출석이 있는 케이스 다수)
+    //   teacher_id 는 normalizeTeacherId 로 staff.id 통합 (영어 강사 영어이름/한글이름 혼재 대응)
     const hoursByGroupTeacher = new Map<string, number>();
     const attendingTeachersByGroup = new Map<string, Set<string>>();
     for (const r of attendanceRecords) {
@@ -940,14 +978,15 @@ export default function SettlementPage() {
       if (!r.date.startsWith(monthStr)) continue;
       const groupKey = studentToGroup.get(r.student_id);
       if (!groupKey) continue;
-      const key = `${groupKey}|${r.teacher_id}`;
+      const normTid = normalizeTeacherId(r.teacher_id);
+      const key = `${groupKey}|${normTid}`;
       hoursByGroupTeacher.set(key, (hoursByGroupTeacher.get(key) || 0) + r.hours);
       let set = attendingTeachersByGroup.get(groupKey);
       if (!set) {
         set = new Set();
         attendingTeachersByGroup.set(groupKey, set);
       }
-      set.add(r.teacher_id);
+      set.add(normTid);
     }
 
     const rows: Array<{
@@ -1126,15 +1165,17 @@ export default function SettlementPage() {
           enrollmentsByTid.set(tid, list);
         }
 
-        // payment_name 학년 prefix → 단가 매칭
-        const settingForBilling = (paymentName: string) => {
-          const group = classNameToGroup(paymentName);
-          if (group) {
-            const matched = salaryConfig.items.find(
-              (i) => i.subject === salarySubject && i.group === group
-            );
-            if (matched) return matched;
-          }
+        // 단가 매칭 — `src/lib/billingUnitPrice.ts` 의 pure function 사용.
+        //   회귀 차단 테스트: `billingUnitPrice.test.ts` (22개 케이스)
+        //   매칭 실패 시 학생 grade 기반 fallback.
+        const settingForBilling = (paymentName: string, paid: number) => {
+          const matched = pickBillingUnitPrice({
+            billingName: paymentName,
+            paid,
+            subject: salarySubject,
+            config: salaryConfig,
+          });
+          if (matched) return matched;
           return matchSalarySetting(s, salaryConfig, salarySubject, tierOverrideId);
         };
 
@@ -1255,6 +1296,7 @@ export default function SettlementPage() {
         // 출석시수 분배: (tid, attendance.class_name 학년 prefix) → hours
         //   각 row 의 billingName 학년 prefix 와 매칭되는 출석 시수를 그 row 에 할당.
         //   같은 강사의 같은 prefix 에 row 가 여러 개면 첫 row 에 할당.
+        //   tid 는 normalizeTeacherId 로 staff.id 통합 (alias 처리).
         const hoursByTidPrefix = new Map<string, Map<string, number>>();
         const hoursByTidTotal = new Map<string, number>();
         for (const r of attendanceRecords) {
@@ -1262,7 +1304,7 @@ export default function SettlementPage() {
           if (!r.date.startsWith(monthStr)) continue;
           const gk = studentToGroup.get(r.student_id);
           if (gk !== groupKey) continue;
-          const tid = r.teacher_id;
+          const tid = normalizeTeacherId(r.teacher_id);
           const attCn = r.class_name || "";
           const prefix = (attCn.match(/^(초등|중등|고등|수능|특강)/) || [])[0] || "";
           let m = hoursByTidPrefix.get(tid);
@@ -1287,9 +1329,10 @@ export default function SettlementPage() {
         }> = [];
         for (const rk of insertOrder) {
           const it = breakdownAcc.get(rk)!;
-          const setting = settingForBilling(it.billingName);
+          const setting = settingForBilling(it.billingName, it.paid);
           const unitPrice = setting?.baseTuition || 0;
-          const expectedSessions = unitPrice > 0 ? it.paid / unitPrice : 0;
+          // 수업은 물리적으로 .5/.0 단위 — 단가 자동 추론 실패 시 반올림으로 보정
+          const expectedSessions = unitPrice > 0 ? roundToHalf(it.paid / unitPrice) : 0;
           const label = it.role
             ? `${it.billingName}, ${it.role}`
             : it.billingName;
@@ -1376,12 +1419,14 @@ export default function SettlementPage() {
               ?.baseTuition ||
             0;
 
-        // 예상시수 — mixed 면 강사별 예상시수 합, 단일 단가면 paid / unitPrice
+        // 예상시수 — 항상 .5 단위로 반올림 (수업은 물리적으로 .5/.0 단위만 가능)
+        //   mixed 면 강사별 (이미 roundToHalf 된) 합 + leftover 반올림
+        //   single 단가면 전체 paid / unitPrice 반올림
         const expectedSessions = mixedUnitPrice
           ? teacherBreakdown.reduce((a, tb) => a + tb.expectedSessions, 0) +
-            (unitPrice > 0 ? leftoverCharge / unitPrice : 0)
+            (unitPrice > 0 ? roundToHalf(leftoverCharge / unitPrice) : 0)
           : unitPrice > 0
-            ? paid / unitPrice
+            ? roundToHalf(paid / unitPrice)
             : 0;
         // 차이 = 실제 - 예상.  음수면 청구 대비 수업이 덜 진행된 상태.
         const diffSessions = units - expectedSessions;
