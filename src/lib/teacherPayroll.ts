@@ -147,15 +147,17 @@ function buildStudentRows(input: TeacherPayrollInput): Student[] {
     teacherShares,
     salaryConfig,
     studentDataMap,
-    isEnglishTeacher,
     year,
     month,
   } = input;
 
   const inferUnitPrice = makeInferUnitPrice(salaryConfig);
 
-  // 영어 교사 전용 — shares 기반 직접 구성
-  if (isEnglishTeacher && teacherShares.length > 0) {
+  // share 기반 직접 구성 — 시트 sync 된 강사 (영어/수학/과학 무관).
+  // shares 가 권위. 비-영어 강사도 sync 되면 shares 에 학생×분반별 할당 수납이 저장됨.
+  // Firebase billing 은 수학 분반에 강사 정보가 없어 paidAmount 매칭이 실패하므로,
+  // shares 가 있을 때는 무조건 share 경로로 가야 paidAmount=0 → studentSalary=0 사고 방지.
+  if (teacherShares.length > 0) {
     const studentById = new Map<string, Student>();
     for (const stu of allStudents) studentById.set(stu.id, stu);
 
@@ -421,10 +423,10 @@ function buildPaidAmountByStudent(
   rows: Student[],
   input: TeacherPayrollInput
 ): Map<string, number> {
-  const { teacher, monthPayments, isEnglishTeacher, teacherShares } = input;
+  const { teacher, monthPayments, teacherShares } = input;
   const map = new Map<string, number>();
 
-  if (isEnglishTeacher && teacherShares.length > 0) {
+  if (teacherShares.length > 0) {
     for (const sh of teacherShares) {
       const key = sh.class_name
         ? `${sh.student_id}|${sh.class_name}`
@@ -465,9 +467,9 @@ function buildPaidAmountByStudent(
 function buildUnitPriceByStudent(
   input: TeacherPayrollInput
 ): Map<string, number> {
-  const { isEnglishTeacher, teacherShares } = input;
+  const { teacherShares } = input;
   const map = new Map<string, number>();
-  if (!isEnglishTeacher || teacherShares.length === 0) return map;
+  if (teacherShares.length === 0) return map;
   for (const sh of teacherShares) {
     if (!sh.unit_price || sh.unit_price <= 0) continue;
     const key = sh.class_name
@@ -489,6 +491,28 @@ export function computeTeacherMonthPayroll(
   const paidAmountByStudent = buildPaidAmountByStudent(rows, input);
   const unitPriceByStudent = buildUnitPriceByStudent(input);
 
+  // share-path 진입 시 tierOverrides 보강 — share.class_name 이 salaryConfig.items.name 과
+  // 정확히 일치하는 tier 가 있고 시트 F열 sync 가 누락한 케이스 대응 (예: 김화영의
+  // "고1특강"/"중등특강" 은 share 엔 들어있는데 attendance.tier_overrides 엔 누락 →
+  // student.grade 기반 fallback 으로 group=고등/중등 으로 잘못 매칭되어 ratio 가 어긋남).
+  // 시트 sync 가 메우든 안 메우든 share 의 class_name 이 권위 — 안전한 fallback.
+  let effectiveTierOverrides = input.tierOverrides;
+  if (input.teacherShares.length > 0) {
+    effectiveTierOverrides = { ...input.tierOverrides };
+    const subject = input.subject;
+    for (const sh of input.teacherShares) {
+      if (!sh.class_name) continue;
+      const rowKey = `${sh.student_id}|${sh.class_name}`;
+      if (effectiveTierOverrides[rowKey]) continue;
+      const item = (input.salaryConfig.items || []).find(
+        (i) =>
+          i.name === sh.class_name &&
+          (!subject || i.subject === subject)
+      );
+      if (item) effectiveTierOverrides[rowKey] = item.id;
+    }
+  }
+
   const stats = calculateStats(
     rows,
     input.salaryConfig,
@@ -499,7 +523,7 @@ export function computeTeacherMonthPayroll(
     input.subject,
     input.teacher.name,
     input.blogPenalty,
-    input.tierOverrides,
+    effectiveTierOverrides,
     paidAmountByStudent,
     input.isDateInPeriod,
     unitPriceByStudent

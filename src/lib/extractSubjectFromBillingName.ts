@@ -21,18 +21,24 @@ export function extractSubjectFromBillingName(
 ): SalarySubject | undefined {
   if (!name) return undefined;
 
+  // ⚠ prefix 매칭이 우선. "강사명+반" fallback 보다 먼저 시도해야
+  //   "고등E_고1 특별반 Gina ..." 같이 영어 분반 + "특별반" 토큰 혼재 케이스에서
+  //   "특별반" → math 로 잘못 추정되어 다른 과목 row 의 leftover 로 합산되는 사고 방지.
+
   // 수학 분반 prefix
   if (/^[중초고]등M(?:[\s_]|$)/.test(name)) return "math";
-  // 강사명 + "반" — 보통 수학 (이성우반 등). 영어 강사는 "반" 접미사 안 씀.
-  if (/[가-힣]{2,}반(?:\s|$)/.test(name)) return "math";
 
-  // 영어 분반 prefix
+  // 영어 분반 prefix (수학 강사명+반 패턴보다 먼저 — 영어 분반에 "특별반" 등 토큰 포함 케이스 대응)
   if (/^[중초고]등[Ee](?:[\s_]|$)/.test(name)) return "english";
   if (/^중고[Ee](?:[\s_]|$)/.test(name)) return "english";
   if (/^\[?E[iI]E\]?/.test(name)) return "english";
 
   // 과학 / 기타
   if (/^\[과학\]/.test(name)) return "other";
+
+  // 강사명 + "반" — 보통 수학 (이성우반 등). 영어 강사는 "반" 접미사 안 씀.
+  //   단, 영어 분반 prefix 가 위에서 이미 잡혔으므로 여기 도달했다는 건 그 prefix 가 아닐 때.
+  if (/[가-힣]{2,}반(?:\s|$)/.test(name)) return "math";
 
   return undefined;
 }

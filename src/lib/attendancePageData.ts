@@ -183,7 +183,9 @@ export function buildMonthPayments(args: {
     selectedTeacherName,
   } = args;
 
-  if (!isEnglishTeacher || teacherShares.length === 0) return rawMonthPayments;
+  // shares 가 있으면 영어/수학/과학 무관 share-augmented monthPayments 사용 (CLAUDE.md 의 권위 원칙).
+  if (teacherShares.length === 0) return rawMonthPayments;
+  void isEnglishTeacher; // 호환성 위해 인자 유지
   // shares → PaymentLite 변환. 기존 findStudentPayments 매칭을 위해 이름/학교 채움.
   const byId = new Map<string, { name: string; school?: string; grade?: string; studentCode?: string }>();
   for (const s of allStudents) {
@@ -254,9 +256,10 @@ export function buildTermCountMap(args: {
   const map = new Map<string, number>();
   if (!selectedTeacher) return map;
 
-  // 영어 강사: allocated_units 가 있으면 그대로 사용, 없으면 paid/unit_price.
+  // shares 가 있는 강사 (영어/수학/과학 무관): allocated_units 또는 paid/unit_price 로 term 산정.
   // virtual 학생이 allStudents 에 없어 findStudentPayments 매칭 실패하는 문제 회피.
-  if (isEnglishTeacher && teacherShares.length > 0) {
+  if (teacherShares.length > 0) {
+    void isEnglishTeacher; // 호환성 위해 인자 유지
     for (const sh of teacherShares) {
       const key = sh.class_name
         ? `${sh.student_id}|${sh.class_name}`
@@ -329,11 +332,12 @@ export function buildPaidAmountByStudent(args: {
   const map = new Map<string, number>();
   if (!selectedTeacher) return map;
 
-  // 영어 강사: teacherShares 를 직접 row.id (`{studentId}|{className}`) 키로 매핑.
+  // shares 가 있는 강사 (영어/수학/과학 무관): teacherShares 를 row.id (`{studentId}|{className}`) 키로 매핑.
   // findStudentPayments 는 name/studentCode 매칭이라 virtual 학생 (Firebase 미등록)
   // 의 경우 allStudents 에 없어 student_name="" 로 변환되어 매칭 실패.
   // shares 는 이미 (studentId, className) 튜플을 가지고 있어 직접 키로 쓰면 정확.
-  if (isEnglishTeacher && teacherShares.length > 0) {
+  void isEnglishTeacher; // 호환성 위해 인자 유지
+  if (teacherShares.length > 0) {
     for (const sh of teacherShares) {
       const key = sh.class_name
         ? `${sh.student_id}|${sh.class_name}`
@@ -382,7 +386,9 @@ export function buildUnitPriceByStudent(args: {
   const { isEnglishTeacher, teacherShares } = args;
 
   const map = new Map<string, number>();
-  if (!isEnglishTeacher || teacherShares.length === 0) return map;
+  // shares 가 있는 강사 (영어/수학/과학 무관) 의 unit_price 로 단가 매핑.
+  if (teacherShares.length === 0) return map;
+  void isEnglishTeacher; // 호환성 위해 인자 유지
   for (const sh of teacherShares) {
     if (!sh.unit_price || sh.unit_price <= 0) continue;
     const key = sh.class_name

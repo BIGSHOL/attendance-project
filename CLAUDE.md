@@ -104,7 +104,10 @@
 - 같은 강사가 두 수납명에서 청구 받으면 **별도 row** (예: 김은정이 "초등M JJ2I" 85k + "중등M MS2B 부담임" 72k → 두 row, 합산 안 함).
 - 수납명마다 단가/예상시수/실제시수 모두 별도 표시 — 학년 prefix 가 다르면 단가도 다름.
 - `teacherBreakdown` 항목 키 = `(tid, billingName, role)`.
-- **출석시수 분배**: `attendance.class_name` 학년 prefix (`"초등 3T"` → `"초등"`) ↔ row 의 billing 학년 prefix 매칭. 같은 강사 시수를 row 들에 prefix 매칭으로 할당, 매칭 안되는 시수는 첫 row 에 fallback.
+- **출석시수 분배 (2026-05 개선)**: 우선순위 3단계 적용.
+  1. **share 매칭**: `share.allocated_paid === row.paid` 또는 `share.unit_price` 로 `row.paid` 가 .5 단위로 떨어지면 매칭. 매칭된 share 의 `class_name` 으로 `attendance.class_name` 직접 매칭 (학년 prefix 우회). billing.payment_name 이 분반 코드 (예: "고등M 중3 BS4B") 라 attendance.class_name (예: "중등 3T") 와 학년 prefix 다른 케이스 (학생이 선행 분반 듣기) 대응.
+  2. **학년 prefix 매칭**: share 매칭 못 한 row 는 `classNameToGroup(row.billingName)` 으로 attendance 학년 prefix 매칭. share 가 이미 소비한 attendance.class_name 은 제외 (이중 분배 방지).
+  3. **leftover fallback**: 매칭 안 된 시수는 **같은 강사의 paid 가장 큰 row** (메인 청구) 에 할당. `insertOrder` 첫 row (보통 부담임 작은 청구) 가 아닌 메인 분반. (이전 버그: 김은민의 9시간이 "김화영반" 72k row 에 잘못 몰림 — 메인 "고등M..." 192k 가 정답.)
 
 ### `payment_splits` — 수납 분리 (한 청구를 강사별 쪼개기)
 - Firebase billing 한 청구를 담임/부담임으로 쪼개는 수기 분배 (예: "중등M 초6 MS2B 월목" 288k → 김화영 216k + 김은정 72k).
@@ -122,19 +125,68 @@
 
 ### 단가 매칭 — 정산의 핵심 (테스트 하네스 필수)
 - 수업은 **물리적으로 .5/.0 단위로만** 진행됨. 예상시수가 .1/.2/.3 같은 값으로 나오면 단가가 틀린 것.
-- 단가 매칭 policy (`src/lib/billingUnitPrice.ts`):
-  1. **청구액 ÷ 단가 가 .5 단위로 떨어지는 단가 자동 추론** (가장 신뢰)
-  2. 떨어지는 게 여러 개면 **2T 우선** (담임/부담임 구분 없는 분반은 2T 가 기본)
-  3. 자동 매칭 실패하면 **2T → 3T → 첫 매칭** fallback
-  4. 표시 단계에서 `roundToHalf` 안전망 (9.555 → 9.5)
+- **시수 검증의 단가 결정 우선순위 (2026-05 개선)** — share 가 시트 기준 진실 단가:
+  1. **share.allocated_paid 가 row.paid 와 정확 일치** — share.unit_price 사용 (가장 신뢰)
+  2. **share.unit_price 로 row.paid 가 .5 단위로 떨어짐** — share.unit_price 사용 (시트 share 와 billing 청구가 1회 차이날 때 — 예: share 9회/216k vs billing 8회/192k, 단가 24k 동일)
+  3. **pickBillingUnitPrice fallback** (`src/lib/billingUnitPrice.ts`):
+     a. 청구액 ÷ 단가 가 .5 단위로 떨어지는 단가 자동 추론
+     b. 떨어지는 게 여러 개면 2T 우선
+     c. 자동 매칭 실패하면 2T → 3T → 첫 매칭 fallback
 - **회귀 차단 테스트**: `src/lib/billingUnitPrice.test.ts` — 22개 케이스로 정책 검증.
 - ⚠ 단가 매칭 정책을 바꾸려면 **반드시 `npm test` 통과** + 의도 명시. 테스트 깨면 정산 전체 어긋남.
+
+### 예상시수 표시 — `.1` 단위 raw 표시 (`roundToHalf` 강제 반올림 금지)
+- 수업은 .5/.0 단위로만 진행되므로 정확 매칭이면 자연히 .0/.5 로 떨어짐.
+- **단가 오매칭 시 raw 소수점 표시 (예: 9.8)** 가 사용자에게 어긋남 신호. `roundToHalf(9.846) = 10.0` 강제 반올림은 단가 오매칭을 가려서 사고 인지 불가.
+- 코드: `Math.round((paid / unitPrice) * 10) / 10` (.1 자리).
+- floating-point 오차 (9.5000001) 는 .1 단위 반올림으로 자연히 9.5 정리.
 - 검증된 케이스:
-  - `85,000 ÷ 21,250 = 4.0` → 초등 3T 자동 선택
-  - `288,000 ÷ 24,000 = 12.0` → 중등 3T 자동 선택
-  - `216,000 ÷ 24,000 = 9.0` (분리분) → 중등 3T 선택
-  - `180,000 ÷ 22,500 = 8.0` → 초등 2T 자동 선택
-  - `215,000` (어떤 단가로도 .5 단위 안 떨어짐) → 2T fallback + `roundToHalf` → 9.5 표시
+  - `85,000 ÷ 21,250 = 4.0` → 초등 3T 자동 선택, 표시 4.0
+  - `288,000 ÷ 24,000 = 12.0` → 중등 3T, 표시 12.0
+  - `216,000 ÷ 24,000 = 9.0` (분리분) → 중등 3T, 표시 9.0
+  - `180,000 ÷ 22,500 = 8.0` → 초등 2T, 표시 8.0
+  - `288,000 ÷ 29,250 = 9.846` (단가 오매칭) → **표시 9.8** (raw 노출로 어긋남 인지)
+
+### share-path 가드는 "시트 sync 된 모든 강사" — 영어 한정 금지
+- e1e502d (Firebase billing 도입) 시점에 Supabase payments → Firebase billing 갈아끼면서 수학·과학 분반은 billing 에 강사 정보 부재 (분반 코드만). billing 기반 매칭이 실패하면 paidAmount=0 → `Math.min(0, gross)=0` → **학생당 급여 0원**.
+- 시트 sync 가 만든 `payment_shares` 가 진실. `teacherShares.length > 0` 이면 영어/수학/과학 무관 share-path 사용해야 함.
+- ⚠ 가드 위치 (영어 한정 코드 잔존 시 같은 사고 재발):
+  - `src/lib/teacherPayroll.ts` — `buildStudentRows`, `buildPaidAmountByStudent`, `buildUnitPriceByStudent` 3곳
+  - `src/lib/attendancePageData.ts` — `buildMonthPayments`, `buildStudentRows`, `buildTermCountMap`, `buildPaidAmountByStudent`, `buildUnitPriceByStudent` 4곳
+  - `src/components/AttendancePage.tsx` — `usePaymentShares(selectedTeacherId, ...)` 가드 없이 호출
+- 모두 `teacherShares.length > 0` 만 보는 것이 정답. `isEnglishTeacher && ...` 패턴은 금지.
+
+### share.class_name 기반 tierOverrides 자동 보강 필수
+- 시트 F열 sync 가 일부 분반 (특히 "특강" 류) tier-override 를 누락하는 경우 있음. 누락되면 `matchSalarySetting` 이 학생 grade 기반 fallback 으로 group="고등/중등/초등" 적용 → ratio 어긋남 (특강 50% → 고등 48.5%).
+- share-path 진입 시점에 share.class_name 이 salaryConfig.items.name 과 정확 일치하는 tier 가 있으면 tierOverrides Map 보강 필수. `computeTeacherMonthPayroll` (정산 페이지), AttendancePage 의 `effectiveTierOverrides` useMemo (출석부).
+- 김화영 4월 케이스: "고1특강"/"중등특강" share 엔 있는데 tier_overrides 엔 누락 → 보강 안 하면 ratio 48.5% 적용되어 시트와 4만원 차이.
+
+### enrollment 중복 제거 키에 `className` 필수 포함
+- `studentChecks` useMemo 가 학생 그룹의 enrollment 통합 시 중복 제거. 키를 `subject|teacher|staffId` 만 쓰면 같은 강사의 다른 분반이 1개로 제거됨 (이시우의 김화영 "중등M 초6 MS2B-2" + "중등M 초6 MS2B" 둘 다 active 인데 첫 분반만 남음).
+- step 3 (`enrollment.className` prefix 매칭) 에서 첫 분반만 시도 → billing.payment_name 이 다른 분반과 매칭되어야 할 때 leftover 로 빠지고 share fallback 과 **이중 청구** 발생 (이시우 504k 사고).
+- 키: `subject|teacher|staffId|className`. SettlementPage.tsx line ~1028.
+
+### `extractSubjectFromBillingName` 매칭 순서 — 명시적 prefix 우선, 강사명+반 fallback
+- "고등E_고1 특별반 Gina 금 19:10-22:00..." 같이 영어 분반에 "특별반" 토큰 혼재 시, 강사명+반 패턴 (`/[가-힣]{2,}반/`) 이 영어 prefix 보다 먼저 시도되면 **math 로 잘못 추정**되어 다른 과목 row 의 `leftoverSubjectPayments` 에 영어 청구가 합산 → 부모 row paid 부풀려짐 (이승민 408k → 735k 사고).
+- 매칭 순서 필수: math prefix → english prefix(들) → 과학 → **강사명+반 (math fallback)**.
+- 회귀 차단: `src/lib/extractSubjectFromBillingName.ts`. 변경 시 영어 청구가 math 로 잘못 들어가는지 검증.
+
+### 시수 검증 filter chain 순서 — 강사 재계산 `.map` 후 `차이있는건만` filter
+- 강사 필터 적용 시 row 의 sub-row 합으로 부모 row 의 paid/units/expectedSessions/diff 재계산하는 `.map` 단계 존재. "차이있는건만" filter 가 재계산 _전_ 에 실행되면 원본 diff (≠0) 로 통과 후 재계산되어 0 인 row 도 표시되는 사고.
+- filter chain 순서 필수: `subject → search → teacher → .map(재계산) → 차이있는건만`.
+- SettlementPage.tsx 의 시수 검증 테이블 `studentChecks.filter(...)` 체인.
+
+### `flex-wrap` 컨테이너에서 일관 위치 — `basis-full` divider 강제 줄바꿈
+- KPI 박스 + 다음 element (과목 탭 등) 가 같은 flex-wrap 컨테이너에 있으면 KPI 길이 차이로 element 위치가 좌/우 흔들림 (영어 강사 KPI 가 더 길어 wrap → 과목 탭 다음 줄 vs 수학 강사 한 줄에 들어감 → 과목 탭 같은 줄).
+- 항상 일관 위치 원하면 `<div className="basis-full" />` divider 로 강제 새 줄. `flex-1 min-w-[8px]` spacer 만으로는 부족 (KPI 가 짧을 때만 우측 정렬).
+- AttendancePage.tsx 의 상단 KPI 줄 — 과목 탭/선생님 selector 분리 패턴.
+
+### `monthPayments` state 변형 사고 (미해결, 별도 조사 필요)
+- SettlementPage 의 `monthPayments` state 가 raw `/api/billing` 응답과 다름 (이승민 408,750 → 367,875, 김주연 360,000 → 327,000, 119건 누락). 직접 chrome fetch 는 정상.
+- `usePaymentsForMonth` → `cachedFetch` → fetch + setState 단순 흐름인데 결과가 다름.
+- 검사 시도: cache dump 0건, SW 없음, backend 응답 일관 (828건). 클라이언트 측 변형 source 미상.
+- 조사 후보: React 18 strict mode useEffect double-invoke, fetchCache module 인스턴스 분리 (HMR), 다른 hook (`usePaymentSplits`/`usePaymentShares`) 이 monthPayments 데이터 mutation, useState 초기값 stale.
+- ⚠ 변형이 있어도 시수 검증 매칭 알고리즘 (위 share 단가 매칭) 이 robust 해서 대부분 정상 표시되지만, 일부 row 는 단가 어긋남으로 사용자가 인지 가능.
 
 ## 디버깅 워크플로우
 - UI 표시값 ↔ 백엔드 데이터 불일치 의심 시 순서:

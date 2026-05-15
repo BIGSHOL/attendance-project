@@ -487,11 +487,12 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
 
   // 수납 데이터 (등록차수 계산용)
   const { payments: rawMonthPayments } = usePaymentsForMonth(year, month);
-  // 영어 선생님의 경우 payment_shares (강사별 학생 수납 분배) 를 추가 로드.
-  // shares 는 기존 PaymentLite 포맷으로 변환해 monthPayments 에 합쳐 사용.
+  // payment_shares (강사별 학생 수납 분배) — 시트 sync 된 강사라면 영어/수학/과학 무관 로드.
+  //   Firebase billing 은 수학 분반에 강사 정보가 없어 billing 기반 매칭이 실패한다.
+  //   shares 가 있는 강사는 shares 가 권위 — 출석부 탭의 paidAmount/단가 매칭도 그것 사용.
   const isEnglishTeacher = !!selectedTeacher?.subjects?.includes("english");
   const { shares: teacherShares, refetch: refetchShares } = usePaymentShares(
-    isEnglishTeacher ? selectedTeacherId : "",
+    selectedTeacherId,
     year,
     month
   );
@@ -573,13 +574,12 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
       ),
     };
 
-    // 영어 교사 전용 — shares 기반 직접 구성.
-    //   그룹 라벨(row.group) 은 payments 테이블에서 (학생 × 이 선생님) 수납을
-    //   매칭해 payment_name 을 사용. 시트 F열 tier 와 payments.payment_name 은
-    //   포맷이 달라(예: 시트 "중등 2T" vs payments "중등E_중2 심화 Jane 월수목 16:20-18:10")
-    //   startsWith 매칭으로는 안 되므로 teacher_name 매칭으로 학생당 1건을 선택.
-    //   attendance/메모 lookup key 는 `{student_id}|{share.class_name}` — DB 의 tier 기준.
-    if (isEnglishTeacher && teacherShares.length > 0) {
+    // share 기반 직접 구성 — 시트 sync 된 강사 (영어/수학/과학 무관).
+    //   shares 가 권위. 학생×분반(class_name) 단위로 row 분리.
+    //   그룹 라벨(row.group) 은 payments 에서 (학생 × 이 선생님) 수납 매칭해 payment_name 사용,
+    //   매칭 실패 시 share.class_name 으로 fallback.
+    //   attendance/메모 lookup key = `{student_id}|{share.class_name}` (sync 가 그렇게 저장).
+    if (teacherShares.length > 0) {
       const normSchool = (s: string | undefined) =>
         (s || "")
           .trim()
@@ -979,6 +979,31 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
     [isEnglishTeacher, teacherShares]
   );
 
+  // share-path 진입 시 tierOverrides 보강 — share.class_name 이 salaryConfig.items.name 과
+  // 정확히 일치하는 tier 가 있고 시트 F열 sync 가 누락한 케이스 대응 (예: 김화영의
+  // "고1특강"/"중등특강" 은 share 엔 들어있는데 attendance.tier_overrides 엔 누락 →
+  // student.grade 기반 fallback 으로 group=고등/중등 으로 잘못 매칭되어 ratio 가 어긋남).
+  const effectiveTierOverrides = useMemo(() => {
+    if (teacherShares.length === 0) return tierOverrides;
+    const subject =
+      selectedSubject === "english"
+        ? "english"
+        : selectedSubject === "math" || selectedSubject === "highmath"
+          ? "math"
+          : undefined;
+    const result = { ...tierOverrides };
+    for (const sh of teacherShares) {
+      if (!sh.class_name) continue;
+      const rowKey = `${sh.student_id}|${sh.class_name}`;
+      if (result[rowKey]) continue;
+      const item = (salaryConfig.items || []).find(
+        (i) => i.name === sh.class_name && (!subject || i.subject === subject)
+      );
+      if (item) result[rowKey] = item.id;
+    }
+    return result;
+  }, [teacherShares, tierOverrides, salaryConfig.items, selectedSubject]);
+
   // 통계 — 행 단위로 집계해 합산 (학생 수는 고유 학생 기준)
   const stats = useMemo(
     () => calculateStats(
@@ -995,12 +1020,12 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
         : "other",
       selectedTeacher?.name,
       blogPenalty,
-      tierOverrides,
+      effectiveTierOverrides,
       paidAmountByStudent,
       isDateInCurrentPeriod,
       unitPriceByStudent
     ),
-    [studentRows, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, tierOverrides, paidAmountByStudent, isDateInCurrentPeriod, unitPriceByStudent]
+    [studentRows, salaryConfig, year, month, selectedTeacherSalaryInfo, selectedSubject, selectedTeacher, blogPenalty, effectiveTierOverrides, paidAmountByStudent, isDateInCurrentPeriod, unitPriceByStudent]
   );
 
   /**
@@ -1042,7 +1067,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
         student,
         salaryConfig,
         subjectHint,
-        tierOverrides[student.id]
+        effectiveTierOverrides[student.id]
       );
       if (!settingItem) continue;
       const baseRatio = getEffectiveRatio(
@@ -1075,7 +1100,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
     selectedSubject,
     selectedTeacher,
     blogPenalty,
-    tierOverrides,
+    effectiveTierOverrides,
     paidAmountByStudent,
     isDateInCurrentPeriod,
     unitPriceByStudent,
@@ -1102,7 +1127,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
         s,
         salaryConfig,
         subjectToSalarySubject(selectedSubject),
-        tierOverrides[s.id]
+        effectiveTierOverrides[s.id]
       );
       if (!setting) continue;
       const ratio = getEffectiveRatio(setting, salaryConfig, selectedTeacher.name);
@@ -1128,7 +1153,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
           : `${ratios[0]}~${ratios[ratios.length - 1]}%`,
       tooltip,
     };
-  }, [studentRows, selectedTeacher, salaryConfig, tierOverrides, selectedSubject]);
+  }, [studentRows, selectedTeacher, salaryConfig, effectiveTierOverrides, selectedSubject]);
 
   // 이번 달 신입/퇴원 수
   const { newCount, leavingCount } = useMemo(() => {
@@ -1360,7 +1385,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
     ];
 
     studentRows.forEach((s, i) => {
-      const setting = matchSalarySetting(s, salaryConfig, undefined, tierOverrides[s.id]);
+      const setting = matchSalarySetting(s, salaryConfig, undefined, effectiveTierOverrides[s.id]);
       const unitPrice = setting?.unitPrice || setting?.baseTuition || 0;
       const term = termCountMap?.get(s.id);
       const monthTotal = exportDates.reduce((sum, d) => {
@@ -1399,7 +1424,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
     year,
     month,
     salaryConfig,
-    tierOverrides,
+    effectiveTierOverrides,
     termCountMap,
   ]);
 
@@ -1502,7 +1527,10 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
           )}
         </div>
 
-        <div className="flex-1 min-w-[8px]" />
+        {/* basis-full — 과목 탭 + 선생님 selector 를 항상 새 줄로 분리.
+            영어 강사처럼 KPI 가 길어 wrap 되든, 수학 강사처럼 한 줄에 들어가든
+            과목 탭 위치가 일관되어야 함 (강사 별로 좌/우 이동하던 버그 fix). */}
+        <div className="basis-full" />
 
         {/* 과목 선택 */}
         <div className="flex rounded-sm bg-zinc-200 p-0.5 dark:bg-zinc-800">
@@ -1797,7 +1825,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
             month={month}
             subject={selectedSubject}
             salaryConfig={salaryConfig}
-            tierOverrides={tierOverrides}
+            tierOverrides={effectiveTierOverrides}
             highlightWeekends={highlightWeekends}
             showExpectedBilling={showExpectedBilling}
             showPaidAmount={showPaidAmount}
@@ -1867,7 +1895,7 @@ export default function AttendancePage({ archiveMode = false }: AttendancePagePr
         subject={selectedSubject}
         salaryConfig={salaryConfig}
         tierOverrideId={
-          breakdownStudentId ? tierOverrides[breakdownStudentId] : undefined
+          breakdownStudentId ? effectiveTierOverrides[breakdownStudentId] : undefined
         }
         teacherName={selectedTeacher?.name}
         termCount={
