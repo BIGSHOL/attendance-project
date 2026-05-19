@@ -200,6 +200,13 @@
 - 가설 세우기 전에 데이터 형태(특히 staff.id, enrollment.staffId, share.teacher_staff_id) 가 어떻게 생겼는지부터 한 줄로 출력.
 - chrome MCP 검증 후 dev 서버에 코드 변경하면 **`location.reload()`** 명시적으로 호출. React state 가 stale 일 수 있어 단순 페이지 이동만으로는 새 코드 미반영 사례 있음.
 
+### "값 변형 / 누락 사고" — CLAUDE.md 에 기록하기 전 통제된 재현 필수
+- 재현 안 되는 의혹을 "미해결 사고" 로 적으면 다음 세션이 통째로 유령 버그 조사에 소모됨 (`monthPayments` 변형 사고 = 실제 사례, 한 세션 소모 후 오진 판명). **등재 기준: 지금 통제된 조건에서 재현되는가** — 아니면 "사고" 가 아니라 "관찰 메모" 로 명시할 것.
+- **"state/값이 변형된다" 는 변형시키는 코드를 지목해야 성립한다.** transform·mutation 코드를 못 찾았으면 결론은 "변형 없음" 이지 "변형 source 미상" 이 아니다. state 는 코드 없이 안 바뀐다.
+  - 배열 길이 감소 의심 → `.splice(` / `.length =` / `.pop(` / `.shift(` 를 `src/` 전체 grep. 0건이면 길이 감소는 불가능.
+  - 값 변경 의심 → 그 값을 set 하는 코드 경로를 끝까지 추적. 중간 transform 없으면 "변형" 이 아니라 입력이 다른 것.
+- **client state ↔ API 불일치 원인 대부분은 변형이 아님:** ① 다른 입력 (URL 파라미터 차이 — `categories=all` vs 기본 등, 같은 URL 인지 먼저 확인) ② stale (외부 소스 — MakeEdu 새벽 sync 등 — 가 그 사이 갱신, `location.reload()` 후 재측정) ③ 측정 오류 (downstream 파생값을 state 로 착각). 이 셋을 배제하기 전엔 "변형" 으로 단정 금지.
+
 ### Supabase RLS — 스크립트로 attendance/payments 직접 조회 불가
 - `.env.local` 에 `SUPABASE_SERVICE_ROLE_KEY` 없음. ANON KEY 로는 RLS 정책상 attendance/payments/payment_shares 모두 `TO authenticated` 라 anon 으로 0 rows 반환.
 - 진단 스크립트에서 attendance/payments 0 rows 나오면 데이터 부재로 단정 금지. **dev 서버 + chrome MCP 인증 세션** 으로 확인해야 함.
