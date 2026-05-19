@@ -181,12 +181,15 @@
 - 항상 일관 위치 원하면 `<div className="basis-full" />` divider 로 강제 새 줄. `flex-1 min-w-[8px]` spacer 만으로는 부족 (KPI 가 짧을 때만 우측 정렬).
 - AttendancePage.tsx 의 상단 KPI 줄 — 과목 탭/선생님 selector 분리 패턴.
 
-### `monthPayments` state 변형 사고 (미해결, 별도 조사 필요)
-- SettlementPage 의 `monthPayments` state 가 raw `/api/billing` 응답과 다름 (이승민 408,750 → 367,875, 김주연 360,000 → 327,000, 119건 누락). 직접 chrome fetch 는 정상.
-- `usePaymentsForMonth` → `cachedFetch` → fetch + setState 단순 흐름인데 결과가 다름.
-- 검사 시도: cache dump 0건, SW 없음, backend 응답 일관 (828건). 클라이언트 측 변형 source 미상.
-- 조사 후보: React 18 strict mode useEffect double-invoke, fetchCache module 인스턴스 분리 (HMR), 다른 hook (`usePaymentSplits`/`usePaymentShares`) 이 monthPayments 데이터 mutation, useState 초기값 stale.
-- ⚠ 변형이 있어도 시수 검증 매칭 알고리즘 (위 share 단가 매칭) 이 robust 해서 대부분 정상 표시되지만, 일부 row 는 단가 어긋남으로 사용자가 인지 가능.
+### `monthPayments` state 는 `/api/billing` 응답과 1:1 동일 — "변형 사고" 는 오진 (2026-05 조사 완료)
+- 과거 "monthPayments 가 raw 응답과 다름 (709 vs 828, 119건 누락)" 으로 의심했으나 **오진**. live 실측 (chrome MCP, 인증 세션) 결과:
+  - 2026-05: monthPayments state **714** === `/api/billing?month=2026-05` **714**
+  - 2026-04: monthPayments state **828** === `/api/billing?month=2026-04` **828**
+  - 이승민(735,750)·김주연(360,000) 학생별 row 도 Firebase raw 와 정확 일치. 변형 0건.
+- **구조적으로 변형 불가**: `monthPayments` = `usePaymentsForMonth().payments` = `setPayments(cachedFetch 결과)` = `res.json()` 그대로. 중간 transform 없음. `src/` 전체에 배열 길이를 줄이는 `.splice()` / `.length =` 가 **0건** → mutation 으로 길이 감소 자체가 불가능.
+- 당시 "709 vs 828" 의 정체 = **stale snapshot**. `usePaymentsForMonth` 는 `url`(연월) 이 바뀔 때만 refetch. 페이지를 열어둔 채 MakeEdu 새벽 3시 sync 가 4월 billing 을 추가하면 state 는 이전 fetch 의 작은 값을 유지하고, 디버깅용 직접 fetch 는 sync 후라 828. 변형이 아니라 **fetch 시점 차이**.
+- ⚠ "raw 828" 은 `categories=all` 이 아니다. 4월 `categories=all` = **1,245건**. 828 은 이미 기본 필터(수업,원복) 적용된 정상 응답 = monthPayments 와 같아야 하는 값. monthPayments ↔ API 대조 시 **반드시 같은 URL** (`/api/billing?month=YYYY-MM`, 파라미터 없이) 사용 + `location.reload()` 선행.
+- 당시 이승민 408,750→367,875 류 어긋난 수치는 monthPayments 가 아니라 **정산 계산 결과값** (과목 분리 / teacher breakdown / 단가 매칭). 그 버그들 (extractSubjectFromBillingName 순서, enrollment dedup key, share 단가 우선순위) 은 commit 8626297 에서 수정 완료.
 
 ## 디버깅 워크플로우
 - UI 표시값 ↔ 백엔드 데이터 불일치 의심 시 순서:
