@@ -9,6 +9,7 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { useTeacherSheets } from "@/hooks/useTeacherSheets";
 import { useSalaryConfig } from "@/hooks/useSalaryConfig";
 import { useTeacherBlogPosts } from "@/hooks/useTeacherBlogPosts";
+import { formatBlogDate, parseBlogDatesInput } from "@/lib/blogDate";
 import { useTeacherSettings } from "@/hooks/useTeacherSettings";
 import { toSubjectLabel } from "@/lib/labelMap";
 import { syncTeacherSheet, type TeacherSyncResult } from "@/lib/syncSheet";
@@ -109,24 +110,11 @@ export default function TeacherDetail({ teacherId }: Props) {
   const { getPost, savePost } = useTeacherBlogPosts(teacherId, blogYear, blogMonth);
   const currentBlogPost = getPost(blogYear, blogMonth);
 
-  // 저장된 YYYY-MM-DD 를 표시용 토큰으로 역변환.
-  //   - 같은 연·월 → "D"
-  //   - 같은 연, 다른 월 → "M/D"   (지각 작성: 4월 블로그를 5월에 적은 경우)
-  //   - 다른 연도 → "YYYY-MM-DD"
-  const blogMonthPrefix = `${blogYear}-${String(blogMonth).padStart(2, "0")}-`;
-  const formatDateForDisplay = (iso: string): string => {
-    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
-    if (y === blogYear && mo === blogMonth) return String(d);
-    if (y === blogYear) return `${mo}/${d}`;
-    return iso;
-  };
-  // selectedMonth 변경 시 blog 기록 불러오기
+  // selectedMonth 변경 시 blog 기록 불러오기 — 저장된 ISO 를 표시용 토큰으로 역변환
   useEffect(() => {
     if (currentBlogPost) {
       const tokens = (currentBlogPost.dates || [])
-        .map(formatDateForDisplay)
+        .map((iso) => formatBlogDate(iso, blogYear, blogMonth))
         .filter(Boolean);
       setBlogDatesInput(tokens.join(", "));
       setBlogNoteInput(currentBlogPost.note || "");
@@ -137,51 +125,8 @@ export default function TeacherDetail({ teacherId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, currentBlogPost?.id]);
 
-  /**
-   * 토큰 → ISO(YYYY-MM-DD) 변환.
-   *   허용 포맷:
-   *     "15"           → 선택된 연·월 + 15일
-   *     "5/3", "5.3"   → 선택된 연 + 5월 3일 (지각 작성용)
-   *     "2026-05-03"   → 그대로
-   *     "2026/5/3"     → 정규화해서 그대로
-   *   invalid 한 토큰은 null 반환.
-   */
-  const parseBlogToken = (raw: string): string | null => {
-    const s = raw.trim();
-    if (!s) return null;
-    let y = blogYear, mo = blogMonth, d: number;
-    // YYYY-MM-DD 또는 YYYY/MM/DD
-    const full = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
-    if (full) {
-      y = parseInt(full[1], 10); mo = parseInt(full[2], 10); d = parseInt(full[3], 10);
-    } else {
-      // M/D 또는 M.D
-      const md = s.match(/^(\d{1,2})[/.](\d{1,2})$/);
-      if (md) {
-        mo = parseInt(md[1], 10); d = parseInt(md[2], 10);
-      } else {
-        // 일(日) 단독
-        const dayOnly = s.match(/^(\d{1,2})$/);
-        if (!dayOnly) return null;
-        d = parseInt(dayOnly[1], 10);
-      }
-    }
-    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
-    if (mo < 1 || mo > 12) return null;
-    const lastDay = new Date(y, mo, 0).getDate();
-    if (d < 1 || d > lastDay) return null;
-    return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  };
-
   const handleBlogSave = async () => {
-    const dates = Array.from(
-      new Set(
-        blogDatesInput
-          .split(/[,\s]+/)
-          .map(parseBlogToken)
-          .filter((iso): iso is string => !!iso)
-      )
-    ).sort();
+    const dates = parseBlogDatesInput(blogDatesInput, blogYear, blogMonth);
     await savePost(teacherId, blogYear, blogMonth, dates, blogNoteInput);
   };
   const [payments, setPayments] = useState<PaymentLite[]>([]);

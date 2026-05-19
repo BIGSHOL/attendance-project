@@ -40,5 +40,36 @@ export function useAllBlogPosts(year: number, month: number) {
     [posts]
   );
 
-  return { posts, loading, hasPostForTeacher, refetch: fetchPosts };
+  /**
+   * 특정 선생님의 이번 달 블로그 작성 일자 저장 (upsert).
+   * 실패 시 throw — 호출 측에서 에러를 표시.
+   */
+  const savePost = useCallback(
+    async (teacherId: string, dates: string[], note: string = "") => {
+      const res = await fetch("/api/teacher-blog-posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_id: teacherId, year, month, dates, note }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error || `저장 실패 (HTTP ${res.status})`);
+      }
+      const row = (await res.json()) as TeacherBlogPost;
+      setPosts((prev) => {
+        const idx = prev.findIndex((p) => p.teacher_id === teacherId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = row;
+          return next;
+        }
+        return [...prev, row];
+      });
+    },
+    [year, month]
+  );
+
+  return { posts, loading, hasPostForTeacher, savePost, refetch: fetchPosts };
 }

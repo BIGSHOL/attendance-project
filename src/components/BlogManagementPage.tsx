@@ -7,6 +7,11 @@ import { useAllBlogPosts } from "@/hooks/useAllBlogPosts";
 import { useHiddenTeachers } from "@/hooks/useHiddenTeachers";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { toSubjectLabel } from "@/lib/labelMap";
+import {
+  formatBlogDate,
+  formatBlogDateLabel,
+  parseBlogDatesInput,
+} from "@/lib/blogDate";
 
 /**
  * 블로그 일괄 관리 페이지 (audit #14).
@@ -35,7 +40,7 @@ export default function BlogManagementPage() {
 
   const { teachers, loading: staffLoading } = useStaff();
   const { isBlogRequired, setBlogRequired } = useTeacherSettings();
-  const { posts, loading: postsLoading, hasPostForTeacher, refetch } =
+  const { posts, loading: postsLoading, refetch, savePost } =
     useAllBlogPosts(year, month);
   const { hiddenTeacherIds } = useHiddenTeachers();
 
@@ -68,6 +73,7 @@ export default function BlogManagementPage() {
           dates,
           wrote,
           penalty,
+          note: post?.note || "",
         };
       })
       .sort((a, b) => {
@@ -96,6 +102,37 @@ export default function BlogManagementPage() {
   }, [rows]);
 
   const [savingId, setSavingId] = useState<string | null>(null);
+
+  // 작성 일자 인라인 편집 상태
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftDates, setDraftDates] = useState<string>("");
+  const [savingDateId, setSavingDateId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const startEdit = (teacherId: string, dates: string[]) => {
+    setEditError(null);
+    setEditingId(teacherId);
+    setDraftDates(dates.map((d) => formatBlogDate(d, year, month)).join(", "));
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setDraftDates("");
+    setEditError(null);
+  };
+  const handleSaveDates = async (teacherId: string, note: string) => {
+    const dates = parseBlogDatesInput(draftDates, year, month);
+    setSavingDateId(teacherId);
+    setEditError(null);
+    try {
+      await savePost(teacherId, dates, note);
+      setEditingId(null);
+      setDraftDates("");
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : "저장에 실패했습니다");
+    } finally {
+      setSavingDateId(null);
+    }
+  };
 
   const handleToggle = async (teacherId: string, next: boolean) => {
     setSavingId(teacherId);
@@ -215,7 +252,12 @@ export default function BlogManagementPage() {
               <th className="px-3 py-2 text-left font-medium">선생님</th>
               <th className="px-3 py-2 text-left font-medium">과목</th>
               <th className="px-3 py-2 text-center font-medium">의무</th>
-              <th className="px-3 py-2 text-left font-medium">작성 일자</th>
+              <th className="px-3 py-2 text-left font-medium">
+                작성 일자{" "}
+                <span className="font-normal text-zinc-400">
+                  (클릭해서 수정)
+                </span>
+              </th>
               <th className="px-3 py-2 text-center font-medium">상태</th>
             </tr>
           </thead>
@@ -276,20 +318,71 @@ export default function BlogManagementPage() {
                     </button>
                   </td>
                   <td className="px-3 py-2 text-xs">
-                    {r.dates.length > 0 ? (
-                      <span className="text-zinc-600 dark:text-zinc-400">
-                        {r.dates
-                          .map((d) => {
-                            const parts = d.split("-");
-                            return parts.length === 3 ? parts[2] + "일" : d;
-                          })
-                          .join(", ")}
-                        <span className="ml-1 text-[10px] text-zinc-400">
-                          ({r.dates.length}회)
-                        </span>
-                      </span>
+                    {editingId === r.teacher.id ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={draftDates}
+                          onChange={(e) => setDraftDates(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleSaveDates(r.teacher.id, r.note);
+                            } else if (e.key === "Escape") {
+                              cancelEdit();
+                            }
+                          }}
+                          disabled={savingDateId === r.teacher.id}
+                          placeholder="예: 7, 14, 21"
+                          title="작성한 일(日) 숫자를 쉼표로 구분. 지난달 글을 늦게 적었으면 5/3 또는 2026-05-03 형식."
+                          className="w-32 rounded-sm border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSaveDates(r.teacher.id, r.note)}
+                          disabled={savingDateId === r.teacher.id}
+                          className="rounded-sm bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {savingDateId === r.teacher.id ? "저장 중" : "저장"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          disabled={savingDateId === r.teacher.id}
+                          className="rounded-sm border border-zinc-300 px-2 py-1 text-[11px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        >
+                          취소
+                        </button>
+                        {editError && (
+                          <span className="text-[10px] text-red-600 dark:text-red-400">
+                            {editError}
+                          </span>
+                        )}
+                      </div>
                     ) : (
-                      <span className="text-zinc-400">기록 없음</span>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(r.teacher.id, r.dates)}
+                        title="클릭해서 작성 일자 수정"
+                        className="group inline-flex items-center gap-1 rounded-sm px-1 py-0.5 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        {r.dates.length > 0 ? (
+                          <span className="text-zinc-600 dark:text-zinc-400">
+                            {r.dates
+                              .map((d) => formatBlogDateLabel(d, year, month))
+                              .join(", ")}
+                            <span className="ml-1 text-[10px] text-zinc-400">
+                              ({r.dates.length}회)
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400">기록 없음</span>
+                        )}
+                        <span className="text-[10px] opacity-0 transition-opacity group-hover:opacity-70">
+                          ✏️
+                        </span>
+                      </button>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center text-xs">
